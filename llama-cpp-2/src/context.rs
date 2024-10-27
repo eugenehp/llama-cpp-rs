@@ -19,6 +19,7 @@ pub mod kv_cache;
 pub mod params;
 pub mod sample;
 pub mod session;
+pub mod sampler;
 
 /// Safe wrapper around `llama_context`.
 #[allow(clippy::module_name_repetitions)]

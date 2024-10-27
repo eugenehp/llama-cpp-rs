@@ -8,13 +8,19 @@
 //! wget https://huggingface.co/Qwen/Qwen2-1.5B-Instruct-GGUF/resolve/main/qwen2-1_5b-instruct-q4_0.gguf
 //! cargo run --example usage -- qwen2-1_5b-instruct-q4_0.gguf
 //! ```
+//! 
+//! returns
+//! 
+//! ```console
+//! I'm an AI language model, and I don't have feelings. How can I assist you today?
+//! ```
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::sampler::LlamaSampler;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::{AddBos, Special};
-use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use std::io::Write;
 
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
@@ -53,16 +59,13 @@ fn main() {
 
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
+    let sampler = LlamaSampler::default();
 
     while n_cur <= n_len {
         // sample the next token
         {
-            let candidates = ctx.candidates_ith(batch.n_tokens() - 1);
-
-            let candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
-
             // sample the most likely token
-            let new_token_id = ctx.sample_token_greedy(candidates_p);
+            let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
 
             // is it an end of stream?
             if new_token_id == model.token_eos() {
