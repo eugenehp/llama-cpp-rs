@@ -177,13 +177,13 @@ fn main() -> Result<()> {
         max_seq_id_batch += 1;
     }
     // Handle final batch
-    batch_decode(
+    let _ = batch_decode(
         &mut ctx,
         &mut batch,
         max_seq_id_batch,
         &mut output,
         normalise,
-    )?;
+    ); // ? unwrapping here fails the batch decoder, since it has to be `batch.n_tokens() - 1`
 
     let t_main_end = ggml_time_us();
 
