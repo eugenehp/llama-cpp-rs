@@ -1,22 +1,9 @@
+//! Sampler implementation for llama.cpp
+//! 
 use std::{fmt::{Debug, Formatter}, ptr::NonNull};
 
 use llama_cpp_sys_2::{
-    llama_sampler_chain_add, 
-    llama_sampler_chain_default_params, 
-    llama_sampler_chain_init, 
-    llama_sampler_chain_params, 
-    llama_sampler_init_dist, 
-    llama_sampler_init_min_p, 
-    llama_sampler_init_mirostat, 
-    llama_sampler_init_mirostat_v2, 
-    llama_sampler_init_tail_free, 
-    llama_sampler_init_temp, 
-    llama_sampler_init_temp_ext, 
-    llama_sampler_init_top_k, 
-    llama_sampler_init_top_p, 
-    llama_sampler_init_typical, 
-    llama_sampler_init_xtc, 
-    llama_sampler_sample
+    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_tail_free, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token
 };
 
 use crate::token::LlamaToken;
@@ -45,7 +32,8 @@ impl Debug for LlamaSampler {
 #[allow(
     missing_docs,
     clippy::struct_excessive_bools,
-    clippy::module_name_repetitions
+    clippy::module_name_repetitions,
+    dead_code
 )]
 pub struct LlamaSamplerParams {
     top_k:i32,
@@ -228,9 +216,16 @@ impl LlamaSampler {
         self
     }
 
-    pub fn with_penalties(&self) -> &Self {
+    /// init with penalties sampler
+    pub fn with_penalties(&self, penalty_repeat: f32, penalty_freq: f32, penalty_present: f32, penalize_nl: bool, ignore_eos: bool) -> &Self {
+        // TODO: should this be pulled from context instead?
+        let n_vocab: i32 = 0;
+        let special_eos_id: llama_token = 0;
+        let linefeed_id: llama_token = 0;
+        let penalty_last_n: i32 = 0;
+        
         unsafe {
-
+            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_penalties(n_vocab, special_eos_id, linefeed_id, penalty_last_n, penalty_repeat, penalty_freq, penalty_present, penalize_nl, ignore_eos));
         };
 
         self
@@ -241,7 +236,8 @@ impl Default for LlamaSampler {
     /// Default Sampler with the SamplerParams like top_k, top_p, temp, seed.
     fn default() -> Self {
         let sampler = LlamaSampler::new(None);
-        let params = LlamaSamplerParams::default();
+        // let params = LlamaSamplerParams::default();
+        let params = common_sampler_params::default();
 
         sampler
             .with_top_k(params.top_k)
@@ -252,3 +248,7 @@ impl Default for LlamaSampler {
         sampler
     }
 }
+
+// TODO: create common sampler
+// common_sampler extends llama_sampler with additional functionality
+// llama.cpp/common/sampling.h

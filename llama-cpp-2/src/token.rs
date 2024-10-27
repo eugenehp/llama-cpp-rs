@@ -4,7 +4,6 @@ use std::fmt::Debug;
 use std::fmt::Display;
 
 pub mod data;
-pub mod data_array;
 
 /// A safe wrapper for `llama_token`.
 #[repr(transparent)]
