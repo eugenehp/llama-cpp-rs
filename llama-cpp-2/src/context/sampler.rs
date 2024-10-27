@@ -54,6 +54,39 @@ pub struct LlamaSamplerParams {
     seed: u32
 }
 
+impl LlamaSamplerParams {
+    /// Set the seed of the context
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_2::context::sampler::LlamaSamplerParams;
+    /// let params = LlamaSamplerParams::default();
+    /// let params = params.with_seed(1234);
+    /// assert_eq!(params.seed(), 1234);
+    /// ```
+    #[must_use]
+    pub fn with_seed(mut self, seed: u32) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Get the seed of the context
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_2::context::sampler::LlamaSamplerParams;
+    /// let params = LlamaSamplerParams::default();
+    ///     .with_seed(1234);
+    /// assert_eq!(params.seed(), 1234);
+    /// ```
+    #[must_use]
+    pub fn seed(&self) -> u32 {
+        self.seed
+    }
+}
+
 impl Default for LlamaSamplerParams {
     fn default() -> Self {
         Self { 
