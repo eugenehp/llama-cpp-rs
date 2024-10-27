@@ -1,4 +1,14 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-2.
+//! 
+//! ```console
+//! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
+//! ```
+//! 
+//! gives
+//! 
+//! ```console
+//! Hello my name is Sunita Singh and I am an Indian citizen. I am from India and I am working in United Kingdom (UK) for the last
+//! ```
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
@@ -10,6 +20,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::sampler::LlamaSampler;
 use llama_cpp_2::ggml_time_us;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -17,7 +28,7 @@ use llama_cpp_2::model::params::kv_overrides::ParamOverrideValue;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::{AddBos, Special};
-use llama_cpp_2::token::data_array::LlamaTokenDataArray;
+// use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use std::ffi::CString;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -175,8 +186,7 @@ fn main() -> Result<()> {
 
     // initialize the context
     let mut ctx_params = LlamaContextParams::default()
-        .with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())))
-        .with_seed(seed.unwrap_or(1234));
+        .with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
     if let Some(threads) = threads {
         ctx_params = ctx_params.with_n_threads(threads);
     }
@@ -187,6 +197,9 @@ fn main() -> Result<()> {
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
+
+    let sampler = LlamaSampler::default();
+    sampler.with_seed(seed.unwrap_or(1234));
 
     // tokenize the prompt
 
@@ -247,12 +260,14 @@ either reduce n_len or increase n_ctx"
     while n_cur <= n_len {
         // sample the next token
         {
-            let candidates = ctx.candidates();
+            // let candidates = ctx.candidates();
 
-            let candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
+            // let candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
 
             // sample the most likely token
-            let new_token_id = ctx.sample_token_greedy(candidates_p);
+            // let new_token_id = ctx.sample_token_greedy(candidates_p);
+            // TODO(v3): rework idx retrieval based on the above code
+            let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
 
             // is it an end of stream?
             if model.is_eog_token(new_token_id) {

@@ -5,6 +5,8 @@ use std::num::NonZeroI32;
 use std::ptr::NonNull;
 use std::slice;
 
+use perf::PerfContextData;
+
 use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
 // use crate::timing::LlamaTimings;
@@ -17,9 +19,9 @@ use crate::{
 
 pub mod kv_cache;
 pub mod params;
-pub mod sample;
-pub mod session;
 pub mod sampler;
+pub mod session;
+pub mod perf;
 
 /// Safe wrapper around `llama_context`.
 #[allow(clippy::module_name_repetitions)]
@@ -272,10 +274,10 @@ impl<'model> LlamaContext<'model> {
     }
 
     /// Returns the timings for the context.
-    // pub fn timings(&mut self) -> LlamaTimings {
-    //     let timings = unsafe { llama_cpp_sys_2::llama_get_timings(self.context.as_ptr()) };
-    //     LlamaTimings { timings }
-    // }
+    pub fn timings(&mut self) -> PerfContextData {
+        let perf_context_data = unsafe { llama_cpp_sys_2::llama_perf_context(self.context.as_ptr()) };
+        PerfContextData { perf_context_data: perf_context_data  }
+    }
 
     /// Sets a lora adapter.
     ///
