@@ -41,3 +41,7 @@ features = ["sampler"]
 [[example]]
 name = "usage"
 path = "../examples/usage.rs"
+
+[[example]]
+name = "common"
+path = "../examples/common.rs"

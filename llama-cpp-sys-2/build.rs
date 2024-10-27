@@ -167,7 +167,6 @@ fn main() {
     debug_log!("OUT_DIR: {}", out_dir.display());
     debug_log!("BUILD_SHARED: {}", build_shared_libs);
 
-    // Prepare sherpa-onnx source
     if !llama_dst.exists() {
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
@@ -185,6 +184,10 @@ fn main() {
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .generate_comments(true)
+        // https://github.com/rust-lang/rust-bindgen/issues/1834
+        // "fatal error: 'string' file not found" on macOS
+        .clang_arg("-xc++")
+        .clang_arg("-std=c++11")
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -193,6 +196,16 @@ fn main() {
         .allowlist_type("ggml_.*")
         .allowlist_function("llama_.*")
         .allowlist_type("llama_.*")
+        // .allowlist_item("common_params")
+        // .allowlist_item("common_sampler_type")
+        // .allowlist_item("common_sampler_params")
+        .allowlist_item("LLAMA_.*")
+        // .opaque_type("common_lora_adapter_info")
+        // .opaque_type("std::.*")
+        // .layout_tests(false)
+        // .derive_default(true)
+        // .enable_cxx_namespaces()
+        .use_core()
         .prepend_enum_name(false)
         .generate()
         .expect("Failed to generate bindings");
