@@ -11,8 +11,8 @@ pub mod kv_overrides;
 /// A safe wrapper around `llama_model_params`.
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaModelParams {
-    pub(crate) params: llama_cpp_sys_2::llama_model_params,
-    kv_overrides: Vec<llama_cpp_sys_2::llama_model_kv_override>,
+    pub(crate) params: llama_cpp_sys_4::llama_model_params,
+    kv_overrides: Vec<llama_cpp_sys_4::llama_model_kv_override>,
 }
 
 impl Debug for LlamaModelParams {
@@ -92,10 +92,10 @@ impl LlamaModelParams {
 
         // push the next one to ensure we maintain the iterator invariant of ending with a 0
         self.kv_overrides
-            .push(llama_cpp_sys_2::llama_model_kv_override {
+            .push(llama_cpp_sys_4::llama_model_kv_override {
                 key: [0; 128],
                 tag: 0,
-                __bindgen_anon_1: llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 {
+                __bindgen_anon_1: llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
                     val_i64: 0,
                 },
             });
@@ -191,14 +191,14 @@ impl LlamaModelParams {
 /// ```
 impl Default for LlamaModelParams {
     fn default() -> Self {
-        let default_params = unsafe { llama_cpp_sys_2::llama_model_default_params() };
+        let default_params = unsafe { llama_cpp_sys_4::llama_model_default_params() };
         LlamaModelParams {
             params: default_params,
             // push the next one to ensure we maintain the iterator invariant of ending with a 0
-            kv_overrides: vec![llama_cpp_sys_2::llama_model_kv_override {
+            kv_overrides: vec![llama_cpp_sys_4::llama_model_kv_override {
                 key: [0; 128],
                 tag: 0,
-                __bindgen_anon_1: llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 {
+                __bindgen_anon_1: llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
                     val_i64: 0,
                 },
             }],

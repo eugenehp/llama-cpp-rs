@@ -2,7 +2,7 @@
 //! 
 use std::{fmt::{Debug, Formatter}, ptr::NonNull};
 
-use llama_cpp_sys_2::{
+use llama_cpp_sys_4::{
     common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_tail_free, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token
 };
 
@@ -17,7 +17,7 @@ use super::LlamaContext;
 /// https://github.com/ggerganov/llama.cpp/pull/9294
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaSampler {
-    pub(crate) sampler: NonNull<llama_cpp_sys_2::llama_sampler>,
+    pub(crate) sampler: NonNull<llama_cpp_sys_4::llama_sampler>,
 }
 
 impl Debug for LlamaSampler {

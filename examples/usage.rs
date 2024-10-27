@@ -12,15 +12,15 @@
 //! returns
 //! 
 //! ```console
-//! I'm an AI language model, and I don't have feelings. How can I assist you today?
+//! I'm here to help! Are you a programmer?
 //! ```
-use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::context::sampler::LlamaSampler;
-use llama_cpp_2::llama_backend::LlamaBackend;
-use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::params::LlamaModelParams;
-use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::model::{AddBos, Special};
+use llama_cpp_4::context::params::LlamaContextParams;
+use llama_cpp_4::context::sampler::LlamaSampler;
+use llama_cpp_4::llama_backend::LlamaBackend;
+use llama_cpp_4::llama_batch::LlamaBatch;
+use llama_cpp_4::model::params::LlamaModelParams;
+use llama_cpp_4::model::LlamaModel;
+use llama_cpp_4::model::{AddBos, Special};
 use std::io::Write;
 
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]

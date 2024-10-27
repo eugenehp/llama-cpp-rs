@@ -108,7 +108,7 @@ impl From<LlamaPoolingType> for i32 {
     clippy::module_name_repetitions
 )]
 pub struct LlamaContextParams {
-    pub(crate) context_params: llama_cpp_sys_2::llama_context_params,
+    pub(crate) context_params: llama_cpp_sys_4::llama_context_params,
 }
 
 /// SAFETY: we do not currently allow setting or reading the pointers that cause this to not be automatically send or sync.
@@ -449,7 +449,7 @@ impl LlamaContextParams {
     ///
     /// ```no_run
     /// extern "C" fn cb_eval_fn(
-    ///     t: *mut llama_cpp_sys_2::ggml_tensor,
+    ///     t: *mut llama_cpp_sys_4::ggml_tensor,
     ///     ask: bool,
     ///     user_data: *mut std::ffi::c_void,
     /// ) -> bool {
@@ -462,7 +462,7 @@ impl LlamaContextParams {
     #[must_use]
     pub fn with_cb_eval(
         mut self,
-        cb_eval: llama_cpp_sys_2::ggml_backend_sched_eval_callback,
+        cb_eval: llama_cpp_sys_4::ggml_backend_sched_eval_callback,
     ) -> Self {
         self.context_params.cb_eval = cb_eval;
         self
@@ -524,7 +524,7 @@ impl LlamaContextParams {
 /// ```
 impl Default for LlamaContextParams {
     fn default() -> Self {
-        let context_params = unsafe { llama_cpp_sys_2::llama_context_default_params() };
+        let context_params = unsafe { llama_cpp_sys_4::llama_context_default_params() };
         Self { context_params }
     }
 }

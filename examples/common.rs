@@ -3,6 +3,6 @@
 
 /// example of common params
 pub fn main() {
- let params = llama_cpp_sys_2::common::common_sampler_params::default();
+ let params = llama_cpp_sys_4::common::common_sampler_params::default();
  println!("common_sampler_params {:?}",params);
 }

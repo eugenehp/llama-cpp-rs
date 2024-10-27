@@ -70,10 +70,10 @@ impl LlamaContext<'_> {
         let cstr = CString::new(path)?;
 
         if unsafe {
-            llama_cpp_sys_2::llama_save_session_file(
+            llama_cpp_sys_4::llama_save_session_file(
                 self.context.as_ptr(),
                 cstr.as_ptr(),
-                tokens.as_ptr().cast::<llama_cpp_sys_2::llama_token>(),
+                tokens.as_ptr().cast::<llama_cpp_sys_4::llama_token>(),
                 tokens.len(),
             )
         } {
@@ -109,10 +109,10 @@ impl LlamaContext<'_> {
         let mut n_out = 0;
 
         // SAFETY: cast is valid as LlamaToken is repr(transparent)
-        let tokens_out = tokens.as_mut_ptr().cast::<llama_cpp_sys_2::llama_token>();
+        let tokens_out = tokens.as_mut_ptr().cast::<llama_cpp_sys_4::llama_token>();
 
         let load_session_success = unsafe {
-            llama_cpp_sys_2::llama_load_session_file(
+            llama_cpp_sys_4::llama_load_session_file(
                 self.context.as_ptr(),
                 cstr.as_ptr(),
                 tokens_out,
@@ -138,7 +138,7 @@ impl LlamaContext<'_> {
     /// and `kv_cache`) - will often be smaller after compacting tokens
     #[must_use]
     pub fn get_state_size(&self) -> usize {
-        unsafe { llama_cpp_sys_2::llama_get_state_size(self.context.as_ptr()) }
+        unsafe { llama_cpp_sys_4::llama_get_state_size(self.context.as_ptr()) }
     }
 
     /// Copies the state to the specified destination address.
@@ -149,7 +149,7 @@ impl LlamaContext<'_> {
     ///
     /// Destination needs to have allocated enough memory.
     pub unsafe fn copy_state_data(&self, dest: *mut u8) -> usize {
-        unsafe { llama_cpp_sys_2::llama_copy_state_data(self.context.as_ptr(), dest) }
+        unsafe { llama_cpp_sys_4::llama_copy_state_data(self.context.as_ptr(), dest) }
     }
 
     /// Set the state reading from the specified address
@@ -159,6 +159,6 @@ impl LlamaContext<'_> {
     ///
     /// help wanted: not entirely sure what the safety requirements are here.
     pub unsafe fn set_state_data(&mut self, src: &[u8]) -> usize {
-        unsafe { llama_cpp_sys_2::llama_set_state_data(self.context.as_ptr(), src.as_ptr()) }
+        unsafe { llama_cpp_sys_4::llama_set_state_data(self.context.as_ptr(), src.as_ptr()) }
     }
 }

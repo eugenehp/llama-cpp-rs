@@ -1,14 +1,14 @@
 //! Safe wrapper around `llama_perf_context_data`.
 use std::fmt::{Debug, Display, Formatter};
 
-use llama_cpp_sys_2::{ggml_time_us, llama_perf_context_print};
+use llama_cpp_sys_4::{ggml_time_us, llama_perf_context_print};
 
 use crate::context::LlamaContext;
 
 /// A wrapper around `llama_perf_context_data`.
 #[derive(Clone, Copy, Debug)]
 pub struct PerfContextData {
-    pub(crate) perf_context_data: llama_cpp_sys_2::llama_perf_context_data,
+    pub(crate) perf_context_data: llama_cpp_sys_4::llama_perf_context_data,
 }
 
 impl PerfContextData {
@@ -37,7 +37,7 @@ impl PerfContextData {
         n_eval: i32,
     ) -> Self {
         Self {
-            perf_context_data: llama_cpp_sys_2::llama_perf_context_data {
+            perf_context_data: llama_cpp_sys_4::llama_perf_context_data {
                 t_start_ms,
                 // t_end_ms,
                 t_load_ms,

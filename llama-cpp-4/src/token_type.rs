@@ -8,16 +8,16 @@ use std::ops::{Deref, DerefMut};
 #[repr(u32)]
 #[allow(clippy::module_name_repetitions, missing_docs)]
 pub enum LlamaTokenAttr {
-    Unknown = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_UNKNOWN as _,
-    Unused = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_UNUSED as _,
-    Normal = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_NORMAL as _,
-    Control = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_CONTROL as _,
-    UserDefined = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_USER_DEFINED as _,
-    Byte = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_BYTE as _,
-    Normalized = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_NORMALIZED as _,
-    LStrip = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_LSTRIP as _,
-    RStrip = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_RSTRIP as _,
-    SingleWord = llama_cpp_sys_2::LLAMA_TOKEN_ATTR_SINGLE_WORD as _,
+    Unknown = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_UNKNOWN as _,
+    Unused = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_UNUSED as _,
+    Normal = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_NORMAL as _,
+    Control = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_CONTROL as _,
+    UserDefined = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_USER_DEFINED as _,
+    Byte = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_BYTE as _,
+    Normalized = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_NORMALIZED as _,
+    LStrip = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_LSTRIP as _,
+    RStrip = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_RSTRIP as _,
+    SingleWord = llama_cpp_sys_4::LLAMA_TOKEN_ATTR_SINGLE_WORD as _,
 }
 
 /// A set of `LlamaTokenAttrs`
@@ -38,10 +38,10 @@ impl DerefMut for LlamaTokenAttrs {
     }
 }
 
-impl TryFrom<llama_cpp_sys_2::llama_token_type> for LlamaTokenAttrs {
+impl TryFrom<llama_cpp_sys_4::llama_token_type> for LlamaTokenAttrs {
     type Error = LlamaTokenTypeFromIntError;
 
-    fn try_from(value: llama_cpp_sys_2::llama_vocab_type) -> Result<Self, Self::Error> {
+    fn try_from(value: llama_cpp_sys_4::llama_vocab_type) -> Result<Self, Self::Error> {
         Ok(Self(BitFlags::from_bits(value as _).map_err(|e| {
             LlamaTokenTypeFromIntError::UnknownValue(e.invalid_bits())
         })?))

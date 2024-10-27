@@ -18,52 +18,52 @@ pub enum ParamOverrideValue {
 }
 
 impl ParamOverrideValue {
-    pub(crate) fn tag(&self) -> llama_cpp_sys_2::llama_model_kv_override_type {
+    pub(crate) fn tag(&self) -> llama_cpp_sys_4::llama_model_kv_override_type {
         match self {
-            ParamOverrideValue::Bool(_) => llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_BOOL,
-            ParamOverrideValue::Float(_) => llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_FLOAT,
-            ParamOverrideValue::Int(_) => llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_INT,
-            ParamOverrideValue::Str(_) => llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_STR,
+            ParamOverrideValue::Bool(_) => llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_BOOL,
+            ParamOverrideValue::Float(_) => llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_FLOAT,
+            ParamOverrideValue::Int(_) => llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_INT,
+            ParamOverrideValue::Str(_) => llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_STR,
         }
     }
 
-    pub(crate) fn value(&self) -> llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 {
+    pub(crate) fn value(&self) -> llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
         match self {
             ParamOverrideValue::Bool(value) => {
-                llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 { val_bool: *value }
+                llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_bool: *value }
             }
             ParamOverrideValue::Float(value) => {
-                llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 { val_f64: *value }
+                llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_f64: *value }
             }
             ParamOverrideValue::Int(value) => {
-                llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 { val_i64: *value }
+                llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_i64: *value }
             }
             ParamOverrideValue::Str(c_string) => {
-                llama_cpp_sys_2::llama_model_kv_override__bindgen_ty_1 { val_str: *c_string }
+                llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_str: *c_string }
             }
         }
     }
 }
 
-impl From<&llama_cpp_sys_2::llama_model_kv_override> for ParamOverrideValue {
+impl From<&llama_cpp_sys_4::llama_model_kv_override> for ParamOverrideValue {
     fn from(
-        llama_cpp_sys_2::llama_model_kv_override {
+        llama_cpp_sys_4::llama_model_kv_override {
             key: _,
             tag,
             __bindgen_anon_1,
-        }: &llama_cpp_sys_2::llama_model_kv_override,
+        }: &llama_cpp_sys_4::llama_model_kv_override,
     ) -> Self {
         match *tag {
-            llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_INT => {
+            llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_INT => {
                 ParamOverrideValue::Int(unsafe { __bindgen_anon_1.val_i64 })
             }
-            llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_FLOAT => {
+            llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_FLOAT => {
                 ParamOverrideValue::Float(unsafe { __bindgen_anon_1.val_f64 })
             }
-            llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_BOOL => {
+            llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_BOOL => {
                 ParamOverrideValue::Bool(unsafe { __bindgen_anon_1.val_bool })
             }
-            llama_cpp_sys_2::LLAMA_KV_OVERRIDE_TYPE_STR => {
+            llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_STR => {
                 ParamOverrideValue::Str(unsafe { __bindgen_anon_1.val_str })
             }
             _ => unreachable!("Unknown tag of {tag}"),
