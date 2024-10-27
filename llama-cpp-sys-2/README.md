@@ -2,4 +2,4 @@
 
 Raw bindings to llama.cpp with cuda support.
 
-See [llama-cpp-2](https://crates.io/crates/llama-cpp-2) for a safe API.
+See [llama-cpp-4](https://crates.io/crates/llama-cpp-4) for a safe API.

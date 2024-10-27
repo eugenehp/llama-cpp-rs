@@ -279,7 +279,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hf-hub",
- "llama-cpp-2",
+ "llama-cpp-4",
 ]
 
 [[package]]
@@ -634,18 +634,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "643cb0b8d4fcc284004d5fd0d67ccf61dfffadb7f75e1e71bc420f4688a3a704"
 
 [[package]]
-name = "llama-cpp-2"
+name = "llama-cpp-4"
 version = "0.1.83"
 dependencies = [
  "encoding_rs",
  "enumflags2",
- "llama-cpp-sys-2",
+ "llama-cpp-sys-4",
  "thiserror",
  "tracing",
 ]
 
 [[package]]
-name = "llama-cpp-sys-2"
+name = "llama-cpp-sys-4"
 version = "0.1.83"
 dependencies = [
  "bindgen",
@@ -1046,7 +1046,7 @@ dependencies = [
  "clap",
  "encoding_rs",
  "hf-hub",
- "llama-cpp-2",
+ "llama-cpp-4",
 ]
 
 [[package]]

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "llama-cpp-sys-2",
-    "llama-cpp-2",
+    "llama-cpp-sys-4",
+    "llama-cpp-4",
     "examples/embeddings",
     "examples/simple",
 ]

@@ -7,7 +7,7 @@
 //!
 //! # Examples
 //!
-//! - [simple](https://github.com/utilityai/llama-cpp-rs/tree/main/simple)
+//! - [simple](https://github.com/eugenehp/llama-cpp-rs/tree/main/simple)
 //!
 //! # Feature Flags
 //!

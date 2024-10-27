@@ -1,4 +1,4 @@
-//! This is a translation of simple.cpp in llama.cpp using llama-cpp-2.
+//! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
 //! 
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf

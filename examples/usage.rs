@@ -3,7 +3,7 @@
 //! This is just about the smallest possible way to do inference. To fetch a model from hugging face:
 //!
 //! ```console
-//! git clone --recursive https://github.com/utilityai/llama-cpp-rs
+//! git clone --recursive https://github.com/eugenehp/llama-cpp-rs
 //! cd llama-cpp-rs/examples/usage
 //! wget https://huggingface.co/Qwen/Qwen2-1.5B-Instruct-GGUF/resolve/main/qwen2-1_5b-instruct-q4_0.gguf
 //! cargo run --example usage -- qwen2-1_5b-instruct-q4_0.gguf

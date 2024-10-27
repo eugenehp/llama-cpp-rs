@@ -25,8 +25,8 @@ jobs:
         run: git submodule update --remote
       - name: Config git
         run: |
-          git config --global user.email "marcus@utilityai.ca"
-          git config --global user.name "Marcus Dunn"
+          git config --global user.email "update@llama.cpp"
+          git config --global user.name "LLAMA CPP"
       - name: Commit
         run: git commit -am "updated llama.cpp"
       - name: Push

@@ -1,10 +1,10 @@
 [package]
-name = "llama-cpp-sys-2"
+name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
 version = "0.1.83"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/utilityai/llama-cpp-rs"
+repository = "https://github.com/eugenehp/llama-cpp-rs"
 links = "llama"
 
 include = [

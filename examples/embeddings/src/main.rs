@@ -1,4 +1,4 @@
-//! This is a translation of embedding.cpp in llama.cpp using llama-cpp-2.
+//! This is a translation of embedding.cpp in llama.cpp using llama-cpp-4.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,

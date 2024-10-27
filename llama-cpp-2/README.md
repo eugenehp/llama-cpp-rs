@@ -1,13 +1,11 @@
 # llama-cpp-rs-2
 
-[utilityai]: https://utilityai.ca
 
 A wrapper around the [llama-cpp](https://github.com/ggerganov/llama.cpp/) library for rust.
 
 # Info
 
-This is part of the project powering all the LLMs at [utilityai], it is tightly coupled llama.cpp and mimics its API as
-closly as possible while being safe in order to stay up to date.
+It is tightly coupled llama.cpp and mimics its API as closly as possible while being safe in order to stay up to date, including the new Sampler API.
 
 # Dependencies
 
