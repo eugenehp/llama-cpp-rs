@@ -227,6 +227,14 @@ impl LlamaSampler {
 
         self
     }
+
+    pub fn with_penalties(&self) -> &Self {
+        unsafe {
+
+        };
+
+        self
+    }
 }
 
 impl Default for LlamaSampler {

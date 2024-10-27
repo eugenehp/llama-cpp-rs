@@ -184,6 +184,7 @@ fn main() {
     // Bindings
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
+        .generate_comments(true)
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
