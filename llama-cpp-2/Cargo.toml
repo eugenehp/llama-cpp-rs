@@ -25,7 +25,6 @@ dynamic-link = ["llama-cpp-sys-2/dynamic-link"]
 vulkan = ["llama-cpp-sys-2/vulkan"]
 native = ["llama-cpp-sys-2/native"]
 openmp = ["llama-cpp-sys-2/openmp"]
-sampler = []
 
 
 [target.'cfg(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "arm64")))'.dependencies]

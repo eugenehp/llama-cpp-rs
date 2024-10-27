@@ -7,7 +7,7 @@ use std::slice;
 
 use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
-use crate::timing::LlamaTimings;
+// use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
 use crate::token::LlamaToken;
 use crate::{
@@ -267,14 +267,14 @@ impl<'model> LlamaContext<'model> {
 
     /// Reset the timings for the context.
     pub fn reset_timings(&mut self) {
-        unsafe { llama_cpp_sys_2::llama_reset_timings(self.context.as_ptr()) }
+        unsafe { llama_cpp_sys_2::ggml_time_init() }
     }
 
     /// Returns the timings for the context.
-    pub fn timings(&mut self) -> LlamaTimings {
-        let timings = unsafe { llama_cpp_sys_2::llama_get_timings(self.context.as_ptr()) };
-        LlamaTimings { timings }
-    }
+    // pub fn timings(&mut self) -> LlamaTimings {
+    //     let timings = unsafe { llama_cpp_sys_2::llama_get_timings(self.context.as_ptr()) };
+    //     LlamaTimings { timings }
+    // }
 
     /// Sets a lora adapter.
     ///
