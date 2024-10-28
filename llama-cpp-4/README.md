@@ -1,4 +1,4 @@
-# llama-cpp-rs-2
+# llama-cpp-rs-4
 
 
 A wrapper around the [llama-cpp](https://github.com/ggerganov/llama.cpp/) library for rust, including new Sampler API from llama-cpp.
