@@ -148,7 +148,7 @@ total time = 954.18 ms
 Ensure that when you clone this project you also clone the submodules. This can be done with the following command:
 
 ```sh
-git clone --recursive https://github.com/utilityai/llama-cpp-rs
+git clone --recursive https://github.com/eugenehp/llama-cpp-rs
 ```
 
 or if you have already cloned the project you can run:
