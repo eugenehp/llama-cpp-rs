@@ -3,7 +3,7 @@
 use std::{fmt::{Debug, Formatter}, ptr::NonNull};
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_tail_free, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token
+    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token
 };
 
 use crate::token::LlamaToken;
@@ -148,16 +148,6 @@ impl LlamaSampler {
     pub fn with_min_p(&self, p: f32, min_keep: usize) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_min_p(p, min_keep));
-        };
-
-        self
-    }
-
-
-    #[doc = " @details Tail Free Sampling described in https://www.trentonbricken.com/Tail-Free-Sampling/."]
-    pub fn with_tail_free(&self, z: f32, min_keep: usize) -> &Self {
-        unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_tail_free(z, min_keep));
         };
 
         self
