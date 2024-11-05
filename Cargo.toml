@@ -9,7 +9,7 @@ members = [
 
 [workspace.dependencies]
 # core library deps
-thiserror = "1.0.65"
+thiserror = "1.0.68"
 tracing = "0.1"
 
 # examples and benchmarks
@@ -17,8 +17,8 @@ hf-hub = { version = "0.3.2" }
 criterion = "0.5.1"
 pprof = "0.13.0"
 bindgen = "0.70.1"
-cc = "1.1.31"
-anyhow = "1.0.91"
+cc = "1.1.36"
+anyhow = "1.0.92"
 clap = "4.5.20"
 encoding_rs = "0.8.35"
 
