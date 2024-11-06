@@ -1,5 +1,7 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
 //! 
+//! inspired by https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp
+//! 
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
 //! ```
@@ -7,7 +9,13 @@
 //! gives
 //! 
 //! ```console
-//! Hello my name is Sunita Singh and I am an Indian citizen. I am from India and I am working in United Kingdom (UK) for the last
+//! user
+//! hello
+//! 
+//! assistant
+//! Hello! How can I assist you today? If you have any questions or need help with something, feel free to ask. I'm here to help.
+//! 
+//! user
 //! ```
 #![allow(
     clippy::cast_possible_wrap,
@@ -35,17 +43,13 @@ use std::path::PathBuf;
 use std::pin::pin;
 use std::str::FromStr;
 
+const BATCH_SIZE:usize = 512;
+
 #[derive(clap::Parser, Debug, Clone)]
 struct Args {
     /// The path to the model
     #[command(subcommand)]
     model: Model,
-    /// The prompt
-    // #[clap(short = 'p', long)]
-    // prompt: Option<String>,
-    /// Read the prompt from a file
-    // #[clap(short = 'f', long, help = "prompt file to start generation")]
-    // file: Option<String>,
     /// set the length of the prompt + output in tokens
     #[arg(long, default_value_t = 32)]
     n_len: i32,
@@ -56,8 +60,6 @@ struct Args {
     #[cfg(any(feature = "cuda", feature = "vulkan"))]
     #[clap(long)]
     disable_gpu: bool,
-    // #[arg(short = 's', long, help = "RNG seed (default: 1234)")]
-    // seed: Option<u32>,
     #[arg(
         short = 't',
         long,
@@ -131,12 +133,9 @@ fn main() -> Result<()> {
     let Args {
         n_len,
         model,
-        // prompt,
-        // file,
         #[cfg(any(feature = "cuda", feature = "vulkan"))]
         disable_gpu,
         key_value_overrides,
-        // seed,
         threads,
         threads_batch,
         ctx_size,
@@ -157,12 +156,6 @@ fn main() -> Result<()> {
         #[cfg(not(any(feature = "cuda", feature = "vulkan")))]
         LlamaModelParams::default()
     };
-
-    // let prompt = if let Some(str) = prompt {
-    //     str
-    // } else {
-    //     "Hello my name is".to_string()
-    // };
 
     let mut model_params = pin!(model_params);
 
@@ -211,8 +204,6 @@ fn main() -> Result<()> {
         let n_cxt = ctx.n_ctx() as i32;
         let n_kv_req = tokens_list.len() as i32 + (n_len - tokens_list.len() as i32);
 
-        // eprintln!("n_len = {n_len}, n_ctx = {n_cxt}, k_kv_req = {n_kv_req}");
-
         // make sure the KV cache is big enough to hold all the prompt and generated tokens
         if n_kv_req > n_cxt {
             bail!(
@@ -224,9 +215,8 @@ fn main() -> Result<()> {
             bail!("the prompt is too long, it has more tokens than n_len")
         }
 
-        // create a llama_batch with size 512
         // we use this object to submit token data for decoding
-        let mut batch = LlamaBatch::new(512, 1);
+        let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
 
         let last_index: i32 = (tokens_list.len() - 1) as i32;
         for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
@@ -241,7 +231,6 @@ fn main() -> Result<()> {
         // main loop
 
         let mut n_cur = batch.n_tokens();
-        let mut n_decode = 0;
 
         // The `Decoder`
         let mut decoder = encoding_rs::UTF_8.new_decoder();
@@ -272,8 +261,6 @@ fn main() -> Result<()> {
             n_cur += 1;
 
             ctx.decode(&mut batch).with_context(|| "failed to eval")?;
-
-            n_decode += 1;
         };
 
         Ok(output)
@@ -289,7 +276,4 @@ fn main() -> Result<()> {
         println!("\n{}", "assistant".red());
         println!("{}", response.white());
     };
-
-
-    Ok(())
 }
