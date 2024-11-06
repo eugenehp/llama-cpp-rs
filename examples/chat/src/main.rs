@@ -21,7 +21,6 @@ use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_4::context::params::LlamaContextParams;
 use llama_cpp_4::context::sampler::LlamaSampler;
-use llama_cpp_4::ggml_time_us;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
 use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
@@ -35,7 +34,6 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
 use std::str::FromStr;
-use std::time::Duration;
 
 #[derive(clap::Parser, Debug, Clone)]
 struct Args {
@@ -256,8 +254,6 @@ either reduce n_len or increase n_ctx"
     let mut n_cur = batch.n_tokens();
     let mut n_decode = 0;
 
-    let t_main_start = ggml_time_us();
-
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
 
@@ -289,21 +285,6 @@ either reduce n_len or increase n_ctx"
 
         n_decode += 1;
     }
-
-    eprintln!("\n");
-
-    let t_main_end = ggml_time_us();
-
-    let duration = Duration::from_micros((t_main_end - t_main_start) as u64);
-
-    eprintln!(
-        "decoded {} tokens in {:.2} s, speed {:.2} t/s\n",
-        n_decode,
-        duration.as_secs_f32(),
-        n_decode as f32 / duration.as_secs_f32()
-    );
-
-    println!("{}", ctx.timings());
 
     Ok(())
 }

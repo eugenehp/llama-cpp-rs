@@ -3,7 +3,7 @@
 use std::{fmt::{Debug, Formatter}, ptr::NonNull};
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token
+    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token, llama_sampler_free
 };
 
 use crate::token::LlamaToken;
@@ -25,6 +25,12 @@ impl Debug for LlamaSampler {
         f.debug_struct("LlamaSampler")
             .field("sampler", &self.sampler)
             .finish()
+    }
+}
+
+impl Drop for LlamaSampler {
+    fn drop(&mut self) {
+        unsafe { llama_sampler_free(self.sampler.as_ptr()) };
     }
 }
 
