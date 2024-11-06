@@ -12,6 +12,7 @@ hf-hub = { workspace = true }
 clap = { workspace = true , features = ["derive"] }
 anyhow = { workspace = true }
 encoding_rs = { workspace = true }
+colored = "2.1.0"
 
 [features]
 cuda = ["llama-cpp-4/cuda"]

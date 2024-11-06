@@ -18,6 +18,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
+use colored::Colorize;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_4::context::params::LlamaContextParams;
 use llama_cpp_4::context::sampler::LlamaSampler;
@@ -29,7 +30,6 @@ use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::model::{AddBos, Special};
 use llama_cpp_sys_4::LLAMA_DEFAULT_SEED;
 use std::ffi::CString;
-use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -41,11 +41,11 @@ struct Args {
     #[command(subcommand)]
     model: Model,
     /// The prompt
-    #[clap(short = 'p', long)]
-    prompt: Option<String>,
+    // #[clap(short = 'p', long)]
+    // prompt: Option<String>,
     /// Read the prompt from a file
-    #[clap(short = 'f', long, help = "prompt file to start generation")]
-    file: Option<String>,
+    // #[clap(short = 'f', long, help = "prompt file to start generation")]
+    // file: Option<String>,
     /// set the length of the prompt + output in tokens
     #[arg(long, default_value_t = 32)]
     n_len: i32,
@@ -131,8 +131,8 @@ fn main() -> Result<()> {
     let Args {
         n_len,
         model,
-        prompt,
-        file,
+        // prompt,
+        // file,
         #[cfg(any(feature = "cuda", feature = "vulkan"))]
         disable_gpu,
         key_value_overrides,
@@ -143,7 +143,8 @@ fn main() -> Result<()> {
     } = Args::parse();
 
     // init LLM
-    let backend = LlamaBackend::init()?;
+    let mut backend = LlamaBackend::init()?;
+    backend.void_logs();
 
     // offload all layers to the gpu
     let model_params = {
@@ -157,16 +158,11 @@ fn main() -> Result<()> {
         LlamaModelParams::default()
     };
 
-    let prompt = if let Some(str) = prompt {
-        if file.is_some() {
-            bail!("either prompt or file must be specified, but not both")
-        }
-        str
-    } else if let Some(file) = file {
-        std::fs::read_to_string(&file).with_context(|| format!("unable to read {file}"))?
-    } else {
-        "Hello my name is".to_string()
-    };
+    // let prompt = if let Some(str) = prompt {
+    //     str
+    // } else {
+    //     "Hello my name is".to_string()
+    // };
 
     let mut model_params = pin!(model_params);
 
@@ -205,86 +201,95 @@ fn main() -> Result<()> {
 
     // tokenize the prompt
 
-    let tokens_list = model
-        .str_to_token(&prompt, AddBos::Always)
-        .with_context(|| format!("failed to tokenize {prompt}"))?;
+    let mut generate = |prompt:String| -> Result<String> {
+        let mut output:String = String::new();
 
-    let n_cxt = ctx.n_ctx() as i32;
-    let n_kv_req = tokens_list.len() as i32 + (n_len - tokens_list.len() as i32);
+        let tokens_list = model
+            .str_to_token(&prompt, AddBos::Always)
+            .with_context(|| format!("failed to tokenize {prompt}"))?;
 
-    eprintln!("n_len = {n_len}, n_ctx = {n_cxt}, k_kv_req = {n_kv_req}");
+        let n_cxt = ctx.n_ctx() as i32;
+        let n_kv_req = tokens_list.len() as i32 + (n_len - tokens_list.len() as i32);
 
-    // make sure the KV cache is big enough to hold all the prompt and generated tokens
-    if n_kv_req > n_cxt {
-        bail!(
-            "n_kv_req > n_ctx, the required kv cache size is not big enough
-either reduce n_len or increase n_ctx"
-        )
-    }
+        // eprintln!("n_len = {n_len}, n_ctx = {n_cxt}, k_kv_req = {n_kv_req}");
 
-    if tokens_list.len() >= usize::try_from(n_len)? {
-        bail!("the prompt is too long, it has more tokens than n_len")
-    }
-
-    // print the prompt token-by-token
-    eprintln!();
-
-    for token in &tokens_list {
-        eprint!("{}", model.token_to_str(*token, Special::Tokenize)?);
-    }
-
-    std::io::stderr().flush()?;
-
-    // create a llama_batch with size 512
-    // we use this object to submit token data for decoding
-    let mut batch = LlamaBatch::new(512, 1);
-
-    let last_index: i32 = (tokens_list.len() - 1) as i32;
-    for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
-        // llama_decode will output logits only for the last token of the prompt
-        let is_last = i == last_index;
-        batch.add(token, i, &[0], is_last)?;
-    }
-
-    ctx.decode(&mut batch)
-        .with_context(|| "llama_decode() failed")?;
-
-    // main loop
-
-    let mut n_cur = batch.n_tokens();
-    let mut n_decode = 0;
-
-    // The `Decoder`
-    let mut decoder = encoding_rs::UTF_8.new_decoder();
-
-    while n_cur <= n_len {
-        // sample the next token
-        {
-            let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
-
-            // is it an end of stream?
-            if model.is_eog_token(new_token_id) {
-                eprintln!();
-                break;
-            }
-
-            let output_bytes = model.token_to_bytes(new_token_id, Special::Tokenize)?;
-            // use `Decoder.decode_to_string()` to avoid the intermediate buffer
-            let mut output_string = String::with_capacity(32);
-            let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
-            print!("{output_string}");
-            std::io::stdout().flush()?;
-
-            batch.clear();
-            batch.add(new_token_id, n_cur, &[0], true)?;
+        // make sure the KV cache is big enough to hold all the prompt and generated tokens
+        if n_kv_req > n_cxt {
+            bail!(
+                "n_kv_req > n_ctx, the required kv cache size is not big enough either reduce n_len or increase n_ctx"
+            )
         }
 
-        n_cur += 1;
+        if tokens_list.len() >= usize::try_from(n_len)? {
+            bail!("the prompt is too long, it has more tokens than n_len")
+        }
 
-        ctx.decode(&mut batch).with_context(|| "failed to eval")?;
+        // create a llama_batch with size 512
+        // we use this object to submit token data for decoding
+        let mut batch = LlamaBatch::new(512, 1);
 
-        n_decode += 1;
-    }
+        let last_index: i32 = (tokens_list.len() - 1) as i32;
+        for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
+            // llama_decode will output logits only for the last token of the prompt
+            let is_last = i == last_index;
+            batch.add(token, i, &[0], is_last)?;
+        }
+
+        ctx.decode(&mut batch)
+            .with_context(|| "llama_decode() failed")?;
+
+        // main loop
+
+        let mut n_cur = batch.n_tokens();
+        let mut n_decode = 0;
+
+        // The `Decoder`
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+
+        while n_cur <= n_len {
+            // sample the next token
+            {
+                let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
+
+                // is it an end of stream?
+                if model.is_eog_token(new_token_id) {
+                    eprintln!();
+                    break;
+                }
+
+                let output_bytes = model.token_to_bytes(new_token_id, Special::Tokenize)?;
+                // use `Decoder.decode_to_string()` to avoid the intermediate buffer
+                let mut output_string = String::with_capacity(32);
+                let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
+                // print!("{output_string}");
+                // std::io::stdout().flush()?;
+                output.push_str(output_string.as_str());
+
+                batch.clear();
+                batch.add(new_token_id, n_cur, &[0], true)?;
+            }
+
+            n_cur += 1;
+
+            ctx.decode(&mut batch).with_context(|| "failed to eval")?;
+
+            n_decode += 1;
+        };
+
+        Ok(output)
+    };
+
+    
+    loop {
+        let mut prompt = String::new();
+        println!("\n{}", "user".green());
+        std::io::stdin().read_line(&mut prompt)?;
+        
+        let response = generate(prompt)?;
+        println!("\n{}", "assistant".red());
+        println!("{}", response.white());
+    };
+
 
     Ok(())
 }
