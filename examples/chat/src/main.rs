@@ -1,6 +1,7 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
 //! 
 //! inspired by https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp
+//! TODO: add chat template https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
 //! 
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
