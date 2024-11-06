@@ -143,6 +143,13 @@ total time = 954.18 ms
 </pre>
 </details>
 
+### Chat example 
+
+```shell
+cd examples/chat
+cargo run -- local ../../qwen2-1_5b-instruct-q4_0.gguf
+```
+
 ## Hacking
 
 Ensure that when you clone this project you also clone the submodules. This can be done with the following command:
