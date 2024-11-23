@@ -19,6 +19,8 @@ include = [
     "/llama.cpp/ggml/src/*.h",
     "/llama.cpp/ggml/src/*.c",
     "/llama.cpp/ggml/src/*.cpp",
+    "/llama.cpp/ggml/**/*.cpp",
+    "/llama.cpp/ggml/**/*.h",
     "/llama.cpp/src/*.h",
     "/llama.cpp/src/*.cpp",
 
