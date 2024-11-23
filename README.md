@@ -167,3 +167,7 @@ git submodule update --init --recursive
 ## Thanks
 
 Most of the work was done [here](https://crates.io/crates/llama-cpp-2), thanks to their contributors.
+
+## Other libraries
+
+Check out [bitnet-cpp](https://github.com/eugenehp/bitnet-cpp-rs) wrapper in Rust for highly quantized models.
