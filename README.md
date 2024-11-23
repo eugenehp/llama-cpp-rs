@@ -150,7 +150,7 @@ cd examples/chat
 cargo run -- local ../../qwen2-1_5b-instruct-q4_0.gguf
 ```
 
-## Hacking
+## Development
 
 Ensure that when you clone this project you also clone the submodules. This can be done with the following command:
 
@@ -163,3 +163,7 @@ or if you have already cloned the project you can run:
 ```sh
 git submodule update --init --recursive
 ```
+
+## Thanks
+
+Most of the work was done [here](https://crates.io/crates/llama-cpp-2), thanks to their contributors.
