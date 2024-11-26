@@ -279,6 +279,8 @@ fn main() {
 
     if cfg!(feature = "openmp") {
         config.define("GGML_OPENMP", "ON");
+    }else {
+        config.define("GGML_OPENMP", "OFF");
     }
     
     if cfg!(all(feature = "mpi")) {
