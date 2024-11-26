@@ -238,8 +238,14 @@ fn main() {
         if build_shared_libs { "ON" } else { "OFF" },
     );
 
-    if cfg!(target_os = "macos") {
-        config.define("GGML_BLAS", "OFF");
+    // use BLAS instead of OpenMP
+    // if cfg!(target_os = "macos") {
+    //     config.define("GGML_BLAS", "OFF");
+    // }
+    
+    // see https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md
+    if cfg!(all(target_os = "windows", target_arch = "arm")) {
+        config.define("GGML_OPENMP", "OFF");
     }
 
     if cfg!(windows) {
