@@ -180,6 +180,12 @@ fn main() {
             .to_string(),
     );
 
+    // point to CC and CXX binaries on macOS
+    if cfg!(all(feature = "mpi", target_os = "macos")) {
+        env::set_var( "CC", "/opt/homebrew/bin/mpicc");
+        env::set_var( "CXX", "/opt/homebrew/bin/mpicxx");
+    }
+
     // Bindings
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
@@ -274,6 +280,10 @@ fn main() {
     if cfg!(feature = "openmp") {
         config.define("GGML_OPENMP", "ON");
     }
+    
+    if cfg!(all(feature = "mpi")) {
+        config.define("LLAMA_MPI", "ON");
+    }
 
     // General
     config
@@ -316,7 +326,7 @@ fn main() {
         println!("cargo:rustc-link-lib=dylib=msvcrtd");
     }
 
-    // // macOS
+    // macOS
     if cfg!(target_os = "macos") {
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Metal");
