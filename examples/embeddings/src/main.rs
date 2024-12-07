@@ -1,4 +1,4 @@
-//! This is a translation of embedding.cpp in llama.cpp using llama-cpp-4.
+//! This is a translation of embedding.cpp in llama.cpp using llama-cpp-2.
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
@@ -29,7 +29,7 @@ struct Args {
     #[command(subcommand)]
     model: Model,
     /// The prompt
-    #[clap(default_value = "Hello my name is")]
+    #[clap(default_value = "Hello my name is\nWhat is your name?")]
     prompt: String,
     /// Whether to normalise the produced embeddings
     #[clap(short)]
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
 
     // init LLM
     let mut backend = LlamaBackend::init()?;
-    // hide ggml outputs
+    // don't print logs
     backend.void_logs();
 
     // offload all layers to the gpu
@@ -99,6 +99,9 @@ fn main() -> Result<()> {
         LlamaModelParams::default()
     };
 
+    let n_batch = 2048;
+    let n_ubatch = n_batch;
+
     let model_path = model
         .get_or_load()
         .with_context(|| "failed to get model from args")?;
@@ -106,28 +109,16 @@ fn main() -> Result<()> {
     let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
         .with_context(|| "unable to load model")?;
 
-    let n_batch = 2048;
-    let n_ubatch = n_batch;
-    let n_embd = model.n_embd();
-
     // initialize the context
     let ctx_params = LlamaContextParams::default()
-        .with_embeddings(true)
         .with_n_batch(n_batch)
         .with_n_ubatch(n_ubatch)
-        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?);
+        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?)
+        .with_embeddings(true);
 
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
-
-    let n_ctx = ctx.n_ctx() as usize;
-    let n_ctx_train = model.n_ctx_train();
-    let pooling_type = ctx.pooling_type();
-
-    // println!("pooling_type - {pooling_type:?}");
-
-    assert!(n_batch as usize >= n_ctx);
 
     // Split the prompt to display the batching functionality
     let prompt_lines = prompt.lines();
@@ -138,7 +129,11 @@ fn main() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| format!("failed to tokenize {prompt}"))?;
 
-    eprintln!("n_ctx = {n_ctx}, n_ctx_train = {n_ctx_train}, n_embd = {n_embd}");
+    let n_ctx = ctx.n_ctx() as usize;
+    let n_ctx_train = model.n_ctx_train();
+    let pooling_type = ctx.pooling_type();
+
+    eprintln!("n_ctx = {n_ctx}, n_ctx_train = {n_ctx_train}, pooling_type = {pooling_type:?}");
 
     if tokens_lines_list.iter().any(|tok| n_ctx < tok.len()) {
         bail!("One of the provided prompts exceeds the size of the context window");
@@ -174,14 +169,13 @@ fn main() -> Result<()> {
     let t_main_start = ggml_time_us();
 
     for tokens in &tokens_lines_list {
-        println!("Adding tokens - {tokens:?}");
-
         // Flush the batch if the next prompt would exceed our batch size
+        // if (batch.n_tokens() as usize + tokens.len()) > n_ctx {
         if (batch.n_tokens() as usize + tokens.len()) > n_batch as usize {
             batch_decode(
                 &mut ctx,
                 &mut batch,
-                // max_seq_id_batch,
+                max_seq_id_batch,
                 &mut output,
                 normalise,
             )?;
@@ -192,13 +186,13 @@ fn main() -> Result<()> {
         max_seq_id_batch += 1;
     }
     // Handle final batch
-    let _ = batch_decode(
+    batch_decode(
         &mut ctx,
         &mut batch,
-        // max_seq_id_batch,
+        max_seq_id_batch,
         &mut output,
         normalise,
-    ); // ? unwrapping here fails the batch decoder, since it has to be `batch.n_tokens() - 1`
+    )?;
 
     let t_main_end = ggml_time_us();
 
@@ -218,29 +212,27 @@ fn main() -> Result<()> {
 
     println!("{}", ctx.timings());
 
-    println!("embeddings - {output:?}");
-
     Ok(())
 }
 
 fn batch_decode(
     ctx: &mut LlamaContext,
     batch: &mut LlamaBatch,
+    s_batch: i32,
     output: &mut Vec<Vec<f32>>,
     normalise: bool,
 ) -> Result<()> {
-    let n_tokens = batch.n_tokens();
-    println!("Inside batch_decode n_tokens={n_tokens}");
+    let pooling_type = ctx.pooling_type();
+
     ctx.clear_kv_cache();
     ctx.decode(batch).with_context(|| "llama_decode() failed")?;
 
-    // for i in 0..s_batch {
-    for i in 0..n_tokens {
-        let embedding = ctx
-            .embeddings_seq_ith(i)
-            .with_context(|| "Failed to get embeddings")?;
-
-        println!("embedding - {embedding:?}");
+    for i in 0..batch.n_tokens() {
+        let embedding = match pooling_type {
+            llama_cpp_4::context::params::LlamaPoolingType::None => ctx.embeddings_ith(i),
+            _ => ctx.embeddings_seq_ith(i),
+        }
+        .with_context(|| "Failed to get embeddings")?;
         let output_embeddings = if normalise {
             normalize(embedding)
         } else {

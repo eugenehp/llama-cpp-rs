@@ -143,7 +143,6 @@ fn macos_link_search_path() -> Option<String> {
 }
 
 fn main() {
-
     let target = env::var("TARGET").unwrap();
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
@@ -182,8 +181,8 @@ fn main() {
 
     // point to CC and CXX binaries on macOS
     if cfg!(all(feature = "mpi", target_os = "macos")) {
-        env::set_var( "CC", "/opt/homebrew/bin/mpicc");
-        env::set_var( "CXX", "/opt/homebrew/bin/mpicxx");
+        env::set_var("CC", "/opt/homebrew/bin/mpicc");
+        env::set_var("CXX", "/opt/homebrew/bin/mpicxx");
     }
 
     // Bindings
@@ -202,6 +201,10 @@ fn main() {
         .allowlist_type("ggml_.*")
         .allowlist_function("llama_.*")
         .allowlist_type("llama_.*")
+        // .allowlist_item("common_.*")
+        // .allowlist_function("common_tokenize")
+        // .allowlist_function("common_detokenize")
+        // .allowlist_type("common_.*")
         // .allowlist_item("common_params")
         // .allowlist_item("common_sampler_type")
         // .allowlist_item("common_sampler_params")
@@ -215,7 +218,6 @@ fn main() {
         .prepend_enum_name(false)
         .generate()
         .expect("Failed to generate bindings");
-
 
     // Write the generated bindings to an output file
     let bindings_path = out_dir.join("bindings.rs");
@@ -248,7 +250,7 @@ fn main() {
     // if cfg!(target_os = "macos") {
     //     config.define("GGML_BLAS", "OFF");
     // }
-    
+
     // see https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md
     if cfg!(all(target_os = "windows", target_arch = "arm")) {
         config.define("GGML_OPENMP", "OFF");
@@ -257,12 +259,12 @@ fn main() {
     if cfg!(windows) {
         config.static_crt(static_crt);
     }
-    
 
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
         if cfg!(windows) {
-            let vulkan_path = env::var("VULKAN_SDK").expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
+            let vulkan_path = env::var("VULKAN_SDK")
+                .expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
             let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
             println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
             println!("cargo:rustc-link-lib=vulkan-1");
@@ -279,10 +281,10 @@ fn main() {
 
     if cfg!(feature = "openmp") {
         config.define("GGML_OPENMP", "ON");
-    }else {
+    } else {
         config.define("GGML_OPENMP", "OFF");
     }
-    
+
     if cfg!(all(feature = "mpi")) {
         config.define("LLAMA_MPI", "ON");
     }
@@ -297,7 +299,10 @@ fn main() {
 
     // Search paths
     println!("cargo:rustc-link-search={}", out_dir.join("lib").display());
-    println!("cargo:rustc-link-search={}", out_dir.join("lib64").display());
+    println!(
+        "cargo:rustc-link-search={}",
+        out_dir.join("lib64").display()
+    );
     println!("cargo:rustc-link-search={}", build_dir.display());
 
     // Link libraries
@@ -364,7 +369,7 @@ fn main() {
             debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
             if !dst.exists() {
                 std::fs::hard_link(asset.clone(), dst).unwrap();
-            }          
+            }
 
             // Copy DLLs to examples as well
             if target_dir.join("examples").exists() {
