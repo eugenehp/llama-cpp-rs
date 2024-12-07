@@ -83,7 +83,9 @@ fn main() -> Result<()> {
     } = Args::parse();
 
     // init LLM
-    let backend = LlamaBackend::init()?;
+    let mut backend = LlamaBackend::init()?;
+    // hide ggml outputs
+    backend.void_logs();
 
     // offload all layers to the gpu
     let model_params = {
@@ -104,14 +106,28 @@ fn main() -> Result<()> {
     let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
         .with_context(|| "unable to load model")?;
 
+    let n_batch = 2048;
+    let n_ubatch = n_batch;
+    let n_embd = model.n_embd();
+
     // initialize the context
     let ctx_params = LlamaContextParams::default()
-        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?)
-        .with_embeddings(true);
+        .with_embeddings(true)
+        .with_n_batch(n_batch)
+        .with_n_ubatch(n_ubatch)
+        .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?);
 
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
+
+    let n_ctx = ctx.n_ctx() as usize;
+    let n_ctx_train = model.n_ctx_train();
+    let pooling_type = ctx.pooling_type();
+
+    // println!("pooling_type - {pooling_type:?}");
+
+    assert!(n_batch as usize >= n_ctx);
 
     // Split the prompt to display the batching functionality
     let prompt_lines = prompt.lines();
@@ -122,10 +138,7 @@ fn main() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| format!("failed to tokenize {prompt}"))?;
 
-    let n_ctx = ctx.n_ctx() as usize;
-    let n_ctx_train = model.n_ctx_train();
-
-    eprintln!("n_ctx = {n_ctx}, n_ctx_train = {n_ctx_train}");
+    eprintln!("n_ctx = {n_ctx}, n_ctx_train = {n_ctx_train}, n_embd = {n_embd}");
 
     if tokens_lines_list.iter().any(|tok| n_ctx < tok.len()) {
         bail!("One of the provided prompts exceeds the size of the context window");
@@ -153,7 +166,7 @@ fn main() -> Result<()> {
 
     // create a llama_batch with the size of the context
     // we use this object to submit token data for decoding
-    let mut batch = LlamaBatch::new(n_ctx, 1);
+    let mut batch = LlamaBatch::new(n_batch as usize, 1);
 
     let mut max_seq_id_batch = 0;
     let mut output = Vec::with_capacity(tokens_lines_list.len());
@@ -161,12 +174,14 @@ fn main() -> Result<()> {
     let t_main_start = ggml_time_us();
 
     for tokens in &tokens_lines_list {
+        println!("Adding tokens - {tokens:?}");
+
         // Flush the batch if the next prompt would exceed our batch size
-        if (batch.n_tokens() as usize + tokens.len()) > n_ctx {
+        if (batch.n_tokens() as usize + tokens.len()) > n_batch as usize {
             batch_decode(
                 &mut ctx,
                 &mut batch,
-                max_seq_id_batch,
+                // max_seq_id_batch,
                 &mut output,
                 normalise,
             )?;
@@ -180,7 +195,7 @@ fn main() -> Result<()> {
     let _ = batch_decode(
         &mut ctx,
         &mut batch,
-        max_seq_id_batch,
+        // max_seq_id_batch,
         &mut output,
         normalise,
     ); // ? unwrapping here fails the batch decoder, since it has to be `batch.n_tokens() - 1`
@@ -203,23 +218,29 @@ fn main() -> Result<()> {
 
     println!("{}", ctx.timings());
 
+    println!("embeddings - {output:?}");
+
     Ok(())
 }
 
 fn batch_decode(
     ctx: &mut LlamaContext,
     batch: &mut LlamaBatch,
-    s_batch: i32,
     output: &mut Vec<Vec<f32>>,
     normalise: bool,
 ) -> Result<()> {
+    let n_tokens = batch.n_tokens();
+    println!("Inside batch_decode n_tokens={n_tokens}");
     ctx.clear_kv_cache();
     ctx.decode(batch).with_context(|| "llama_decode() failed")?;
 
-    for i in 0..s_batch {
+    // for i in 0..s_batch {
+    for i in 0..n_tokens {
         let embedding = ctx
             .embeddings_seq_ith(i)
             .with_context(|| "Failed to get embeddings")?;
+
+        println!("embedding - {embedding:?}");
         let output_embeddings = if normalise {
             normalize(embedding)
         } else {
