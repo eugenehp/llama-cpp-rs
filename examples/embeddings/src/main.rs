@@ -172,13 +172,13 @@ fn main() -> Result<()> {
         // Flush the batch if the next prompt would exceed our batch size
         // if (batch.n_tokens() as usize + tokens.len()) > n_ctx {
         if (batch.n_tokens() as usize + tokens.len()) > n_batch as usize {
-            batch_decode(
+            let _ = batch_decode(
                 &mut ctx,
                 &mut batch,
                 max_seq_id_batch,
                 &mut output,
                 normalise,
-            )?;
+            );
             max_seq_id_batch = 0;
         }
 
@@ -231,15 +231,19 @@ fn batch_decode(
         let embedding = match pooling_type {
             llama_cpp_4::context::params::LlamaPoolingType::None => ctx.embeddings_ith(i),
             _ => ctx.embeddings_seq_ith(i),
-        }
-        .with_context(|| "Failed to get embeddings")?;
-        let output_embeddings = if normalise {
-            normalize(embedding)
-        } else {
-            embedding.to_vec()
         };
 
-        output.push(output_embeddings);
+        // .with_context(|| "Failed to get embeddings")?;
+
+        if let Ok(embedding) = embedding {
+            let output_embeddings = if normalise {
+                normalize(embedding)
+            } else {
+                embedding.to_vec()
+            };
+
+            output.push(output_embeddings);
+        }
     }
 
     batch.clear();
