@@ -201,6 +201,30 @@ fn main() -> Result<()> {
         eprintln!();
     }
 
+    let prompt_lines: Vec<&str> = prompt.lines().collect();
+    if output.len() > 1 {
+        println!("cosine similarity matrix:\n\n");
+        prompt_lines
+            .iter()
+            .map(|str| {
+                print!("{str:?}\t"); // cut and only print first 6 symbols
+            })
+            .for_each(drop);
+
+        println!("");
+
+        for i in 0..output.len() {
+            let i_embeddings = output.get(i).unwrap();
+            for j in 0..output.len() {
+                let j_embeddings = output.get(j).unwrap();
+                let sim = common_embd_similarity_cos(i_embeddings, j_embeddings);
+                print!("{sim}\t");
+            }
+            let prompt = prompt_lines.get(i).unwrap();
+            print!("{prompt:?}\n");
+        }
+    }
+
     let duration = Duration::from_micros((t_main_end - t_main_start) as u64);
     let total_tokens: usize = tokens_lines_list.iter().map(Vec::len).sum();
     eprintln!(
@@ -258,4 +282,28 @@ fn normalize(input: &[f32]) -> Vec<f32> {
         .sqrt();
 
     input.iter().map(|&val| val / magnitude).collect()
+}
+
+fn common_embd_similarity_cos(embd1: &Vec<f32>, embd2: &Vec<f32>) -> f32 {
+    let mut sum = 0.0;
+    let mut sum1 = 0.0;
+    let mut sum2 = 0.0;
+
+    // Iterate through the vectors
+    for i in 0..embd1.len() {
+        sum += embd1[i] as f64 * embd2[i] as f64;
+        sum1 += embd1[i] as f64 * embd1[i] as f64;
+        sum2 += embd2[i] as f64 * embd2[i] as f64;
+    }
+
+    // Handle the case where one or both vectors are zero vectors
+    if sum1 == 0.0 || sum2 == 0.0 {
+        if sum1 == 0.0 && sum2 == 0.0 {
+            return 1.0; // Two zero vectors are considered similar
+        }
+        return 0.0; // One of the vectors is a zero vector
+    }
+
+    // Calculate cosine similarity
+    return (sum / (f64::sqrt(sum1) * f64::sqrt(sum2))) as f32;
 }
