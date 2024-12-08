@@ -5,6 +5,8 @@ use std::num::NonZeroI32;
 use std::ptr::NonNull;
 use std::slice;
 
+use llama_cpp_sys_4::llama_pooling_type;
+use params::LlamaPoolingType;
 use perf::PerfContextData;
 
 use crate::llama_batch::LlamaBatch;
@@ -19,9 +21,9 @@ use crate::{
 
 pub mod kv_cache;
 pub mod params;
+pub mod perf;
 pub mod sampler;
 pub mod session;
-pub mod perf;
 
 /// Safe wrapper around `llama_context`.
 #[allow(clippy::module_name_repetitions)]
@@ -117,6 +119,13 @@ impl<'model> LlamaContext<'model> {
             }
             Some(error) => Err(EncodeError::from(error)),
         }
+    }
+
+    /// Return Pooling type for Llama's Context
+    pub fn pooling_type(&self) -> LlamaPoolingType {
+        let pooling_type = unsafe { llama_pooling_type(self.context.as_ptr()) };
+
+        LlamaPoolingType::from(pooling_type)
     }
 
     /// Get the embeddings for the `i`th sequence in the current context.
@@ -275,8 +284,11 @@ impl<'model> LlamaContext<'model> {
 
     /// Returns the timings for the context.
     pub fn timings(&mut self) -> PerfContextData {
-        let perf_context_data = unsafe { llama_cpp_sys_4::llama_perf_context(self.context.as_ptr()) };
-        PerfContextData { perf_context_data: perf_context_data  }
+        let perf_context_data =
+            unsafe { llama_cpp_sys_4::llama_perf_context(self.context.as_ptr()) };
+        PerfContextData {
+            perf_context_data: perf_context_data,
+        }
     }
 
     /// Sets a lora adapter.
