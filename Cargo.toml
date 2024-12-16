@@ -10,7 +10,7 @@ members = [
 
 [workspace.dependencies]
 # core library deps
-thiserror = "2.0.6"
+thiserror = "2.0.7"
 tracing = "0.1"
 
 # examples and benchmarks
