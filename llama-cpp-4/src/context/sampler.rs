@@ -13,7 +13,7 @@ use llama_cpp_sys_4::{
     llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
     llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
     llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
-    llama_sampler_sample, llama_token,
+    llama_sampler_sample,
 };
 
 use crate::{model::LlamaModel, token::LlamaToken};

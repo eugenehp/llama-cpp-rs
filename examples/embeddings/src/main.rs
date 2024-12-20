@@ -242,7 +242,7 @@ fn main() -> Result<()> {
 fn batch_decode(
     ctx: &mut LlamaContext,
     batch: &mut LlamaBatch,
-    s_batch: i32,
+    _s_batch: i32,
     output: &mut Vec<Vec<f32>>,
     normalise: bool,
 ) -> Result<()> {
