@@ -1,6 +1,7 @@
 //! Sampler implementation for llama.cpp
 //!
 use std::{
+    ffi::CString,
     fmt::{Debug, Formatter},
     ptr::NonNull,
 };
@@ -8,15 +9,22 @@ use std::{
 use llama_cpp_sys_4::{
     common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params,
     llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_free,
-    llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat,
-    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
-    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p,
-    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token,
+    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_min_p,
+    llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
+    llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
+    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
+    llama_sampler_sample, llama_token,
 };
 
-use crate::token::LlamaToken;
+use crate::{model::LlamaModel, token::LlamaToken};
 
 use super::LlamaContext;
+
+#[cfg(target_os = "android")]
+type CChar = u8;
+
+#[cfg(not(target_os = "android"))]
+type CChar = i8;
 
 /// Safe wrapper around `llama_sampler`.
 ///
@@ -224,6 +232,40 @@ impl LlamaSampler {
         };
 
         self
+    }
+
+    /// @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
+    pub fn dry(
+        &self,
+        model: &LlamaModel,
+        multiplier: f32,
+        base: f32,
+        allowed_length: i32,
+        penalty_last_n: i32,
+        seq_breakers: impl IntoIterator<Item = impl AsRef<[u8]>>,
+    ) -> Self {
+        let seq_breakers: Vec<CString> = seq_breakers
+            .into_iter()
+            .map(|s| CString::new(s.as_ref()).unwrap())
+            .collect();
+        let mut seq_breaker_pointers: Vec<*const CChar> =
+            seq_breakers.iter().map(|s| s.as_ptr()).collect();
+
+        let sampler = unsafe {
+            llama_sampler_init_dry(
+                model.model.as_ptr(),
+                multiplier,
+                base,
+                allowed_length,
+                penalty_last_n,
+                seq_breaker_pointers.as_mut_ptr(),
+                seq_breaker_pointers.len(),
+            )
+        };
+
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
     }
 
     /// init with penalties sampler
