@@ -1,9 +1,17 @@
 //! Sampler implementation for llama.cpp
-//! 
-use std::{fmt::{Debug, Formatter}, ptr::NonNull};
+//!
+use std::{
+    fmt::{Debug, Formatter},
+    ptr::NonNull,
+};
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token, llama_sampler_free
+    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params,
+    llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_free,
+    llama_sampler_init_dist, llama_sampler_init_min_p, llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
+    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p,
+    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample, llama_token,
 };
 
 use crate::token::LlamaToken;
@@ -11,9 +19,9 @@ use crate::token::LlamaToken;
 use super::LlamaContext;
 
 /// Safe wrapper around `llama_sampler`.
-/// 
+///
 /// Original PR for the Sampler in llama.cpp
-/// 
+///
 /// https://github.com/ggerganov/llama.cpp/pull/9294
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaSampler {
@@ -42,10 +50,10 @@ impl Drop for LlamaSampler {
     dead_code
 )]
 pub struct LlamaSamplerParams {
-    top_k:i32,
-    top_p:f32,
+    top_k: i32,
+    top_p: f32,
     temp: f32,
-    seed: u32
+    seed: u32,
 }
 
 impl LlamaSamplerParams {
@@ -83,11 +91,11 @@ impl LlamaSamplerParams {
 
 impl Default for LlamaSamplerParams {
     fn default() -> Self {
-        Self { 
-            top_k: 50, 
-            top_p: 0.9, 
+        Self {
+            top_k: 50,
+            top_p: 0.9,
             temp: 0.8,
-            seed: 1234
+            seed: 1234,
         }
     }
 }
@@ -95,12 +103,10 @@ impl Default for LlamaSamplerParams {
 impl LlamaSampler {
     /// create new sampler with no_perf param
     /// * `no_perf` - whether to measure performance timings
-    pub fn new(no_perf:Option<bool>) -> Self{
+    pub fn new(no_perf: Option<bool>) -> Self {
         let sparams = match no_perf {
-            Some(no_perf) => llama_sampler_chain_params {
-                no_perf: no_perf
-            },
-            None =>  unsafe { llama_sampler_chain_default_params() },
+            Some(no_perf) => llama_sampler_chain_params { no_perf: no_perf },
+            None => unsafe { llama_sampler_chain_default_params() },
         };
 
         Self {
@@ -109,13 +115,14 @@ impl LlamaSampler {
     }
 
     /// sample next token
-    pub fn sample(&self, ctx:&LlamaContext, idx: i32) -> LlamaToken{
-        let token_id = unsafe {llama_sampler_sample(self.sampler.as_ptr(), ctx.context.as_ptr(), idx)};
+    pub fn sample(&self, ctx: &LlamaContext, idx: i32) -> LlamaToken {
+        let token_id =
+            unsafe { llama_sampler_sample(self.sampler.as_ptr(), ctx.context.as_ptr(), idx) };
         LlamaToken::new(token_id)
     }
 
     #[doc = " @details Top-K sampling described in academic paper \"The Curious Case of Neural Text Degeneration\" https://arxiv.org/abs/1904.09751"]
-    pub fn with_top_k(&self, top_k:i32) -> &Self{
+    pub fn with_top_k(&self, top_k: i32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_top_k(top_k));
         };
@@ -124,7 +131,7 @@ impl LlamaSampler {
     }
 
     #[doc = " @details Nucleus sampling described in academic paper \"The Curious Case of Neural Text Degeneration\" https://arxiv.org/abs/1904.09751"]
-    pub fn with_top_p(&self, top_p:f32) -> &Self{
+    pub fn with_top_p(&self, top_p: f32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_top_p(top_p, 1));
         };
@@ -140,16 +147,19 @@ impl LlamaSampler {
 
         self
     }
-    
+
     #[doc = " @details Dynamic temperature implementation (a.k.a. entropy) described in the paper https://arxiv.org/abs/2309.02772."]
     pub fn with_temp_ext(&self, temp: f32, delta: f32, exponent: f32) -> &Self {
         unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_temp_ext(temp, delta, exponent));
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_temp_ext(temp, delta, exponent),
+            );
         };
 
         self
     }
-    
+
     #[doc = " @details Minimum P sampling as described in https://github.com/ggerganov/llama.cpp/pull/3841"]
     pub fn with_min_p(&self, p: f32, min_keep: usize) -> &Self {
         unsafe {
@@ -162,49 +172,53 @@ impl LlamaSampler {
     #[doc = " @details Locally Typical Sampling implementation described in the paper https://arxiv.org/abs/2202.00666."]
     pub fn with_typical(&self, p: f32, min_keep: usize) -> &Self {
         unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_typical(p, min_keep));
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_typical(p, min_keep),
+            );
         };
 
         self
     }
 
     #[doc = " @details XTC sampler as described in https://github.com/oobabooga/text-generation-webui/pull/6335"]
-    pub fn with_xtc(&self, p: f32, t: f32, min_keep: usize, seed: u32)
-        -> &Self {
-            unsafe {
-                llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_xtc(p, t, min_keep, seed));
-            };
-    
-            self
-        }
-
-    #[doc = " @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.\n @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.\n @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.\n @param eta The learning rate used to update `mu` based on the error between the target and observed surprisal of the sampled word. A larger learning rate will cause `mu` to be updated more quickly, while a smaller learning rate will result in slower updates.\n @param m The number of tokens considered in the estimation of `s_hat`. This is an arbitrary value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`. In the paper, they use `m = 100`, but you can experiment with different values to see how it affects the performance of the algorithm.\n @param mu Maximum cross-entropy. This value is initialized to be twice the target cross-entropy (`2 * tau`) and is updated in the algorithm based on the error between the target and observed surprisal."]
-    pub fn with_mirostat(
-        &self,
-        n_vocab: i32,
-        seed: u32,
-        tau: f32,
-        eta: f32,
-        m: i32,
-    ) -> &Self {
+    pub fn with_xtc(&self, p: f32, t: f32, min_keep: usize, seed: u32) -> &Self {
         unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m));
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_xtc(p, t, min_keep, seed),
+            );
         };
 
         self
     }
-    
+
+    #[doc = " @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.\n @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.\n @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.\n @param eta The learning rate used to update `mu` based on the error between the target and observed surprisal of the sampled word. A larger learning rate will cause `mu` to be updated more quickly, while a smaller learning rate will result in slower updates.\n @param m The number of tokens considered in the estimation of `s_hat`. This is an arbitrary value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`. In the paper, they use `m = 100`, but you can experiment with different values to see how it affects the performance of the algorithm.\n @param mu Maximum cross-entropy. This value is initialized to be twice the target cross-entropy (`2 * tau`) and is updated in the algorithm based on the error between the target and observed surprisal."]
+    pub fn with_mirostat(&self, n_vocab: i32, seed: u32, tau: f32, eta: f32, m: i32) -> &Self {
+        unsafe {
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m),
+            );
+        };
+
+        self
+    }
+
     #[doc = " @details Mirostat 2.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.\n @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.\n @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.\n @param eta The learning rate used to update `mu` based on the error between the target and observed surprisal of the sampled word. A larger learning rate will cause `mu` to be updated more quickly, while a smaller learning rate will result in slower updates.\n @param mu Maximum cross-entropy. This value is initialized to be twice the target cross-entropy (`2 * tau`) and is updated in the algorithm based on the error between the target and observed surprisal."]
     pub fn with_mirostat_v2(&self, seed: u32, tau: f32, eta: f32) -> &Self {
         unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_mirostat_v2(seed, tau, eta));
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_mirostat_v2(seed, tau, eta),
+            );
         };
 
         self
     }
 
     /// init seed distribution
-    pub fn with_seed(&self, seed:u32) -> &Self {
+    pub fn with_seed(&self, seed: u32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_dist(seed));
         };
@@ -213,15 +227,25 @@ impl LlamaSampler {
     }
 
     /// init with penalties sampler
-    pub fn with_penalties(&self, penalty_repeat: f32, penalty_freq: f32, penalty_present: f32, penalize_nl: bool, ignore_eos: bool) -> &Self {
+    pub fn with_penalties(
+        &self,
+        penalty_repeat: f32,
+        penalty_freq: f32,
+        penalty_present: f32,
+    ) -> &Self {
         // TODO: should this be pulled from context instead?
-        let n_vocab: i32 = 0;
-        let special_eos_id: llama_token = 0;
-        let linefeed_id: llama_token = 0;
         let penalty_last_n: i32 = 0;
-        
+
         unsafe {
-            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_penalties(n_vocab, special_eos_id, linefeed_id, penalty_last_n, penalty_repeat, penalty_freq, penalty_present, penalize_nl, ignore_eos));
+            llama_sampler_chain_add(
+                self.sampler.as_ptr(),
+                llama_sampler_init_penalties(
+                    penalty_last_n,
+                    penalty_repeat,
+                    penalty_freq,
+                    penalty_present,
+                ),
+            );
         };
 
         self
