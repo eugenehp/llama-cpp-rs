@@ -822,6 +822,7 @@ impl LlamaModel {
         Ok(LlamaContext::new(self, context, params.embeddings()))
     }
 
+    #[tracing::instrument(skip_all)]
     /// Apply the model's chat template to a sequence of messages.
     ///
     /// This function applies the model's chat template to the provided chat messages, formatting them accordingly. The chat
@@ -863,7 +864,6 @@ impl LlamaModel {
     /// # Notes
     ///
     /// The provided buffer is twice the length of the messages by default, which is recommended by the `llama.cpp` documentation.
-    #[tracing::instrument(skip_all)]
     pub fn apply_chat_template(
         &self,
         tmpl: Option<String>,
