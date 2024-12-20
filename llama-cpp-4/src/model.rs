@@ -10,6 +10,7 @@ use crate::context::params::LlamaContextParams;
 use crate::context::LlamaContext;
 use crate::llama_backend::LlamaBackend;
 use crate::model::params::LlamaModelParams;
+use crate::token::from_vec_token_sys;
 use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
@@ -202,6 +203,87 @@ impl LlamaModel {
     /// # Ok(())
     /// # }
     pub fn str_to_token(
+        &self,
+        str: &str,
+        add_bos: AddBos,
+    ) -> Result<Vec<LlamaToken>, StringToTokenError> {
+        let add_bos = match add_bos {
+            AddBos::Always => true,
+            AddBos::Never => false,
+        };
+
+        let tokens_estimation = std::cmp::max(8, (str.len() / 2) + usize::from(add_bos));
+        let mut buffer = Vec::with_capacity(tokens_estimation);
+
+        let c_string = CString::new(str)?;
+        let buffer_capacity =
+            c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
+
+        let size = unsafe {
+            llama_cpp_sys_4::llama_tokenize(
+                self.model.as_ptr(),
+                c_string.as_ptr(),
+                c_int::try_from(c_string.as_bytes().len())?,
+                buffer.as_mut_ptr(),
+                buffer_capacity,
+                add_bos,
+                true,
+            )
+        };
+
+        // if we fail the first time we can resize the vector to the correct size and try again. This should never fail.
+        // as a result - size is guaranteed to be positive here.
+        let size = if size.is_negative() {
+            buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
+            unsafe {
+                llama_cpp_sys_4::llama_tokenize(
+                    self.model.as_ptr(),
+                    c_string.as_ptr(),
+                    c_int::try_from(c_string.as_bytes().len())?,
+                    buffer.as_mut_ptr(),
+                    -size,
+                    add_bos,
+                    true,
+                )
+            }
+        } else {
+            size
+        };
+
+        let size = usize::try_from(size).expect("size is positive and usize ");
+
+        // Safety: `size` < `capacity` and llama-cpp has initialized elements up to `size`
+        unsafe { buffer.set_len(size) }
+        // Ok(buffer.into_iter().map(LlamaToken).collect())
+
+        // convert to LlamaToken without memory copy
+        let tokens = from_vec_token_sys(buffer);
+        Ok(tokens)
+    }
+
+    /// Convert a string to a Vector of tokens.
+    ///
+    /// # Errors
+    ///
+    /// - if [`str`] contains a null byte.
+    ///
+    /// # Panics
+    ///
+    /// - if there is more than [`usize::MAX`] [`LlamaToken`]s in [`str`].
+    ///
+    ///
+    /// ```no_run
+    /// use llama_cpp_2::model::LlamaModel;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use std::path::Path;
+    /// use llama_cpp_2::model::AddBos;
+    /// let backend = llama_cpp_2::llama_backend::LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, Path::new("path/to/model"), &Default::default())?;
+    /// let tokens = model.str_to_token("Hello, World!", AddBos::Always)?;
+    /// # Ok(())
+    /// # }
+    pub fn str_to_token_fast(
         &self,
         str: &str,
         add_bos: AddBos,
