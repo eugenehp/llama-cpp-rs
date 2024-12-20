@@ -25,7 +25,26 @@ pub mod perf;
 pub mod sampler;
 pub mod session;
 
-/// Safe wrapper around `llama_context`.
+/// A safe wrapper around the `llama_context` C++ context.
+///
+/// This struct provides a safe interface to interact with the `llama_context` used by the `LlamaModel`.
+/// It encapsulates the raw C++ context pointer and provides additional fields for managing the model and
+/// context-specific settings like embeddings and logits.
+///
+/// The `LlamaContext` struct ensures that the C++ context is always valid by using the `NonNull` type for
+/// the context pointer, preventing it from being null. The struct also holds a reference to the model
+/// (`LlamaModel`) that the context is tied to, along with some internal state like whether embeddings are enabled
+/// and the initialized logits for the context.
+///
+/// # Fields
+///
+/// - `context`: A non-null pointer to the raw C++ `llama_context`. This is the main context used for interacting with the model.
+/// - `model`: A reference to the `LlamaModel` associated with this context. This model provides the data and parameters
+///   that the context interacts with.
+/// - `initialized_logits`: A vector used to store the initialized logits. These are used in the model's processing and
+///   are kept separate from the context data.
+/// - `embeddings_enabled`: A boolean flag indicating whether embeddings are enabled in the context. This is useful for
+///   controlling whether embedding data is generated during the interaction with the model.
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaContext<'a> {
     pub(crate) context: NonNull<llama_cpp_sys_4::llama_context>,
@@ -44,6 +63,33 @@ impl Debug for LlamaContext<'_> {
 }
 
 impl<'model> LlamaContext<'model> {
+    /// Creates a new instance of `LlamaContext` with the provided model, context, and embeddings flag.
+    ///
+    /// This function initializes a new `LlamaContext` object, which is used to interact with the
+    /// `LlamaModel`. The context is created from a pointer to a C++ context and the embeddings flag
+    /// determines whether embeddings are enabled in the context.
+    ///
+    /// # Parameters
+    ///
+    /// - `llama_model`: A reference to an existing `LlamaModel` that will be used with the new context.
+    /// - `llama_context`: A non-null pointer to an existing `llama_cpp_sys_4::llama_context` representing
+    ///   the context created in previous steps. This context is necessary for interacting with the model.
+    /// - `embeddings_enabled`: A boolean flag indicating whether embeddings are enabled in this context.
+    ///
+    /// # Returns
+    ///
+    /// This function returns a new instance of `LlamaContext` initialized with the given parameters:
+    /// - The model reference (`llama_model`) is stored in the context.
+    /// - The raw context pointer (`llama_context`) is wrapped in a `NonNull` to ensure safety.
+    /// - The `embeddings_enabled` flag is used to determine if embeddings are enabled for the context.
+    ///
+    /// # Example
+    /// ```
+    /// let llama_model = LlamaModel::load("path/to/model").unwrap();
+    /// let context_ptr = NonNull::new(some_llama_context_ptr).unwrap();
+    /// let context = LlamaContext::new(&llama_model, context_ptr, true);
+    /// // Now you can use the context
+    /// ```
     pub(crate) fn new(
         llama_model: &'model LlamaModel,
         llama_context: NonNull<llama_cpp_sys_4::llama_context>,
