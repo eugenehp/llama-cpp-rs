@@ -76,12 +76,15 @@ unsafe impl Send for LlamaModel {}
 unsafe impl Sync for LlamaModel {}
 
 impl LlamaModel {
-    /// get the number of tokens the model was trained on
+    /// Get the number of tokens the model was trained on.
+    ///
+    /// This function returns the number of tokens that the model was trained on, represented as a `u32`.
     ///
     /// # Panics
     ///
-    /// If the number of tokens the model was trained on does not fit into an `u32`. This should be impossible on most
-    /// platforms due to llama.cpp returning a `c_int` (i32 on most platforms) which is almost certainly positive.
+    /// This function will panic if the number of tokens the model was trained on does not fit into a `u32`.
+    /// This should be impossible on most platforms since llama.cpp returns a `c_int` (i32 on most platforms),
+    /// which is almost certainly positive.
     #[must_use]
     pub fn n_ctx_train(&self) -> u32 {
         let n_ctx_train = unsafe { llama_cpp_sys_4::llama_n_ctx_train(self.model.as_ptr()) };
@@ -89,6 +92,13 @@ impl LlamaModel {
     }
 
     /// Get all tokens in the model.
+    ///
+    /// This function returns an iterator over all the tokens in the model. Each item in the iterator is a tuple
+    /// containing a `LlamaToken` and its corresponding string representation (or an error if the conversion fails).
+    ///
+    /// # Parameters
+    ///
+    /// - `special`: The `Special` value that determines how special tokens (like BOS, EOS, etc.) are handled.
     pub fn tokens(
         &self,
         special: Special,
@@ -99,6 +109,8 @@ impl LlamaModel {
     }
 
     /// Get the beginning of stream token.
+    ///
+    /// This function returns the token that represents the beginning of a stream (BOS token).
     #[must_use]
     pub fn token_bos(&self) -> LlamaToken {
         let token = unsafe { llama_cpp_sys_4::llama_token_bos(self.model.as_ptr()) };
@@ -106,6 +118,8 @@ impl LlamaModel {
     }
 
     /// Get the end of stream token.
+    ///
+    /// This function returns the token that represents the end of a stream (EOS token).
     #[must_use]
     pub fn token_eos(&self) -> LlamaToken {
         let token = unsafe { llama_cpp_sys_4::llama_token_eos(self.model.as_ptr()) };
@@ -113,19 +127,35 @@ impl LlamaModel {
     }
 
     /// Get the newline token.
+    ///
+    /// This function returns the token that represents a newline character.
     #[must_use]
     pub fn token_nl(&self) -> LlamaToken {
         let token = unsafe { llama_cpp_sys_4::llama_token_nl(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
-    /// Check if a token represents the end of generation (end of turn, end of sequence, etc.)
+    /// Check if a token represents the end of generation (end of turn, end of sequence, etc.).
+    ///
+    /// This function returns `true` if the provided token signifies the end of generation or end of sequence,
+    /// such as EOS or other special tokens.
+    ///
+    /// # Parameters
+    ///
+    /// - `token`: The `LlamaToken` to check.
+    ///
+    /// # Returns
+    ///
+    /// - `true` if the token is an end-of-generation token, otherwise `false`.
     #[must_use]
     pub fn is_eog_token(&self, token: LlamaToken) -> bool {
         unsafe { llama_cpp_sys_4::llama_token_is_eog(self.model.as_ptr(), token.0) }
     }
 
-    /// Get the decoder start token token.
+    /// Get the decoder start token.
+    ///
+    /// This function returns the token used to signal the start of decoding (i.e., the token used at the start
+    /// of a sequence generation).
     #[must_use]
     pub fn decode_start_token(&self) -> LlamaToken {
         let token =
@@ -133,11 +163,19 @@ impl LlamaModel {
         LlamaToken(token)
     }
 
-    /// Convert single token to a string.
+    /// Convert a single token to a string.
+    ///
+    /// This function converts a `LlamaToken` into its string representation.
     ///
     /// # Errors
     ///
-    /// See [`TokenToStringError`] for more information.
+    /// This function returns an error if the token cannot be converted to a string. For more details, refer to
+    /// [`TokenToStringError`].
+    ///
+    /// # Parameters
+    ///
+    /// - `token`: The `LlamaToken` to convert.
+    /// - `special`: The `Special` value used to handle special tokens.
     pub fn token_to_str(
         &self,
         token: LlamaToken,
@@ -146,11 +184,19 @@ impl LlamaModel {
         self.token_to_str_with_size(token, 32, special)
     }
 
-    /// Convert single token to bytes.
+    /// Convert a single token to bytes.
+    ///
+    /// This function converts a `LlamaToken` into a byte representation.
     ///
     /// # Errors
     ///
-    /// See [`TokenToStringError`] for more information.
+    /// This function returns an error if the token cannot be converted to bytes. For more details, refer to
+    /// [`TokenToStringError`].
+    ///
+    /// # Parameters
+    ///
+    /// - `token`: The `LlamaToken` to convert.
+    /// - `special`: The `Special` value used to handle special tokens.
     pub fn token_to_bytes(
         &self,
         token: LlamaToken,
@@ -161,9 +207,18 @@ impl LlamaModel {
 
     /// Convert a vector of tokens to a single string.
     ///
+    /// This function takes a slice of `LlamaToken`s and converts them into a single string, concatenating their
+    /// string representations.
+    ///
     /// # Errors
     ///
-    /// See [`TokenToStringError`] for more information.
+    /// This function returns an error if any token cannot be converted to a string. For more details, refer to
+    /// [`TokenToStringError`].
+    ///
+    /// # Parameters
+    ///
+    /// - `tokens`: A slice of `LlamaToken`s to convert.
+    /// - `special`: The `Special` value used to handle special tokens.
     pub fn tokens_to_str(
         &self,
         tokens: &[LlamaToken],
@@ -180,16 +235,20 @@ impl LlamaModel {
         Ok(builder)
     }
 
-    /// Convert a string to a Vector of tokens.
+    /// Convert a string to a vector of tokens.
+    ///
+    /// This function converts a string into a vector of `LlamaToken`s. The function will tokenize the string
+    /// and return the corresponding tokens.
     ///
     /// # Errors
     ///
-    /// - if [`str`] contains a null byte.
+    /// - This function will return an error if the input string contains a null byte.
     ///
     /// # Panics
     ///
-    /// - if there is more than [`usize::MAX`] [`LlamaToken`]s in [`str`].
+    /// - This function will panic if the number of tokens exceeds `usize::MAX`.
     ///
+    /// # Example
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
@@ -202,6 +261,7 @@ impl LlamaModel {
     /// let tokens = model.str_to_token("Hello, World!", AddBos::Always)?;
     /// # Ok(())
     /// # }
+    /// ```
     pub fn str_to_token(
         &self,
         str: &str,
@@ -254,23 +314,33 @@ impl LlamaModel {
 
         // Safety: `size` < `capacity` and llama-cpp has initialized elements up to `size`
         unsafe { buffer.set_len(size) }
-        // Ok(buffer.into_iter().map(LlamaToken).collect())
 
-        // convert to LlamaToken without memory copy
+        // Convert to `LlamaToken` without memory copy
         let tokens = from_vec_token_sys(buffer);
         Ok(tokens)
     }
 
-    /// Convert a string to a Vector of tokens.
+    /// Convert a string to a vector of tokens (fast version).
+    ///
+    /// This function quickly converts a string into a vector of `LlamaToken`s. The `fast` version of this function
+    /// assumes that the input string is well-formed and tries to tokenize it as efficiently as possible, with minimal
+    /// error checking beyond essential boundary conditions.
     ///
     /// # Errors
     ///
-    /// - if [`str`] contains a null byte.
+    /// - This function will return an error if the input `str` contains a null byte (i.e., an invalid UTF-8 sequence).
     ///
     /// # Panics
     ///
-    /// - if there is more than [`usize::MAX`] [`LlamaToken`]s in [`str`].
+    /// - This function will panic if the number of `LlamaToken`s generated from the input string exceeds `usize::MAX`.
     ///
+    /// # Parameters
+    ///
+    /// - `str`: The input string to convert to tokens.
+    /// - `add_bos`: Determines whether to add the beginning-of-sequence (BOS) token. Use `AddBos::Always` to always add it,
+    ///   or `AddBos::Never` to omit it.
+    ///
+    /// # Example
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
@@ -280,9 +350,10 @@ impl LlamaModel {
     /// use llama_cpp_4::model::AddBos;
     /// let backend = llama_cpp_4::llama_backend::LlamaBackend::init()?;
     /// let model = LlamaModel::load_from_file(&backend, Path::new("path/to/model"), &Default::default())?;
-    /// let tokens = model.str_to_token("Hello, World!", AddBos::Always)?;
+    /// let tokens = model.str_to_token_fast("Hello, World!", AddBos::Always)?;
     /// # Ok(())
     /// # }
+    /// ```
     pub fn str_to_token_fast(
         &self,
         str: &str,
@@ -293,13 +364,19 @@ impl LlamaModel {
             AddBos::Never => false,
         };
 
+        // Estimate the initial buffer size based on the string length.
+        // Each token typically takes ~2 bytes, so we estimate and reserve some extra space.
         let tokens_estimation = std::cmp::max(8, (str.len() / 2) + usize::from(add_bos));
         let mut buffer = Vec::with_capacity(tokens_estimation);
 
+        // Convert the string to a C-style string (a null-terminated byte array).
         let c_string = CString::new(str)?;
+
+        // Convert the buffer capacity to a c_int (required by llama-cpp)
         let buffer_capacity =
             c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
 
+        // Tokenize the string using llama-cpp.
         let size = unsafe {
             llama_cpp_sys_4::llama_tokenize(
                 self.model.as_ptr(),
@@ -312,8 +389,7 @@ impl LlamaModel {
             )
         };
 
-        // if we fail the first time we can resize the vector to the correct size and try again. This should never fail.
-        // as a result - size is guaranteed to be positive here.
+        // If the initial size is negative (buffer wasn't large enough), resize the vector and try again.
         let size = if size.is_negative() {
             buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
             unsafe {
@@ -331,18 +407,39 @@ impl LlamaModel {
             size
         };
 
+        // Convert the size to usize and ensure it's valid.
         let size = usize::try_from(size).expect("size is positive and usize ");
 
-        // Safety: `size` < `capacity` and llama-cpp has initialized elements up to `size`
+        // Safety: Since `size` is less than the buffer capacity and llama-cpp has already initialized elements up to `size`,
+        // we are safe to resize the buffer to the correct length.
         unsafe { buffer.set_len(size) }
+
+        // Convert the raw tokens into `LlamaToken` instances.
         Ok(buffer.into_iter().map(LlamaToken).collect())
     }
 
     /// Get the type of a token.
     ///
+    /// This function retrieves the attributes associated with a given token. The attributes are typically used to
+    /// understand whether the token represents a special type of token (e.g., beginning-of-sequence (BOS), end-of-sequence (EOS),
+    /// control tokens, etc.).
+    ///
     /// # Panics
     ///
-    /// If the token type is not known to this library.
+    /// - This function will panic if the token type is unknown or cannot be converted to a valid `LlamaTokenAttrs`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let token = LlamaToken(42);
+    /// let token_attrs = model.token_attr(token);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
         let token_type = unsafe { llama_cpp_sys_4::llama_token_get_attr(self.model.as_ptr(), id) };
@@ -351,19 +448,33 @@ impl LlamaModel {
 
     /// Convert a token to a string with a specified buffer size.
     ///
-    /// Generally you should use [`LlamaModel::token_to_str`] instead as 8 bytes is enough for most words and
-    /// the extra bytes do not really matter.
+    /// This function allows you to convert a token into a string, with the ability to specify a buffer size for the operation.
+    /// It is generally recommended to use `LlamaModel::token_to_str` instead, as 8 bytes is typically sufficient for most tokens,
+    /// and the extra buffer size doesn't usually matter.
     ///
     /// # Errors
     ///
-    /// - if the token type is unknown
-    /// - the resultant token is larger than `buffer_size`.
-    /// - the string returend by llama-cpp is not valid utf8.
+    /// - If the token type is unknown, an error will be returned.
+    /// - If the resultant token exceeds the provided `buffer_size`, an error will occur.
+    /// - If the token string returned by `llama-cpp` is not valid UTF-8, it will return an error.
     ///
     /// # Panics
     ///
-    /// - if `buffer_size` does not fit into a [`c_int`].
-    /// - if the returned size from llama-cpp does not fit into a [`usize`]. (this should never happen)
+    /// - This function will panic if the `buffer_size` does not fit into a `c_int`.
+    /// - It will also panic if the size returned from `llama-cpp` does not fit into a `usize`, which should typically never happen.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let token = LlamaToken(42);
+    /// let token_string = model.token_to_str_with_size(token, 32, Special::Plaintext)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn token_to_str_with_size(
         &self,
         token: LlamaToken,
@@ -376,18 +487,32 @@ impl LlamaModel {
 
     /// Convert a token to bytes with a specified buffer size.
     ///
-    /// Generally you should use [`LlamaModel::token_to_bytes`] instead as 8 bytes is enough for most words and
-    /// the extra bytes do not really matter.
+    /// Similar to `token_to_str_with_size`, but instead of returning a string, this function converts the token into raw bytes.
+    /// The buffer size parameter allows you to specify the maximum size to which the token can be converted. This is generally
+    /// used when you need the raw byte representation of a token for further processing.
     ///
     /// # Errors
     ///
-    /// - if the token type is unknown
-    /// - the resultant token is larger than `buffer_size`.
+    /// - If the token type is unknown, an error will be returned.
+    /// - If the resultant token exceeds the provided `buffer_size`, an error will occur.
     ///
     /// # Panics
     ///
-    /// - if `buffer_size` does not fit into a [`c_int`].
-    /// - if the returned size from llama-cpp does not fit into a [`usize`]. (this should never happen)
+    /// - This function will panic if `buffer_size` cannot fit into a `c_int`.
+    /// - It will also panic if the size returned from `llama-cpp` cannot be converted to `usize` (which should not happen).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let token = LlamaToken(42);
+    /// let token_bytes = model.token_to_bytes_with_size(token, 32, Special::Plaintext, None)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn token_to_bytes_with_size(
         &self,
         token: LlamaToken,
@@ -445,10 +570,23 @@ impl LlamaModel {
             }
         }
     }
+
     /// The number of tokens the model was trained on.
     ///
-    /// This returns a `c_int` for maximum compatibility. Most of the time it can be cast to an i32
-    /// without issue.
+    /// This function returns the number of tokens the model was trained on. It is returned as a `c_int` for maximum
+    /// compatibility with the underlying llama-cpp library, though it can typically be cast to an `i32` without issue.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::LlamaModel;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let n_vocab = model.n_vocab();
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub fn n_vocab(&self) -> i32 {
         unsafe { llama_cpp_sys_4::llama_n_vocab(self.model.as_ptr()) }
@@ -456,29 +594,77 @@ impl LlamaModel {
 
     /// The type of vocab the model was trained on.
     ///
+    /// This function returns the type of vocabulary used by the model, such as whether it is based on byte-pair encoding (BPE),
+    /// word-level tokens, or another tokenization scheme.
+    ///
     /// # Panics
     ///
-    /// If llama-cpp emits a vocab type that is not known to this library.
+    /// - This function will panic if `llama-cpp` emits a vocab type that is not recognized or is invalid for this library.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::LlamaModel;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let vocab_type = model.vocab_type();
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub fn vocab_type(&self) -> VocabType {
         let vocab_type = unsafe { llama_cpp_sys_4::llama_vocab_type(self.model.as_ptr()) };
         VocabType::try_from(vocab_type).expect("invalid vocab type")
     }
 
-    /// This returns a `c_int` for maximum compatibility. Most of the time it can be cast to an i32
-    /// without issue.
+    /// Returns the number of embedding dimensions for the model.
+    ///
+    /// This function retrieves the number of embeddings (or embedding dimensions) used by the model. It is typically
+    /// used for analyzing model architecture and setting up context parameters or other model configuration aspects.
+    ///
+    /// # Panics
+    ///
+    /// - This function may panic if the underlying `llama-cpp` library returns an invalid embedding dimension value.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::LlamaModel;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let n_embd = model.n_embd();
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub fn n_embd(&self) -> c_int {
         unsafe { llama_cpp_sys_4::llama_n_embd(self.model.as_ptr()) }
     }
 
-    /// Get chat template from model.
+    /// Get the chat template from the model.
+    ///
+    /// This function retrieves the chat template associated with the model. The chat template defines the structure
+    /// of conversational inputs and outputs, often useful in chat-based applications or interaction contexts.
     ///
     /// # Errors
     ///
-    /// * If the model has no chat template
-    /// * If the chat template is not a valid [`CString`].
-    #[allow(clippy::missing_panics_doc)] // we statically know this will not panic as
+    /// - If the model does not have a chat template, it will return an error.
+    /// - If the chat template is not a valid `CString`, it will return an error.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::LlamaModel;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let chat_template = model.get_chat_template(1024)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[allow(clippy::missing_panics_doc)] // We statically know this will not panic as long as the buffer size is sufficient
     pub fn get_chat_template(&self, buf_size: usize) -> Result<String, ChatTemplateError> {
         // longest known template is about 1200 bytes from llama.cpp
         let chat_temp = CString::new(vec![b'*'; buf_size]).expect("no null");
@@ -511,9 +697,24 @@ impl LlamaModel {
 
     /// Loads a model from a file.
     ///
+    /// This function loads a model from a specified file path and returns the corresponding `LlamaModel` instance.
+    ///
     /// # Errors
     ///
-    /// See [`LlamaModelLoadError`] for more information.
+    /// - If the path cannot be converted to a string or if the model file does not exist, it will return an error.
+    /// - If the model cannot be loaded (e.g., due to an invalid or corrupted model file), it will return a `LlamaModelLoadError`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::LlamaModel;
+    /// use std::path::Path;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(skip_all, fields(params))]
     pub fn load_from_file(
         _: &LlamaBackend,
@@ -538,9 +739,26 @@ impl LlamaModel {
 
     /// Initializes a lora adapter from a file.
     ///
+    /// This function initializes a Lora adapter, which is a model extension used to adapt or fine-tune the existing model
+    /// to a specific domain or task. The adapter file is typically in the form of a binary or serialized file that can be applied
+    /// to the model for improved performance on specialized tasks.
+    ///
     /// # Errors
     ///
-    /// See [`LlamaLoraAdapterInitError`] for more information.
+    /// - If the adapter file path cannot be converted to a string or if the adapter cannot be initialized, it will return an error.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaLoraAdapter};
+    /// use std::path::Path;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let adapter = model.lora_adapter_init("path/to/lora/adapter")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn lora_adapter_init(
         &self,
         path: impl AsRef<Path>,
@@ -568,10 +786,27 @@ impl LlamaModel {
 
     /// Create a new context from this model.
     ///
+    /// This function creates a new context for the model, which is used to manage and perform computations for inference,
+    /// including token generation, embeddings, and other tasks that the model can perform. The context allows fine-grained
+    /// control over model parameters for a specific task.
+    ///
     /// # Errors
     ///
-    /// There is many ways this can fail. See [`LlamaContextLoadError`] for more information.
-    // we intentionally do not derive Copy on `LlamaContextParams` to allow llama.cpp to change the type to be non-trivially copyable.
+    /// - There are various potential failures such as invalid parameters or a failure to allocate the context. See [`LlamaContextLoadError`]
+    ///   for more detailed error descriptions.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaContext};
+    /// use llama_cpp_4::LlamaContextParams;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let context = model.new_context(&LlamaBackend::init()?, LlamaContextParams::default())?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[allow(clippy::needless_pass_by_value)]
     pub fn new_context(
         &self,
@@ -587,13 +822,47 @@ impl LlamaModel {
         Ok(LlamaContext::new(self, context, params.embeddings()))
     }
 
-    /// Apply the models chat template to some messages.
-    /// See https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+    /// Apply the model's chat template to a sequence of messages.
     ///
-    /// `tmpl` of None means to use the default template provided by llama.cpp for the model
+    /// This function applies the model's chat template to the provided chat messages, formatting them accordingly. The chat
+    /// template determines the structure or style of conversation between the system and user, such as token formatting,
+    /// role separation, and more. The template can be customized by providing an optional template string, or if `None`
+    /// is provided, the default template used by `llama.cpp` will be applied.
+    ///
+    /// For more information on supported templates, visit:
+    /// https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+    ///
+    /// # Arguments
+    ///
+    /// - `tmpl`: An optional custom template string. If `None`, the default template will be used.
+    /// - `chat`: A vector of `LlamaChatMessage` instances, which represent the conversation between the system and user.
+    /// - `add_ass`: A boolean flag indicating whether additional system-specific instructions (like "assistant") should be included.
     ///
     /// # Errors
-    /// There are many ways this can fail. See [`ApplyChatTemplateError`] for more information.
+    ///
+    /// There are several possible points of failure when applying the chat template:
+    /// - Insufficient buffer size to hold the formatted chat (this will return `ApplyChatTemplateError::BuffSizeError`).
+    /// - If the template or messages cannot be processed properly, various errors from `ApplyChatTemplateError` may occur.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::model::{LlamaModel, LlamaChatMessage};
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let chat = vec![
+    ///     LlamaChatMessage::new("user", "Hello!"),
+    ///     LlamaChatMessage::new("assistant", "Hi! How can I assist you today?"),
+    /// ];
+    /// let formatted_chat = model.apply_chat_template(None, chat, true)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Notes
+    ///
+    /// The provided buffer is twice the length of the messages by default, which is recommended by the `llama.cpp` documentation.
     #[tracing::instrument(skip_all)]
     pub fn apply_chat_template(
         &self,
@@ -654,7 +923,30 @@ impl Drop for LlamaModel {
     }
 }
 
-/// a rusty equivalent of `llama_vocab_type`
+/// Defines the possible types of vocabulary used by the model.
+///
+/// The model may use different types of vocabulary depending on the tokenization method chosen during training.
+/// This enum represents these types, specifically `BPE` (Byte Pair Encoding) and `SPM` (SentencePiece).
+///
+/// # Variants
+///
+/// - `BPE`: Byte Pair Encoding, a common tokenization method used in NLP tasks.
+/// - `SPM`: SentencePiece, another popular tokenization method for NLP models.
+///
+/// # Example
+///
+/// ```no_run
+/// use llama_cpp_4::model::VocabType;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let vocab_type = VocabType::BPE;
+/// match vocab_type {
+///     VocabType::BPE => println!("The model uses Byte Pair Encoding (BPE)"),
+///     VocabType::SPM => println!("The model uses SentencePiece (SPM)"),
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[repr(u32)]
 #[derive(Debug, Eq, Copy, Clone, PartialEq)]
 pub enum VocabType {
@@ -664,7 +956,26 @@ pub enum VocabType {
     SPM = llama_cpp_sys_4::LLAMA_VOCAB_TYPE_SPM as _,
 }
 
-/// There was an error converting a `llama_vocab_type` to a `VocabType`.
+/// Error that occurs when trying to convert a `llama_vocab_type` to a `VocabType`.
+///
+/// This error is raised when the integer value returned by the system does not correspond to a known vocabulary type.
+///
+/// # Variants
+///
+/// - `UnknownValue`: The error is raised when the value is not a valid `llama_vocab_type`. The invalid value is returned with the error.
+///
+/// # Example
+///
+/// ```no_run
+/// use llama_cpp_4::model::LlamaTokenTypeFromIntError;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let invalid_value = 999; // Not a valid vocabulary type
+/// let error = LlamaTokenTypeFromIntError::UnknownValue(invalid_value);
+/// println!("Error: {}", error);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(thiserror::Error, Debug, Eq, PartialEq)]
 pub enum LlamaTokenTypeFromIntError {
     /// The value is not a valid `llama_token_type`. Contains the int value that was invalid.
