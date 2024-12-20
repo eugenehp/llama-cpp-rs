@@ -14,7 +14,7 @@ pub struct PerfContextData {
 impl PerfContextData {
     /// Create a new `PerfContextData`.
     /// ```
-    /// # use llama_cpp_2::timing::PerfContextData;
+    /// # use llama_cpp_4::timing::PerfContextData;
     /// let timings = PerfContextData::new(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7, 8, 9);
     /// let timings_str = "load time = 3.00 ms
     /// sample time = 4.00 ms / 7 runs (0.57 ms per token, 1750.00 tokens per second)
@@ -56,7 +56,7 @@ impl PerfContextData {
     /// prompt eval time
     /// eval time
     /// total time
-    pub fn print(ctx:LlamaContext<'_>) {
+    pub fn print(ctx: LlamaContext<'_>) {
         unsafe {
             llama_perf_context_print(ctx.context.as_ptr());
         };

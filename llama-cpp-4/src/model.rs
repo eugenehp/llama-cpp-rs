@@ -192,12 +192,12 @@ impl LlamaModel {
     ///
     ///
     /// ```no_run
-    /// use llama_cpp_2::model::LlamaModel;
+    /// use llama_cpp_4::model::LlamaModel;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::path::Path;
-    /// use llama_cpp_2::model::AddBos;
-    /// let backend = llama_cpp_2::llama_backend::LlamaBackend::init()?;
+    /// use llama_cpp_4::model::AddBos;
+    /// let backend = llama_cpp_4::llama_backend::LlamaBackend::init()?;
     /// let model = LlamaModel::load_from_file(&backend, Path::new("path/to/model"), &Default::default())?;
     /// let tokens = model.str_to_token("Hello, World!", AddBos::Always)?;
     /// # Ok(())
@@ -273,12 +273,12 @@ impl LlamaModel {
     ///
     ///
     /// ```no_run
-    /// use llama_cpp_2::model::LlamaModel;
+    /// use llama_cpp_4::model::LlamaModel;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// use std::path::Path;
-    /// use llama_cpp_2::model::AddBos;
-    /// let backend = llama_cpp_2::llama_backend::LlamaBackend::init()?;
+    /// use llama_cpp_4::model::AddBos;
+    /// let backend = llama_cpp_4::llama_backend::LlamaBackend::init()?;
     /// let model = LlamaModel::load_from_file(&backend, Path::new("path/to/model"), &Default::default())?;
     /// let tokens = model.str_to_token("Hello, World!", AddBos::Always)?;
     /// # Ok(())

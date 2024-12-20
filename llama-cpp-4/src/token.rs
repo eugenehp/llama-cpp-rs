@@ -24,7 +24,7 @@ impl Display for LlamaToken {
     /// # Example
     ///
     /// ```
-    /// # use llama_cpp_2::token::LlamaToken;
+    /// # use llama_cpp_4::token::LlamaToken;
     /// let token = LlamaToken::new(42);
     /// println!("{}", token); // Prints: 42
     /// ```
@@ -42,7 +42,7 @@ impl LlamaToken {
     /// # Example
     ///
     /// ```
-    /// # use llama_cpp_2::token::LlamaToken;
+    /// # use llama_cpp_4::token::LlamaToken;
     /// let token = LlamaToken::new(0);
     /// assert_eq!(token, LlamaToken(0));
     /// ```

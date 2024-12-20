@@ -70,7 +70,7 @@ impl LlamaSamplerParams {
     /// # Examples
     ///
     /// ```rust
-    /// use llama_cpp_2::context::sampler::LlamaSamplerParams;
+    /// use llama_cpp_4::context::sampler::LlamaSamplerParams;
     /// let params = LlamaSamplerParams::default();
     /// let params = params.with_seed(1234);
     /// assert_eq!(params.seed(), 1234);
@@ -86,7 +86,7 @@ impl LlamaSamplerParams {
     /// # Examples
     ///
     /// ```rust
-    /// use llama_cpp_2::context::sampler::LlamaSamplerParams;
+    /// use llama_cpp_4::context::sampler::LlamaSamplerParams;
     /// let params = LlamaSamplerParams::default();
     ///     .with_seed(1234);
     /// assert_eq!(params.seed(), 1234);

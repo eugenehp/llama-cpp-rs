@@ -27,8 +27,8 @@ impl LlamaBackend {
     /// # Examples
     ///
     /// ```
-    ///# use llama_cpp_2::llama_backend::LlamaBackend;
-    ///# use llama_cpp_2::LLamaCppError;
+    ///# use llama_cpp_4::llama_backend::LlamaBackend;
+    ///# use llama_cpp_4::LLamaCppError;
     ///# use std::error::Error;
     ///
     ///# fn main() -> Result<(), Box<dyn Error>> {
@@ -50,9 +50,9 @@ impl LlamaBackend {
 
     /// Initialize the llama backend (with numa).
     /// ```
-    ///# use llama_cpp_2::llama_backend::LlamaBackend;
+    ///# use llama_cpp_4::llama_backend::LlamaBackend;
     ///# use std::error::Error;
-    ///# use llama_cpp_2::llama_backend::NumaStrategy;
+    ///# use llama_cpp_4::llama_backend::NumaStrategy;
     ///
     ///# fn main() -> Result<(), Box<dyn Error>> {
     ///
@@ -141,7 +141,7 @@ impl From<NumaStrategy> for llama_cpp_sys_4::ggml_numa_strategy {
 /// Drops the llama backend.
 /// ```
 ///
-///# use llama_cpp_2::llama_backend::LlamaBackend;
+///# use llama_cpp_4::llama_backend::LlamaBackend;
 ///# use std::error::Error;
 ///
 ///# fn main() -> Result<(), Box<dyn Error>> {

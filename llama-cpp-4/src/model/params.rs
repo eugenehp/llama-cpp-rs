@@ -34,7 +34,7 @@ impl LlamaModelParams {
     /// # Examples
     ///
     /// ```rust
-    /// # use llama_cpp_2::model::params::LlamaModelParams;
+    /// # use llama_cpp_4::model::params::LlamaModelParams;
     /// let params = Box::pin(LlamaModelParams::default());
     /// let kv_overrides = params.kv_overrides();
     /// let count = kv_overrides.into_iter().count();
@@ -52,8 +52,8 @@ impl LlamaModelParams {
     /// ```rust
     /// # use std::ffi::{CStr, CString};
     /// use std::pin::pin;
-    /// # use llama_cpp_2::model::params::LlamaModelParams;
-    /// # use llama_cpp_2::model::params::kv_overrides::ParamOverrideValue;
+    /// # use llama_cpp_4::model::params::LlamaModelParams;
+    /// # use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
     /// let mut params = pin!(LlamaModelParams::default());
     /// let key = CString::new("key").expect("CString::new failed");
     /// params.as_mut().append_kv_override(&key, ParamOverrideValue::Int(50));
@@ -140,7 +140,7 @@ impl LlamaModelParams {
 
     /// sets the number of gpu layers to offload to the GPU.
     /// ```
-    /// # use llama_cpp_2::model::params::LlamaModelParams;
+    /// # use llama_cpp_4::model::params::LlamaModelParams;
     /// let params = LlamaModelParams::default();
     /// let params = params.with_n_gpu_layers(1);
     /// assert_eq!(params.n_gpu_layers(), 1);
@@ -178,7 +178,7 @@ impl LlamaModelParams {
 
 /// Default parameters for `LlamaModel`. (as defined in llama.cpp by `llama_model_default_params`)
 /// ```
-/// # use llama_cpp_2::model::params::LlamaModelParams;
+/// # use llama_cpp_4::model::params::LlamaModelParams;
 /// let params = LlamaModelParams::default();
 /// #[cfg(not(target_os = "macos"))]
 /// assert_eq!(params.n_gpu_layers(), 0, "n_gpu_layers should be 0");
