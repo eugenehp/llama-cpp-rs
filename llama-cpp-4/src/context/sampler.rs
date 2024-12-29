@@ -349,7 +349,3 @@ impl Default for LlamaSampler {
         sampler
     }
 }
-
-// TODO: create common sampler
-// common_sampler extends llama_sampler with additional functionality
-// llama.cpp/common/sampling.h

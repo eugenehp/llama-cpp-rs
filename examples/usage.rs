@@ -6,11 +6,11 @@
 //! git clone --recursive https://github.com/eugenehp/llama-cpp-rs
 //! cd llama-cpp-rs/examples/usage
 //! wget https://huggingface.co/Qwen/Qwen2-1.5B-Instruct-GGUF/resolve/main/qwen2-1_5b-instruct-q4_0.gguf
-//! cargo run --example usage -- qwen2-1_5b-instruct-q4_0.gguf
+//! cargo run --example usage -- ./path/to/your/model/qwen2-1_5b-instruct-q4_0.gguf
 //! ```
-//! 
+//!
 //! returns
-//! 
+//!
 //! ```console
 //! I'm here to help! Are you a programmer?
 //! ```
@@ -59,7 +59,8 @@ fn main() {
 
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
-    let sampler = LlamaSampler::default();
+    // let sampler = LlamaSampler::default();
+    let sampler = LlamaSampler::common();
 
     while n_cur <= n_len {
         // sample the next token
