@@ -1,11 +1,11 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
-//! 
+//!
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
 //! ```
-//! 
+//!
 //! gives
-//! 
+//!
 //! ```console
 //! Hello my name is Sunita Singh and I am an Indian citizen. I am from India and I am working in United Kingdom (UK) for the last
 //! ```
@@ -28,7 +28,6 @@ use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
 use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::model::{AddBos, Special};
-// use llama_cpp_4::token::data_array::LlamaTokenDataArray;
 use std::ffi::CString;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -185,8 +184,8 @@ fn main() -> Result<()> {
         .with_context(|| "unable to load model")?;
 
     // initialize the context
-    let mut ctx_params = LlamaContextParams::default()
-        .with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
+    let mut ctx_params =
+        LlamaContextParams::default().with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
     if let Some(threads) = threads {
         ctx_params = ctx_params.with_n_threads(threads);
     }
@@ -198,7 +197,7 @@ fn main() -> Result<()> {
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
 
-    let sampler = LlamaSampler::default();
+    let sampler = LlamaSampler::new(None);
     sampler.with_seed(seed.unwrap_or(1234));
 
     // tokenize the prompt
@@ -232,6 +231,7 @@ either reduce n_len or increase n_ctx"
     }
 
     std::io::stderr().flush()?;
+    println!("========= hello =========");
 
     // create a llama_batch with size 512
     // we use this object to submit token data for decoding

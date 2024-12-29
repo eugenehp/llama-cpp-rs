@@ -9,11 +9,11 @@ use std::{
 use llama_cpp_sys_4::{
     common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params,
     llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_free,
-    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_min_p,
-    llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
-    llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
-    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
-    llama_sampler_sample,
+    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_greedy,
+    llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2,
+    llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext,
+    llama_sampler_init_top_k, llama_sampler_init_top_p, llama_sampler_init_typical,
+    llama_sampler_init_xtc, llama_sampler_sample,
 };
 
 use crate::{model::LlamaModel, token::LlamaToken};
@@ -135,6 +135,36 @@ impl LlamaSampler {
     pub fn with_top_k(&self, top_k: i32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_top_k(top_k));
+        }
+
+        self
+    }
+
+    /// Adds the greedy sampler to the current sampler chain.
+    ///
+    /// This method calls the C++ function `llama_sampler_init_greedy()` via FFI to initialize
+    /// a new greedy sampler and then adds it to the sampler chain of the current instance.
+    /// The greedy sampler selects the most probable token at each step, which is a deterministic
+    /// strategy suitable for applications that require consistent or highly likely predictions.
+    ///
+    /// # How it works
+    /// The method first initializes a greedy sampler using the `llama_sampler_init_greedy` function,
+    /// which returns a pointer to a newly created `llama_sampler` object. This pointer is then passed
+    /// to the C++ function `llama_sampler_chain_add`, which adds the greedy sampler to the chain
+    /// of samplers used by the current object. The `self` object is returned for method chaining,
+    /// allowing for fluent usage.
+    ///
+    /// # Safety
+    /// This function is marked `unsafe` because it interacts with raw pointers through FFI calls.
+    /// The caller must ensure that the `self.sampler` pointer is valid and properly managed to avoid
+    /// undefined behavior. Additionally, the FFI calls assume that memory management is handled
+    /// correctly between Rust and C++.
+    ///
+    /// # See more
+    /// https://github.com/ggerganov/llama.cpp/blob/a813badbbdf0d38705f249df7a0c99af5cdee678/src/llama-sampling.cpp#L423-L437
+    pub fn with_greedy(&self) -> &Self {
+        unsafe {
+            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_greedy());
         }
 
         self
