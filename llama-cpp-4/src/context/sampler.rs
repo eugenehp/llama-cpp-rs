@@ -1,22 +1,30 @@
 //! Sampler implementation for llama.cpp
 //!
-use std::{
-    ffi::CString,
-    fmt::{Debug, Formatter},
-    ptr::NonNull,
-};
+use std::{ ffi::CString, fmt::{ Debug, Formatter }, ptr::NonNull };
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_sampler_chain_add, llama_sampler_chain_default_params,
-    llama_sampler_chain_init, llama_sampler_chain_params, llama_sampler_free,
-    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_min_p,
-    llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
-    llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
-    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
+    common::common_sampler_params,
+    llama_sampler_chain_add,
+    llama_sampler_chain_default_params,
+    llama_sampler_chain_init,
+    llama_sampler_chain_params,
+    llama_sampler_free,
+    llama_sampler_init_dist,
+    llama_sampler_init_dry,
+    llama_sampler_init_min_p,
+    llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2,
+    llama_sampler_init_penalties,
+    llama_sampler_init_temp,
+    llama_sampler_init_temp_ext,
+    llama_sampler_init_top_k,
+    llama_sampler_init_top_p,
+    llama_sampler_init_typical,
+    llama_sampler_init_xtc,
     llama_sampler_sample,
 };
 
-use crate::{model::LlamaModel, token::LlamaToken};
+use crate::{ model::LlamaModel, token::LlamaToken };
 
 use super::LlamaContext;
 
@@ -38,25 +46,18 @@ pub struct LlamaSampler {
 
 impl Debug for LlamaSampler {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("LlamaSampler")
-            .field("sampler", &self.sampler)
-            .finish()
+        f.debug_struct("LlamaSampler").field("sampler", &self.sampler).finish()
     }
 }
 
 impl Drop for LlamaSampler {
     fn drop(&mut self) {
-        unsafe { llama_sampler_free(self.sampler.as_ptr()) };
+        unsafe { llama_sampler_free(self.sampler.as_ptr()) }
     }
 }
 
 #[derive(Debug, Clone)]
-#[allow(
-    missing_docs,
-    clippy::struct_excessive_bools,
-    clippy::module_name_repetitions,
-    dead_code
-)]
+#[allow(missing_docs, clippy::struct_excessive_bools, clippy::module_name_repetitions, dead_code)]
 pub struct LlamaSamplerParams {
     top_k: i32,
     top_p: f32,
@@ -114,7 +115,7 @@ impl LlamaSampler {
     pub fn new(no_perf: Option<bool>) -> Self {
         let sparams = match no_perf {
             Some(no_perf) => llama_sampler_chain_params { no_perf: no_perf },
-            None => unsafe { llama_sampler_chain_default_params() },
+            None => unsafe { llama_sampler_chain_default_params() }
         };
 
         Self {
@@ -124,8 +125,11 @@ impl LlamaSampler {
 
     /// sample next token
     pub fn sample(&self, ctx: &LlamaContext, idx: i32) -> LlamaToken {
-        let token_id =
-            unsafe { llama_sampler_sample(self.sampler.as_ptr(), ctx.context.as_ptr(), idx) };
+        println!("before sampler.sample");
+        let token_id = unsafe {
+            llama_sampler_sample(self.sampler.as_ptr(), ctx.context.as_ptr(), idx)
+        };
+        println!("after sampler.sample");
         LlamaToken::new(token_id)
     }
 
@@ -133,7 +137,7 @@ impl LlamaSampler {
     pub fn with_top_k(&self, top_k: i32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_top_k(top_k));
-        };
+        }
 
         self
     }
@@ -142,7 +146,7 @@ impl LlamaSampler {
     pub fn with_top_p(&self, top_p: f32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_top_p(top_p, 1));
-        };
+        }
 
         self
     }
@@ -151,7 +155,7 @@ impl LlamaSampler {
     pub fn with_temp(&self, temp: f32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_temp(temp));
-        };
+        }
 
         self
     }
@@ -161,9 +165,9 @@ impl LlamaSampler {
         unsafe {
             llama_sampler_chain_add(
                 self.sampler.as_ptr(),
-                llama_sampler_init_temp_ext(temp, delta, exponent),
+                llama_sampler_init_temp_ext(temp, delta, exponent)
             );
-        };
+        }
 
         self
     }
@@ -172,7 +176,7 @@ impl LlamaSampler {
     pub fn with_min_p(&self, p: f32, min_keep: usize) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_min_p(p, min_keep));
-        };
+        }
 
         self
     }
@@ -180,11 +184,8 @@ impl LlamaSampler {
     #[doc = " @details Locally Typical Sampling implementation described in the paper https://arxiv.org/abs/2202.00666."]
     pub fn with_typical(&self, p: f32, min_keep: usize) -> &Self {
         unsafe {
-            llama_sampler_chain_add(
-                self.sampler.as_ptr(),
-                llama_sampler_init_typical(p, min_keep),
-            );
-        };
+            llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_typical(p, min_keep));
+        }
 
         self
     }
@@ -194,9 +195,9 @@ impl LlamaSampler {
         unsafe {
             llama_sampler_chain_add(
                 self.sampler.as_ptr(),
-                llama_sampler_init_xtc(p, t, min_keep, seed),
+                llama_sampler_init_xtc(p, t, min_keep, seed)
             );
-        };
+        }
 
         self
     }
@@ -206,9 +207,9 @@ impl LlamaSampler {
         unsafe {
             llama_sampler_chain_add(
                 self.sampler.as_ptr(),
-                llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m),
+                llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m)
             );
-        };
+        }
 
         self
     }
@@ -218,9 +219,9 @@ impl LlamaSampler {
         unsafe {
             llama_sampler_chain_add(
                 self.sampler.as_ptr(),
-                llama_sampler_init_mirostat_v2(seed, tau, eta),
+                llama_sampler_init_mirostat_v2(seed, tau, eta)
             );
-        };
+        }
 
         self
     }
@@ -229,7 +230,7 @@ impl LlamaSampler {
     pub fn with_seed(&self, seed: u32) -> &Self {
         unsafe {
             llama_sampler_chain_add(self.sampler.as_ptr(), llama_sampler_init_dist(seed));
-        };
+        }
 
         self
     }
@@ -242,14 +243,16 @@ impl LlamaSampler {
         base: f32,
         allowed_length: i32,
         penalty_last_n: i32,
-        seq_breakers: impl IntoIterator<Item = impl AsRef<[u8]>>,
+        seq_breakers: impl IntoIterator<Item = impl AsRef<[u8]>>
     ) -> Self {
         let seq_breakers: Vec<CString> = seq_breakers
             .into_iter()
             .map(|s| CString::new(s.as_ref()).unwrap())
             .collect();
-        let mut seq_breaker_pointers: Vec<*const CChar> =
-            seq_breakers.iter().map(|s| s.as_ptr()).collect();
+        let mut seq_breaker_pointers: Vec<*const CChar> = seq_breakers
+            .iter()
+            .map(|s| s.as_ptr())
+            .collect();
 
         let sampler = unsafe {
             llama_sampler_init_dry(
@@ -259,7 +262,7 @@ impl LlamaSampler {
                 allowed_length,
                 penalty_last_n,
                 seq_breaker_pointers.as_mut_ptr(),
-                seq_breaker_pointers.len(),
+                seq_breaker_pointers.len()
             )
         };
 
@@ -273,7 +276,7 @@ impl LlamaSampler {
         &self,
         penalty_repeat: f32,
         penalty_freq: f32,
-        penalty_present: f32,
+        penalty_present: f32
     ) -> &Self {
         // TODO: should this be pulled from context instead?
         let penalty_last_n: i32 = 0;
@@ -285,10 +288,10 @@ impl LlamaSampler {
                     penalty_last_n,
                     penalty_repeat,
                     penalty_freq,
-                    penalty_present,
-                ),
+                    penalty_present
+                )
             );
-        };
+        }
 
         self
     }
@@ -298,8 +301,8 @@ impl Default for LlamaSampler {
     /// Default Sampler with the SamplerParams like top_k, top_p, temp, seed.
     fn default() -> Self {
         let sampler = LlamaSampler::new(None);
-        // let params = LlamaSamplerParams::default();
-        let params = common_sampler_params::default();
+        let params = LlamaSamplerParams::default();
+        // let params = common_sampler_params::default();
 
         sampler
             .with_top_k(params.top_k)
