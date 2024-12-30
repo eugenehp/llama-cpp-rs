@@ -1,21 +1,21 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
-//! 
+//!
 //! inspired by https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp
 //! TODO: add chat template https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
-//! 
+//!
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
 //! ```
-//! 
+//!
 //! gives
-//! 
+//!
 //! ```console
 //! user
 //! hello
-//! 
+//!
 //! assistant
 //! Hello! How can I assist you today? If you have any questions or need help with something, feel free to ask. I'm here to help.
-//! 
+//!
 //! user
 //! ```
 #![allow(
@@ -30,13 +30,13 @@ use clap::Parser;
 use colored::Colorize;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::context::sampler::LlamaSampler;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
 use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
 use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::model::{AddBos, Special};
+use llama_cpp_4::sampling::LlamaSampler;
 use llama_cpp_sys_4::LLAMA_DEFAULT_SEED;
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -44,7 +44,7 @@ use std::path::PathBuf;
 use std::pin::pin;
 use std::str::FromStr;
 
-const BATCH_SIZE:usize = 512;
+const BATCH_SIZE: usize = 512;
 
 #[derive(clap::Parser, Debug, Clone)]
 struct Args {
@@ -173,8 +173,8 @@ fn main() -> Result<()> {
         .with_context(|| "unable to load model")?;
 
     // initialize the context
-    let mut ctx_params = LlamaContextParams::default()
-        .with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
+    let mut ctx_params =
+        LlamaContextParams::default().with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
     if let Some(threads) = threads {
         ctx_params = ctx_params.with_n_threads(threads);
     }
@@ -186,17 +186,11 @@ fn main() -> Result<()> {
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
 
-    let sampler = LlamaSampler::new(None);
-
-    sampler
-        .with_min_p(0.05, 1)
-        .with_temp(0.8)
-        .with_seed(LLAMA_DEFAULT_SEED);
+    let mut sampler = LlamaSampler::chain_simple([LlamaSampler::common(), LlamaSampler::greedy()]);
 
     // tokenize the prompt
-
-    let mut generate = |prompt:String| -> Result<String> {
-        let mut output:String = String::new();
+    let mut generate = |prompt: String| -> Result<String> {
+        let mut output: String = String::new();
 
         let tokens_list = model
             .str_to_token(&prompt, AddBos::Always)
@@ -250,7 +244,8 @@ fn main() -> Result<()> {
                 let output_bytes = model.token_to_bytes(new_token_id, Special::Tokenize)?;
                 // use `Decoder.decode_to_string()` to avoid the intermediate buffer
                 let mut output_string = String::with_capacity(32);
-                let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
+                let _decode_result =
+                    decoder.decode_to_string(&output_bytes, &mut output_string, false);
                 // print!("{output_string}");
                 // std::io::stdout().flush()?;
                 output.push_str(output_string.as_str());
@@ -262,19 +257,18 @@ fn main() -> Result<()> {
             n_cur += 1;
 
             ctx.decode(&mut batch).with_context(|| "failed to eval")?;
-        };
+        }
 
         Ok(output)
     };
 
-    
     loop {
         let mut prompt = String::new();
         println!("\n{}", "user".green());
         std::io::stdin().read_line(&mut prompt)?;
-        
+
         let response = generate(prompt)?;
         println!("\n{}", "assistant".red());
         println!("{}", response.white());
-    };
+    }
 }

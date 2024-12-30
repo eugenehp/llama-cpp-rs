@@ -63,7 +63,9 @@
 //!     seed: 1234,
 //! }
 //! ```
-use llama_cpp_4::context::sampler::{LlamaSampler, LlamaSamplerParams};
+use llama_cpp_4::sampling::*;
+use llama_cpp_sys_4::common::*;
+
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
 /// Demonstrates the usage of default common and LlamaSampler parameters.
@@ -132,7 +134,7 @@ use llama_cpp_4::context::sampler::{LlamaSampler, LlamaSamplerParams};
 /// ```
 pub fn main() {
     // Retrieve and print the default common sampler parameters
-    let params = llama_cpp_sys_4::common::common_sampler_params::default();
+    let params = common_sampler_params::default();
     println!("default sampler_params {:#?}", params);
 
     // Retrieve and print the default LlamaSamplerParams

@@ -12,6 +12,7 @@ use perf::PerfContextData;
 use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
 use crate::token::data::LlamaTokenData;
+use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 use crate::{
     DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
@@ -21,7 +22,6 @@ use crate::{
 pub mod kv_cache;
 pub mod params;
 pub mod perf;
-pub mod sampler;
 pub mod session;
 
 /// A safe wrapper around the `llama_context` C++ context.
@@ -132,8 +132,6 @@ impl<'model> LlamaContext<'model> {
     pub fn decode(&mut self, batch: &mut LlamaBatch) -> Result<(), DecodeError> {
         let result =
             unsafe { llama_cpp_sys_4::llama_decode(self.context.as_ptr(), batch.llama_batch) };
-
-        // println!("decode {result} {batch:#?}");
 
         match NonZeroI32::new(result) {
             None => {
@@ -260,6 +258,21 @@ impl<'model> LlamaContext<'model> {
             let token = LlamaToken::new(i);
             LlamaTokenData::new(token, *logit, 0_f32)
         })
+    }
+
+    /// Get the token data array for the last token in the context.
+    ///
+    /// This is a convience method that implements:
+    /// ```ignore
+    /// LlamaTokenDataArray::from_iter(ctx.candidates(), false)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// - underlying logits data is null
+    #[must_use]
+    pub fn token_data_array(&self) -> LlamaTokenDataArray {
+        LlamaTokenDataArray::from_iter(self.candidates(), false)
     }
 
     /// Token logits obtained from the last call to `decode()`.

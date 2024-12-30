@@ -1,14 +1,4 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
-//!
-//! ```console
-//! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
-//! ```
-//!
-//! gives
-//!
-//! ```console
-//! Hello my name is Sunita Singh and I am an Indian citizen. I am from India and I am working in United Kingdom (UK) for the last
-//! ```
 #![allow(
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
@@ -20,7 +10,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::context::sampler::LlamaSampler;
 use llama_cpp_4::ggml_time_us;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
@@ -28,6 +17,8 @@ use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
 use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::model::{AddBos, Special};
+use llama_cpp_4::sampling::LlamaSampler;
+
 use std::ffi::CString;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -186,6 +177,7 @@ fn main() -> Result<()> {
     // initialize the context
     let mut ctx_params =
         LlamaContextParams::default().with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
+
     if let Some(threads) = threads {
         ctx_params = ctx_params.with_n_threads(threads);
     }
@@ -196,9 +188,6 @@ fn main() -> Result<()> {
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
-
-    let sampler = LlamaSampler::new(None);
-    sampler.with_seed(seed.unwrap_or(1234));
 
     // tokenize the prompt
 
@@ -231,7 +220,6 @@ either reduce n_len or increase n_ctx"
     }
 
     std::io::stderr().flush()?;
-    println!("========= hello =========");
 
     // create a llama_batch with size 512
     // we use this object to submit token data for decoding
@@ -257,25 +245,25 @@ either reduce n_len or increase n_ctx"
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
 
+    let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::dist(seed.unwrap_or(1234)),
+        LlamaSampler::greedy(),
+    ]);
+
     while n_cur <= n_len {
         // sample the next token
         {
-            // let candidates = ctx.candidates();
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
-            // let candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
-
-            // sample the most likely token
-            // let new_token_id = ctx.sample_token_greedy(candidates_p);
-            // TODO(v3): rework idx retrieval based on the above code
-            let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
+            sampler.accept(token);
 
             // is it an end of stream?
-            if model.is_eog_token(new_token_id) {
+            if model.is_eog_token(token) {
                 eprintln!();
                 break;
             }
 
-            let output_bytes = model.token_to_bytes(new_token_id, Special::Tokenize)?;
+            let output_bytes = model.token_to_bytes(token, Special::Tokenize)?;
             // use `Decoder.decode_to_string()` to avoid the intermediate buffer
             let mut output_string = String::with_capacity(32);
             let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
@@ -283,7 +271,7 @@ either reduce n_len or increase n_ctx"
             std::io::stdout().flush()?;
 
             batch.clear();
-            batch.add(new_token_id, n_cur, &[0], true)?;
+            batch.add(token, n_cur, &[0], true)?;
         }
 
         n_cur += 1;

@@ -12,16 +12,10 @@ use crate::llama_backend::LlamaBackend;
 use crate::model::params::LlamaModelParams;
 use crate::token::from_vec_token_sys;
 use crate::token::LlamaToken;
-use crate::token_type::{ LlamaTokenAttr, LlamaTokenAttrs };
+use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
-    ApplyChatTemplateError,
-    ChatTemplateError,
-    LlamaContextLoadError,
-    LlamaLoraAdapterInitError,
-    LlamaModelLoadError,
-    NewLlamaChatMessageError,
-    StringToTokenError,
-    TokenToStringError,
+    ApplyChatTemplateError, ChatTemplateError, LlamaContextLoadError, LlamaLoraAdapterInitError,
+    LlamaModelLoadError, NewLlamaChatMessageError, StringToTokenError, TokenToStringError,
 };
 
 pub mod params;
@@ -107,7 +101,7 @@ impl LlamaModel {
     /// - `special`: The `Special` value that determines how special tokens (like BOS, EOS, etc.) are handled.
     pub fn tokens(
         &self,
-        special: Special
+        special: Special,
     ) -> impl Iterator<Item = (LlamaToken, Result<String, TokenToStringError>)> + '_ {
         (0..self.n_vocab())
             .map(LlamaToken::new)
@@ -164,9 +158,8 @@ impl LlamaModel {
     /// of a sequence generation).
     #[must_use]
     pub fn decode_start_token(&self) -> LlamaToken {
-        let token = unsafe {
-            llama_cpp_sys_4::llama_model_decoder_start_token(self.model.as_ptr())
-        };
+        let token =
+            unsafe { llama_cpp_sys_4::llama_model_decoder_start_token(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
@@ -186,7 +179,7 @@ impl LlamaModel {
     pub fn token_to_str(
         &self,
         token: LlamaToken,
-        special: Special
+        special: Special,
     ) -> Result<String, TokenToStringError> {
         self.token_to_str_with_size(token, 32, special)
     }
@@ -207,7 +200,7 @@ impl LlamaModel {
     pub fn token_to_bytes(
         &self,
         token: LlamaToken,
-        special: Special
+        special: Special,
     ) -> Result<Vec<u8>, TokenToStringError> {
         self.token_to_bytes_with_size(token, 32, special, None)
     }
@@ -229,13 +222,14 @@ impl LlamaModel {
     pub fn tokens_to_str(
         &self,
         tokens: &[LlamaToken],
-        special: Special
+        special: Special,
     ) -> Result<String, TokenToStringError> {
         let mut builder = String::with_capacity(tokens.len() * 4);
         for str in tokens
             .iter()
             .copied()
-            .map(|t| self.token_to_str(t, special)) {
+            .map(|t| self.token_to_str(t, special))
+        {
             builder += &str?;
         }
         Ok(builder)
@@ -271,7 +265,7 @@ impl LlamaModel {
     pub fn str_to_token(
         &self,
         str: &str,
-        add_bos: AddBos
+        add_bos: AddBos,
     ) -> Result<Vec<LlamaToken>, StringToTokenError> {
         let add_bos = match add_bos {
             AddBos::Always => true,
@@ -282,9 +276,8 @@ impl LlamaModel {
         let mut buffer = Vec::with_capacity(tokens_estimation);
 
         let c_string = CString::new(str)?;
-        let buffer_capacity = c_int
-            ::try_from(buffer.capacity())
-            .expect("buffer capacity should fit into a c_int");
+        let buffer_capacity =
+            c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
 
         let size = unsafe {
             llama_cpp_sys_4::llama_tokenize(
@@ -294,7 +287,7 @@ impl LlamaModel {
                 buffer.as_mut_ptr(),
                 buffer_capacity,
                 add_bos,
-                true
+                true,
             )
         };
 
@@ -310,7 +303,7 @@ impl LlamaModel {
                     buffer.as_mut_ptr(),
                     -size,
                     add_bos,
-                    true
+                    true,
                 )
             }
         } else {
@@ -366,7 +359,7 @@ impl LlamaModel {
     pub fn str_to_token_fast(
         &self,
         str: &str,
-        add_bos: AddBos
+        add_bos: AddBos,
     ) -> Result<Vec<LlamaToken>, StringToTokenError> {
         let add_bos = match add_bos {
             AddBos::Always => true,
@@ -382,9 +375,8 @@ impl LlamaModel {
         let c_string = CString::new(str)?;
 
         // Convert the buffer capacity to a c_int (required by llama-cpp)
-        let buffer_capacity = c_int
-            ::try_from(buffer.capacity())
-            .expect("buffer capacity should fit into a c_int");
+        let buffer_capacity =
+            c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
 
         // Tokenize the string using llama-cpp.
         let size = unsafe {
@@ -395,7 +387,7 @@ impl LlamaModel {
                 buffer.as_mut_ptr(),
                 buffer_capacity,
                 add_bos,
-                true
+                true,
             )
         };
 
@@ -410,7 +402,7 @@ impl LlamaModel {
                     buffer.as_mut_ptr(),
                     -size,
                     add_bos,
-                    true
+                    true,
                 )
             }
         } else {
@@ -491,7 +483,7 @@ impl LlamaModel {
         &self,
         token: LlamaToken,
         buffer_size: usize,
-        special: Special
+        special: Special,
     ) -> Result<String, TokenToStringError> {
         let bytes = self.token_to_bytes_with_size(token, buffer_size, special, None)?;
         Ok(String::from_utf8(bytes)?)
@@ -530,7 +522,7 @@ impl LlamaModel {
         token: LlamaToken,
         buffer_size: usize,
         special: Special,
-        lstrip: Option<NonZeroU16>
+        lstrip: Option<NonZeroU16>,
     ) -> Result<Vec<u8>, TokenToStringError> {
         if token == self.token_nl() {
             return Ok(String::from("\n").into_bytes());
@@ -538,16 +530,13 @@ impl LlamaModel {
 
         // unsure what to do with this in the face of the 'special' arg + attr changes
         let attrs = self.token_attr(token);
-        if
-            attrs.contains(LlamaTokenAttr::Control) &&
-            (token == self.token_bos() || token == self.token_eos())
+        if attrs.contains(LlamaTokenAttr::Control)
+            && (token == self.token_bos() || token == self.token_eos())
         {
             return Ok(Vec::new());
-        } else if
-            attrs.is_empty() ||
-            attrs.intersects(
-                LlamaTokenAttr::Unknown | LlamaTokenAttr::Byte | LlamaTokenAttr::Unused
-            )
+        } else if attrs.is_empty()
+            || attrs
+                .intersects(LlamaTokenAttr::Unknown | LlamaTokenAttr::Byte | LlamaTokenAttr::Unused)
         {
             return Ok(Vec::new());
         }
@@ -569,7 +558,7 @@ impl LlamaModel {
                 buf,
                 len,
                 lstrip,
-                special
+                special,
             )
         };
 
@@ -691,7 +680,7 @@ impl LlamaModel {
                 self.model.as_ptr(),
                 chat_name.as_ptr(),
                 chat_ptr,
-                buf_size
+                buf_size,
             )
         };
 
@@ -734,16 +723,17 @@ impl LlamaModel {
     pub fn load_from_file(
         _: &LlamaBackend,
         path: impl AsRef<Path>,
-        params: &LlamaModelParams
+        params: &LlamaModelParams,
     ) -> Result<Self, LlamaModelLoadError> {
         let path = path.as_ref();
         debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
-        let path = path.to_str().ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
+        let path = path
+            .to_str()
+            .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
 
         let cstr = CString::new(path)?;
-        let llama_model = unsafe {
-            llama_cpp_sys_4::llama_load_model_from_file(cstr.as_ptr(), params.params)
-        };
+        let llama_model =
+            unsafe { llama_cpp_sys_4::llama_load_model_from_file(cstr.as_ptr(), params.params) };
 
         let model = NonNull::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
 
@@ -775,19 +765,20 @@ impl LlamaModel {
     /// ```
     pub fn lora_adapter_init(
         &self,
-        path: impl AsRef<Path>
+        path: impl AsRef<Path>,
     ) -> Result<LlamaLoraAdapter, LlamaLoraAdapterInitError> {
         let path = path.as_ref();
         debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
 
         let path = path
             .to_str()
-            .ok_or(LlamaLoraAdapterInitError::PathToStrError(path.to_path_buf()))?;
+            .ok_or(LlamaLoraAdapterInitError::PathToStrError(
+                path.to_path_buf(),
+            ))?;
 
         let cstr = CString::new(path)?;
-        let adapter = unsafe {
-            llama_cpp_sys_4::llama_lora_adapter_init(self.model.as_ptr(), cstr.as_ptr())
-        };
+        let adapter =
+            unsafe { llama_cpp_sys_4::llama_lora_adapter_init(self.model.as_ptr(), cstr.as_ptr()) };
 
         let adapter = NonNull::new(adapter).ok_or(LlamaLoraAdapterInitError::NullResult)?;
 
@@ -824,7 +815,7 @@ impl LlamaModel {
     pub fn new_context(
         &self,
         _: &LlamaBackend,
-        params: LlamaContextParams
+        params: LlamaContextParams,
     ) -> Result<LlamaContext, LlamaContextLoadError> {
         let context_params = params.context_params;
         let context = unsafe {
@@ -881,12 +872,12 @@ impl LlamaModel {
         &self,
         tmpl: Option<String>,
         chat: Vec<LlamaChatMessage>,
-        add_ass: bool
+        add_ass: bool,
     ) -> Result<String, ApplyChatTemplateError> {
         // Buffer is twice the length of messages per their recommendation
-        let message_length = chat
-            .iter()
-            .fold(0, |acc, c| { acc + c.role.to_bytes().len() + c.content.to_bytes().len() });
+        let message_length = chat.iter().fold(0, |acc, c| {
+            acc + c.role.to_bytes().len() + c.content.to_bytes().len()
+        });
         let mut buff = vec![0; message_length * 4];
 
         // Build our llama_cpp_sys_4 chat messages
@@ -913,7 +904,7 @@ impl LlamaModel {
                 chat.len(),
                 add_ass,
                 buff.as_mut_ptr(),
-                buff.len() as i32
+                buff.len() as i32,
             );
             // A buffer twice the size should be sufficient for all models, if this is not the case for a new model, we can increase it
             // The error message informs the user to contact a maintainer
@@ -921,7 +912,9 @@ impl LlamaModel {
                 return Err(ApplyChatTemplateError::BuffSizeError);
             }
             Ok::<String, ApplyChatTemplateError>(
-                CStr::from_ptr(buff.as_mut_ptr()).to_string_lossy().to_string()
+                CStr::from_ptr(buff.as_mut_ptr())
+                    .to_string_lossy()
+                    .to_string(),
             )
         })?;
         Ok(formatted_chat)
