@@ -543,7 +543,10 @@ impl LlamaSampler {
             let smpl = llama_sampler_chain_init(sparams);
 
             llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.top_k));
-            llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.top_p, 1));
+            llama_sampler_chain_add(
+                smpl,
+                llama_sampler_init_top_p(params.top_p, params.min_keep as usize),
+            );
             llama_sampler_chain_add(smpl, llama_sampler_init_temp(params.temp));
             llama_sampler_chain_add(smpl, llama_sampler_init_dist(params.seed));
 

@@ -86,19 +86,42 @@ impl LlamaBackend {
 }
 
 /// A rusty wrapper around `numa_strategy`.
+///
+/// ## Description
+/// Represents different NUMA (Non-Uniform Memory Access) strategies for memory management
+/// in multi-core or multi-processor systems.
+///
+/// ## See more
+/// https://github.com/ggerganov/llama.cpp/blob/master/ggml/include/ggml-cpu.h#L25-L32
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum NumaStrategy {
-    /// The numa strategy is disabled.
+    /// The NUMA strategy is disabled. No NUMA-aware optimizations are applied.
+    /// Memory allocation will not consider NUMA node locality.
     DISABLED,
-    /// help wanted: what does this do?
+
+    /// Distribute memory across NUMA nodes. This strategy aims to balance memory usage
+    /// across all available NUMA nodes, potentially improving load balancing and preventing
+    /// memory hotspots on a single node. It may use round-robin or another method to
+    /// distribute allocations.
     DISTRIBUTE,
-    /// help wanted: what does this do?
+
+    /// Isolate memory to specific NUMA nodes. Memory allocations will be restricted to
+    /// specific NUMA nodes, potentially reducing contention and improving locality for
+    /// processes or threads bound to a particular node.
     ISOLATE,
-    /// help wanted: what does this do?
+
+    /// Use `numactl` to manage memory and processor affinities. This strategy utilizes
+    /// the `numactl` command or library to bind processes or memory allocations to specific
+    /// NUMA nodes or CPUs, providing fine-grained control over memory placement.
     NUMACTL,
-    /// help wanted: what does this do?
+
+    /// Mirror memory across NUMA nodes. This strategy creates duplicate memory copies
+    /// on multiple NUMA nodes, which can help with fault tolerance and redundancy,
+    /// ensuring that each NUMA node has access to a copy of the memory.
     MIRROR,
-    /// help wanted: what does this do?
+
+    /// A placeholder representing the total number of strategies available.
+    /// Typically used for iteration or determining the number of strategies in the enum.
     COUNT,
 }
 

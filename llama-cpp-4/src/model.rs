@@ -6,11 +6,12 @@ use std::os::raw::c_int;
 use std::path::Path;
 use std::ptr::NonNull;
 
+use llama_cpp_sys_4::*;
+
 use crate::context::params::LlamaContextParams;
 use crate::context::LlamaContext;
 use crate::llama_backend::LlamaBackend;
 use crate::model::params::LlamaModelParams;
-use crate::token::from_vec_token_sys;
 use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
@@ -25,7 +26,7 @@ pub mod params;
 #[repr(transparent)]
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaModel {
-    pub(crate) model: NonNull<llama_cpp_sys_4::llama_model>,
+    pub(crate) model: NonNull<llama_model>,
 }
 
 /// A safe wrapper around `llama_lora_adapter`.
@@ -33,7 +34,7 @@ pub struct LlamaModel {
 #[repr(transparent)]
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaLoraAdapter {
-    pub(crate) lora_adapter: NonNull<llama_cpp_sys_4::llama_lora_adapter>,
+    pub(crate) lora_adapter: NonNull<llama_lora_adapter>,
 }
 
 /// A Safe wrapper around `llama_chat_message`
@@ -87,7 +88,7 @@ impl LlamaModel {
     /// which is almost certainly positive.
     #[must_use]
     pub fn n_ctx_train(&self) -> u32 {
-        let n_ctx_train = unsafe { llama_cpp_sys_4::llama_n_ctx_train(self.model.as_ptr()) };
+        let n_ctx_train = unsafe { llama_n_ctx_train(self.model.as_ptr()) };
         u32::try_from(n_ctx_train).expect("n_ctx_train fits into an u32")
     }
 
@@ -113,7 +114,7 @@ impl LlamaModel {
     /// This function returns the token that represents the beginning of a stream (BOS token).
     #[must_use]
     pub fn token_bos(&self) -> LlamaToken {
-        let token = unsafe { llama_cpp_sys_4::llama_token_bos(self.model.as_ptr()) };
+        let token = unsafe { llama_token_bos(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
@@ -122,7 +123,7 @@ impl LlamaModel {
     /// This function returns the token that represents the end of a stream (EOS token).
     #[must_use]
     pub fn token_eos(&self) -> LlamaToken {
-        let token = unsafe { llama_cpp_sys_4::llama_token_eos(self.model.as_ptr()) };
+        let token = unsafe { llama_token_eos(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
@@ -131,7 +132,7 @@ impl LlamaModel {
     /// This function returns the token that represents a newline character.
     #[must_use]
     pub fn token_nl(&self) -> LlamaToken {
-        let token = unsafe { llama_cpp_sys_4::llama_token_nl(self.model.as_ptr()) };
+        let token = unsafe { llama_token_nl(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
@@ -149,7 +150,7 @@ impl LlamaModel {
     /// - `true` if the token is an end-of-generation token, otherwise `false`.
     #[must_use]
     pub fn is_eog_token(&self, token: LlamaToken) -> bool {
-        unsafe { llama_cpp_sys_4::llama_token_is_eog(self.model.as_ptr(), token.0) }
+        unsafe { llama_token_is_eog(self.model.as_ptr(), token.0) }
     }
 
     /// Get the decoder start token.
@@ -158,8 +159,7 @@ impl LlamaModel {
     /// of a sequence generation).
     #[must_use]
     pub fn decode_start_token(&self) -> LlamaToken {
-        let token =
-            unsafe { llama_cpp_sys_4::llama_model_decoder_start_token(self.model.as_ptr()) };
+        let token = unsafe { llama_model_decoder_start_token(self.model.as_ptr()) };
         LlamaToken(token)
     }
 
@@ -272,7 +272,7 @@ impl LlamaModel {
             AddBos::Never => false,
         };
 
-        let tokens_estimation = std::cmp::max(8, str.len() / 2 + usize::from(add_bos));
+        let tokens_estimation = std::cmp::max(8, (str.len() / 2) + usize::from(add_bos));
         let mut buffer = Vec::with_capacity(tokens_estimation);
 
         let c_string = CString::new(str)?;
@@ -280,7 +280,7 @@ impl LlamaModel {
             c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
 
         let size = unsafe {
-            llama_cpp_sys_4::llama_tokenize(
+            llama_tokenize(
                 self.model.as_ptr(),
                 c_string.as_ptr(),
                 c_int::try_from(c_string.as_bytes().len())?,
@@ -296,7 +296,7 @@ impl LlamaModel {
         let size = if size.is_negative() {
             buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
             unsafe {
-                llama_cpp_sys_4::llama_tokenize(
+                llama_tokenize(
                     self.model.as_ptr(),
                     c_string.as_ptr(),
                     c_int::try_from(c_string.as_bytes().len())?,
@@ -313,112 +313,7 @@ impl LlamaModel {
         let size = usize::try_from(size).expect("size is positive and usize ");
 
         // Safety: `size` < `capacity` and llama-cpp has initialized elements up to `size`
-        unsafe {
-            buffer.set_len(size);
-        }
-
-        // Convert to `LlamaToken` without memory copy
-        let tokens = from_vec_token_sys(buffer);
-        Ok(tokens)
-    }
-
-    /// Convert a string to a vector of tokens (fast version).
-    ///
-    /// This function quickly converts a string into a vector of `LlamaToken`s. The `fast` version of this function
-    /// assumes that the input string is well-formed and tries to tokenize it as efficiently as possible, with minimal
-    /// error checking beyond essential boundary conditions.
-    ///
-    /// # Errors
-    ///
-    /// - This function will return an error if the input `str` contains a null byte (i.e., an invalid UTF-8 sequence).
-    ///
-    /// # Panics
-    ///
-    /// - This function will panic if the number of `LlamaToken`s generated from the input string exceeds `usize::MAX`.
-    ///
-    /// # Parameters
-    ///
-    /// - `str`: The input string to convert to tokens.
-    /// - `add_bos`: Determines whether to add the beginning-of-sequence (BOS) token. Use `AddBos::Always` to always add it,
-    ///   or `AddBos::Never` to omit it.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use llama_cpp_4::model::LlamaModel;
-    ///
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// use std::path::Path;
-    /// use llama_cpp_4::model::AddBos;
-    /// let backend = llama_cpp_4::llama_backend::LlamaBackend::init()?;
-    /// let model = LlamaModel::load_from_file(&backend, Path::new("path/to/model"), &Default::default())?;
-    /// let tokens = model.str_to_token_fast("Hello, World!", AddBos::Always)?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn str_to_token_fast(
-        &self,
-        str: &str,
-        add_bos: AddBos,
-    ) -> Result<Vec<LlamaToken>, StringToTokenError> {
-        let add_bos = match add_bos {
-            AddBos::Always => true,
-            AddBos::Never => false,
-        };
-
-        // Estimate the initial buffer size based on the string length.
-        // Each token typically takes ~2 bytes, so we estimate and reserve some extra space.
-        let tokens_estimation = std::cmp::max(8, str.len() / 2 + usize::from(add_bos));
-        let mut buffer = Vec::with_capacity(tokens_estimation);
-
-        // Convert the string to a C-style string (a null-terminated byte array).
-        let c_string = CString::new(str)?;
-
-        // Convert the buffer capacity to a c_int (required by llama-cpp)
-        let buffer_capacity =
-            c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
-
-        // Tokenize the string using llama-cpp.
-        let size = unsafe {
-            llama_cpp_sys_4::llama_tokenize(
-                self.model.as_ptr(),
-                c_string.as_ptr(),
-                c_int::try_from(c_string.as_bytes().len())?,
-                buffer.as_mut_ptr(),
-                buffer_capacity,
-                add_bos,
-                true,
-            )
-        };
-
-        // If the initial size is negative (buffer wasn't large enough), resize the vector and try again.
-        let size = if size.is_negative() {
-            buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
-            unsafe {
-                llama_cpp_sys_4::llama_tokenize(
-                    self.model.as_ptr(),
-                    c_string.as_ptr(),
-                    c_int::try_from(c_string.as_bytes().len())?,
-                    buffer.as_mut_ptr(),
-                    -size,
-                    add_bos,
-                    true,
-                )
-            }
-        } else {
-            size
-        };
-
-        // Convert the size to usize and ensure it's valid.
-        let size = usize::try_from(size).expect("size is positive and usize ");
-
-        // Safety: Since `size` is less than the buffer capacity and llama-cpp has already initialized elements up to `size`,
-        // we are safe to resize the buffer to the correct length.
-        unsafe {
-            buffer.set_len(size);
-        }
-
-        // Convert the raw tokens into `LlamaToken` instances.
+        unsafe { buffer.set_len(size) }
         Ok(buffer.into_iter().map(LlamaToken).collect())
     }
 
@@ -446,7 +341,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
-        let token_type = unsafe { llama_cpp_sys_4::llama_token_get_attr(self.model.as_ptr(), id) };
+        let token_type = unsafe { llama_token_get_attr(self.model.as_ptr(), id) };
         LlamaTokenAttrs::try_from(token_type).expect("token type is valid")
     }
 
@@ -491,14 +386,13 @@ impl LlamaModel {
 
     /// Convert a token to bytes with a specified buffer size.
     ///
-    /// Similar to `token_to_str_with_size`, but instead of returning a string, this function converts the token into raw bytes.
-    /// The buffer size parameter allows you to specify the maximum size to which the token can be converted. This is generally
-    /// used when you need the raw byte representation of a token for further processing.
+    /// Generally you should use [`LlamaModel::token_to_bytes`] instead as 8 bytes is enough for most words and
+    /// the extra bytes do not really matter.
     ///
     /// # Errors
     ///
-    /// - If the token type is unknown, an error will be returned.
-    /// - If the resultant token exceeds the provided `buffer_size`, an error will occur.
+    /// - if the token type is unknown
+    /// - the resultant token is larger than `buffer_size`.
     ///
     /// # Panics
     ///
@@ -552,14 +446,7 @@ impl LlamaModel {
         let buf = string.into_raw();
         let lstrip = lstrip.map_or(0, |it| i32::from(it.get()));
         let size = unsafe {
-            llama_cpp_sys_4::llama_token_to_piece(
-                self.model.as_ptr(),
-                token.0,
-                buf,
-                len,
-                lstrip,
-                special,
-            )
+            llama_token_to_piece(self.model.as_ptr(), token.0, buf, len, lstrip, special)
         };
 
         match size {
@@ -574,7 +461,6 @@ impl LlamaModel {
             }
         }
     }
-
     /// The number of tokens the model was trained on.
     ///
     /// This function returns the number of tokens the model was trained on. It is returned as a `c_int` for maximum
@@ -593,7 +479,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_vocab(&self) -> i32 {
-        unsafe { llama_cpp_sys_4::llama_n_vocab(self.model.as_ptr()) }
+        unsafe { llama_n_vocab(self.model.as_ptr()) }
     }
 
     /// The type of vocab the model was trained on.
@@ -618,7 +504,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn vocab_type(&self) -> VocabType {
-        let vocab_type = unsafe { llama_cpp_sys_4::llama_vocab_type(self.model.as_ptr()) };
+        let vocab_type = unsafe { llama_vocab_type(self.model.as_ptr()) };
         VocabType::try_from(vocab_type).expect("invalid vocab type")
     }
 
@@ -644,13 +530,10 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_embd(&self) -> c_int {
-        unsafe { llama_cpp_sys_4::llama_n_embd(self.model.as_ptr()) }
+        unsafe { llama_n_embd(self.model.as_ptr()) }
     }
 
-    /// Get the chat template from the model.
-    ///
-    /// This function retrieves the chat template associated with the model. The chat template defines the structure
-    /// of conversational inputs and outputs, often useful in chat-based applications or interaction contexts.
+    /// Get chat template from model.
     ///
     /// # Errors
     ///
@@ -676,12 +559,7 @@ impl LlamaModel {
         let chat_name = CString::new("tokenizer.chat_template").expect("no null bytes");
 
         let ret = unsafe {
-            llama_cpp_sys_4::llama_model_meta_val_str(
-                self.model.as_ptr(),
-                chat_name.as_ptr(),
-                chat_ptr,
-                buf_size,
-            )
+            llama_model_meta_val_str(self.model.as_ptr(), chat_name.as_ptr(), chat_ptr, buf_size)
         };
 
         if ret < 0 {
@@ -732,8 +610,7 @@ impl LlamaModel {
             .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
 
         let cstr = CString::new(path)?;
-        let llama_model =
-            unsafe { llama_cpp_sys_4::llama_load_model_from_file(cstr.as_ptr(), params.params) };
+        let llama_model = unsafe { llama_load_model_from_file(cstr.as_ptr(), params.params) };
 
         let model = NonNull::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
 
@@ -777,8 +654,7 @@ impl LlamaModel {
             ))?;
 
         let cstr = CString::new(path)?;
-        let adapter =
-            unsafe { llama_cpp_sys_4::llama_lora_adapter_init(self.model.as_ptr(), cstr.as_ptr()) };
+        let adapter = unsafe { llama_lora_adapter_init(self.model.as_ptr(), cstr.as_ptr()) };
 
         let adapter = NonNull::new(adapter).ok_or(LlamaLoraAdapterInitError::NullResult)?;
 
@@ -818,9 +694,7 @@ impl LlamaModel {
         params: LlamaContextParams,
     ) -> Result<LlamaContext, LlamaContextLoadError> {
         let context_params = params.context_params;
-        let context = unsafe {
-            llama_cpp_sys_4::llama_new_context_with_model(self.model.as_ptr(), context_params)
-        };
+        let context = unsafe { llama_new_context_with_model(self.model.as_ptr(), context_params) };
         let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
 
         Ok(LlamaContext::new(self, context, params.embeddings()))
@@ -880,10 +754,10 @@ impl LlamaModel {
         });
         let mut buff = vec![0; message_length * 4];
 
-        // Build our llama_cpp_sys_4 chat messages
-        let chat: Vec<llama_cpp_sys_4::llama_chat_message> = chat
+        // Build our llama_cpp_sys_2 chat messages
+        let chat: Vec<llama_chat_message> = chat
             .iter()
-            .map(|c| llama_cpp_sys_4::llama_chat_message {
+            .map(|c| llama_chat_message {
                 role: c.role.as_ptr(),
                 content: c.content.as_ptr(),
             })
@@ -896,8 +770,8 @@ impl LlamaModel {
             None => std::ptr::null(),
         };
 
-        let formatted_chat = (unsafe {
-            let res = llama_cpp_sys_4::llama_chat_apply_template(
+        let formatted_chat = unsafe {
+            let res = llama_chat_apply_template(
                 self.model.as_ptr(),
                 tmpl_ptr,
                 chat.as_ptr(),
@@ -908,7 +782,7 @@ impl LlamaModel {
             );
             // A buffer twice the size should be sufficient for all models, if this is not the case for a new model, we can increase it
             // The error message informs the user to contact a maintainer
-            if res > (buff.len() as i32) {
+            if res > buff.len() as i32 {
                 return Err(ApplyChatTemplateError::BuffSizeError);
             }
             Ok::<String, ApplyChatTemplateError>(
@@ -916,14 +790,14 @@ impl LlamaModel {
                     .to_string_lossy()
                     .to_string(),
             )
-        })?;
+        }?;
         Ok(formatted_chat)
     }
 }
 
 impl Drop for LlamaModel {
     fn drop(&mut self) {
-        unsafe { llama_cpp_sys_4::llama_free_model(self.model.as_ptr()) }
+        unsafe { llama_free_model(self.model.as_ptr()) }
     }
 }
 
@@ -955,9 +829,9 @@ impl Drop for LlamaModel {
 #[derive(Debug, Eq, Copy, Clone, PartialEq)]
 pub enum VocabType {
     /// Byte Pair Encoding
-    BPE = llama_cpp_sys_4::LLAMA_VOCAB_TYPE_BPE as _,
+    BPE = LLAMA_VOCAB_TYPE_BPE as _,
     /// Sentence Piece Tokenizer
-    SPM = llama_cpp_sys_4::LLAMA_VOCAB_TYPE_SPM as _,
+    SPM = LLAMA_VOCAB_TYPE_SPM as _,
 }
 
 /// Error that occurs when trying to convert a `llama_vocab_type` to a `VocabType`.
@@ -984,16 +858,16 @@ pub enum VocabType {
 pub enum LlamaTokenTypeFromIntError {
     /// The value is not a valid `llama_token_type`. Contains the int value that was invalid.
     #[error("Unknown Value {0}")]
-    UnknownValue(llama_cpp_sys_4::llama_vocab_type),
+    UnknownValue(llama_vocab_type),
 }
 
-impl TryFrom<llama_cpp_sys_4::llama_vocab_type> for VocabType {
+impl TryFrom<llama_vocab_type> for VocabType {
     type Error = LlamaTokenTypeFromIntError;
 
-    fn try_from(value: llama_cpp_sys_4::llama_vocab_type) -> Result<Self, Self::Error> {
+    fn try_from(value: llama_vocab_type) -> Result<Self, Self::Error> {
         match value {
-            llama_cpp_sys_4::LLAMA_VOCAB_TYPE_BPE => Ok(VocabType::BPE),
-            llama_cpp_sys_4::LLAMA_VOCAB_TYPE_SPM => Ok(VocabType::SPM),
+            LLAMA_VOCAB_TYPE_BPE => Ok(VocabType::BPE),
+            LLAMA_VOCAB_TYPE_SPM => Ok(VocabType::SPM),
             unknown => Err(LlamaTokenTypeFromIntError::UnknownValue(unknown)),
         }
     }

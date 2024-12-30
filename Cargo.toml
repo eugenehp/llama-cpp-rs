@@ -5,21 +5,22 @@ members = [
     "llama-cpp-4",
     "examples/embeddings",
     "examples/simple",
+    "examples/batched",
     "examples/chat",
 ]
 
 [workspace.dependencies]
 # core library deps
-thiserror = "2.0.7"
+thiserror = "2.0.9"
 tracing = "0.1"
 
 # examples and benchmarks
 hf-hub = { version = "0.3.2" }
 criterion = "0.5.1"
 pprof = "0.14.0"
-bindgen = "0.70.1"
-cc = "1.2.4"
-anyhow = "1.0.94"
+bindgen = "0.71.1"
+cc = "1.2.6"
+anyhow = "1.0.95"
 clap = "4.5.23"
 encoding_rs = "0.8.35"
 
