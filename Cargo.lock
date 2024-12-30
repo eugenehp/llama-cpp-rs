@@ -79,17 +79,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "batched"
-version = "0.1.84"
-dependencies = [
- "anyhow",
- "clap",
- "encoding_rs",
- "hf-hub",
- "llama-cpp-4",
-]
-
-[[package]]
 name = "bindgen"
 version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -669,7 +658,7 @@ checksum = "643cb0b8d4fcc284004d5fd0d67ccf61dfffadb7f75e1e71bc420f4688a3a704"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.1.89"
+version = "0.1.90"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -680,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.1.89"
+version = "0.1.90"
 dependencies = [
  "bindgen",
  "cc",

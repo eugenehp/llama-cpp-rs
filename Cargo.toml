@@ -5,7 +5,6 @@ members = [
     "llama-cpp-4",
     "examples/embeddings",
     "examples/simple",
-    "examples/batched",
     "examples/chat",
 ]
 
