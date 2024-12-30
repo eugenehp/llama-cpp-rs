@@ -6,13 +6,7 @@
 //! git clone --recursive https://github.com/eugenehp/llama-cpp-rs
 //! cd llama-cpp-rs/examples/usage
 //! wget https://huggingface.co/Qwen/Qwen2-1.5B-Instruct-GGUF/resolve/main/qwen2-1_5b-instruct-q4_0.gguf
-//! cargo run --example usage -- ./path/to/your/model/qwen2-1_5b-instruct-q4_0.gguf
-//! ```
-//!
-//! returns
-//!
-//! ```console
-//! I'm here to help! Are you a programmer?
+//! cargo run --example usage -- qwen2-1_5b-instruct-q4_0.gguf
 //! ```
 use llama_cpp_4::context::params::LlamaContextParams;
 use llama_cpp_4::llama_backend::LlamaBackend;
@@ -59,28 +53,22 @@ fn main() {
 
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
-
-    let sampler = LlamaSampler::chain_simple([
-        LlamaSampler::new(),
-        // LlamaSampler::common(), // works on Qwen, but breaks on Llama
-        LlamaSampler::greedy(),
-    ]);
+    let mut sampler = LlamaSampler::greedy();
 
     while n_cur <= n_len {
         // sample the next token
         {
-            // sample the most likely token
-            let new_token_id = sampler.sample(&ctx, batch.n_tokens() - 1);
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+
+            sampler.accept(token);
 
             // is it an end of stream?
-            if new_token_id == model.token_eos() {
+            if token == model.token_eos() {
                 eprintln!();
                 break;
             }
 
-            let output_bytes = model
-                .token_to_bytes(new_token_id, Special::Tokenize)
-                .unwrap();
+            let output_bytes = model.token_to_bytes(token, Special::Tokenize).unwrap();
             // use `Decoder.decode_to_string()` to avoid the intermediate buffer
             let mut output_string = String::with_capacity(32);
             let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
@@ -88,7 +76,7 @@ fn main() {
             std::io::stdout().flush().unwrap();
 
             batch.clear();
-            batch.add(new_token_id, n_cur, &[0], true).unwrap();
+            batch.add(token, n_cur, &[0], true).unwrap();
         }
 
         n_cur += 1;
