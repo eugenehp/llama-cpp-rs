@@ -132,7 +132,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chat"
-version = "0.1.84"
+version = "0.1.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -297,7 +297,7 @@ checksum = "3dca9240753cf90908d7e4aac30f630662b02aebaa1b58a3cadabdb23385b58b"
 
 [[package]]
 name = "embeddings"
-version = "0.1.84"
+version = "0.1.90"
 dependencies = [
  "anyhow",
  "clap",
@@ -1063,7 +1063,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "simple"
-version = "0.1.84"
+version = "0.1.90"
 dependencies = [
  "anyhow",
  "clap",
