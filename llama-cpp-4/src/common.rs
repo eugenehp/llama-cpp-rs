@@ -1,3 +1,4 @@
+//! exposing common llama cpp structures like CommonParams
 pub use llama_cpp_sys_4::common::*;
 
 /// Struct containing common parameters for processing.
