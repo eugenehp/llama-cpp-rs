@@ -215,6 +215,8 @@ fn main() {
         .opaque_type("llama_grammar")
         .opaque_type("llama_grammar_parser")
         .opaque_type("llama_sampler_chain")
+        // .opaque_type("llama_context_deleter")
+        // .blocklist_type("llama_model_deleter")
         .opaque_type("std::.*")
         // .layout_tests(false)
         // .derive_default(true)
