@@ -29,6 +29,14 @@ pub struct LlamaModel {
     pub(crate) model: NonNull<llama_model>,
 }
 
+/// A safe wrapper around `llama_vocab`.
+#[derive(Debug)]
+#[repr(transparent)]
+#[allow(clippy::module_name_repetitions)]
+pub struct LlamaVocab {
+    pub(crate) vocab: NonNull<llama_vocab>,
+}
+
 /// A safe wrapper around `llama_lora_adapter`.
 #[derive(Debug)]
 #[repr(transparent)]
@@ -77,6 +85,13 @@ unsafe impl Send for LlamaModel {}
 unsafe impl Sync for LlamaModel {}
 
 impl LlamaModel {
+    pub fn get_vocab(&self) -> LlamaVocab {
+        let llama_vocab = unsafe { llama_model_get_vocab(self.model.as_ptr()) } as *mut llama_vocab;
+
+        LlamaVocab {
+            vocab: NonNull::new(llama_vocab).unwrap(),
+        }
+    }
     /// Get the number of tokens the model was trained on.
     ///
     /// This function returns the number of tokens that the model was trained on, represented as a `u32`.
