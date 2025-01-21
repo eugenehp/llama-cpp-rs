@@ -201,6 +201,7 @@ fn main() {
         .allowlist_function("ggml_.*")
         .allowlist_type("ggml_.*")
         .allowlist_function("llama_.*")
+        .allowlist_function("llama_lora_.*")
         .allowlist_type("llama_.*")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")

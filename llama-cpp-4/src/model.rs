@@ -37,12 +37,12 @@ pub struct LlamaVocab {
     pub(crate) vocab: NonNull<llama_vocab>,
 }
 
-/// A safe wrapper around `llama_lora_adapter`.
+/// A safe wrapper around `llama_adapter_lora`.
 #[derive(Debug)]
 #[repr(transparent)]
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaLoraAdapter {
-    pub(crate) lora_adapter: NonNull<llama_lora_adapter>,
+    pub(crate) lora_adapter: NonNull<llama_adapter_lora>,
 }
 
 /// A Safe wrapper around `llama_chat_message`
@@ -676,7 +676,7 @@ impl LlamaModel {
             ))?;
 
         let cstr = CString::new(path)?;
-        let adapter = unsafe { llama_lora_adapter_init(self.model.as_ptr(), cstr.as_ptr()) };
+        let adapter = unsafe { llama_adapter_lora_init(self.model.as_ptr(), cstr.as_ptr()) };
 
         let adapter = NonNull::new(adapter).ok_or(LlamaLoraAdapterInitError::NullResult)?;
 
@@ -794,7 +794,7 @@ impl LlamaModel {
 
         let formatted_chat = unsafe {
             let res = llama_chat_apply_template(
-                self.model.as_ptr(),
+                // self.model.as_ptr(),
                 tmpl_ptr,
                 chat.as_ptr(),
                 chat.len(),
