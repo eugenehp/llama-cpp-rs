@@ -129,7 +129,7 @@ impl LlamaModel {
     /// This function returns the token that represents the beginning of a stream (BOS token).
     #[must_use]
     pub fn token_bos(&self) -> LlamaToken {
-        let token = unsafe { llama_token_bos(self.model.as_ptr()) };
+        let token = unsafe { llama_token_bos(self.get_vocab().vocab.as_ref()) };
         LlamaToken(token)
     }
 
@@ -138,7 +138,7 @@ impl LlamaModel {
     /// This function returns the token that represents the end of a stream (EOS token).
     #[must_use]
     pub fn token_eos(&self) -> LlamaToken {
-        let token = unsafe { llama_token_eos(self.model.as_ptr()) };
+        let token = unsafe { llama_token_eos(self.get_vocab().vocab.as_ref()) };
         LlamaToken(token)
     }
 
@@ -147,7 +147,7 @@ impl LlamaModel {
     /// This function returns the token that represents a newline character.
     #[must_use]
     pub fn token_nl(&self) -> LlamaToken {
-        let token = unsafe { llama_token_nl(self.model.as_ptr()) };
+        let token = unsafe { llama_token_nl(self.get_vocab().vocab.as_ref()) };
         LlamaToken(token)
     }
 
@@ -165,7 +165,7 @@ impl LlamaModel {
     /// - `true` if the token is an end-of-generation token, otherwise `false`.
     #[must_use]
     pub fn is_eog_token(&self, token: LlamaToken) -> bool {
-        unsafe { llama_token_is_eog(self.model.as_ptr(), token.0) }
+        unsafe { llama_token_is_eog(self.get_vocab().vocab.as_ref(), token.0) }
     }
 
     /// Get the decoder start token.
@@ -296,7 +296,7 @@ impl LlamaModel {
 
         let size = unsafe {
             llama_tokenize(
-                self.model.as_ptr(),
+                self.get_vocab().vocab.as_ref(),
                 c_string.as_ptr(),
                 c_int::try_from(c_string.as_bytes().len())?,
                 buffer.as_mut_ptr(),
@@ -312,7 +312,7 @@ impl LlamaModel {
             buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
             unsafe {
                 llama_tokenize(
-                    self.model.as_ptr(),
+                    self.get_vocab().vocab.as_ref(),
                     c_string.as_ptr(),
                     c_int::try_from(c_string.as_bytes().len())?,
                     buffer.as_mut_ptr(),
@@ -356,7 +356,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
-        let token_type = unsafe { llama_token_get_attr(self.model.as_ptr(), id) };
+        let token_type = unsafe { llama_token_get_attr(self.get_vocab().vocab.as_ref(), id) };
         LlamaTokenAttrs::try_from(token_type).expect("token type is valid")
     }
 
@@ -461,7 +461,14 @@ impl LlamaModel {
         let buf = string.into_raw();
         let lstrip = lstrip.map_or(0, |it| i32::from(it.get()));
         let size = unsafe {
-            llama_token_to_piece(self.model.as_ptr(), token.0, buf, len, lstrip, special)
+            llama_token_to_piece(
+                self.get_vocab().vocab.as_ref(),
+                token.0,
+                buf,
+                len,
+                lstrip,
+                special,
+            )
         };
 
         match size {
@@ -494,7 +501,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_vocab(&self) -> i32 {
-        unsafe { llama_n_vocab(self.model.as_ptr()) }
+        unsafe { llama_n_vocab(self.get_vocab().vocab.as_ref()) }
     }
 
     /// The type of vocab the model was trained on.
@@ -519,7 +526,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn vocab_type(&self) -> VocabType {
-        let vocab_type = unsafe { llama_vocab_type(self.model.as_ptr()) };
+        let vocab_type = unsafe { llama_vocab_type(self.get_vocab().vocab.as_ref()) };
         VocabType::try_from(vocab_type).expect("invalid vocab type")
     }
 
