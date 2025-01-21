@@ -37,7 +37,7 @@ use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::model::{AddBos, Special};
 use llama_cpp_4::sampling::LlamaSampler;
-use llama_cpp_sys_4::LLAMA_DEFAULT_SEED;
+// use llama_cpp_sys_4::LLAMA_DEFAULT_SEED;
 use std::ffi::CString;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -186,6 +186,7 @@ fn main() -> Result<()> {
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create the llama_context")?;
 
+    #[allow(unused)]
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::common(), LlamaSampler::greedy()]);
 
     // tokenize the prompt

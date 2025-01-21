@@ -85,6 +85,25 @@ unsafe impl Send for LlamaModel {}
 unsafe impl Sync for LlamaModel {}
 
 impl LlamaModel {
+    /// Retrieves the vocabulary associated with the current Llama model.
+    ///
+    /// This method fetches the vocabulary from the underlying model using an unsafe
+    /// FFI call. The returned `LlamaVocab` struct contains a non-null pointer to
+    /// the vocabulary data, which is wrapped in a `NonNull` for safety.
+    ///
+    /// # Safety
+    /// This method uses an unsafe block to call a C function (`llama_model_get_vocab`),
+    /// which is assumed to return a valid pointer to the vocabulary. The caller should
+    /// ensure that the model object is properly initialized and valid before calling
+    /// this method, as dereferencing invalid pointers can lead to undefined behavior.
+    ///
+    /// # Returns
+    /// A `LlamaVocab` struct containing the vocabulary of the model.
+    ///
+    /// # Example
+    /// ```rust
+    /// let vocab = model.get_vocab();
+    /// `
     pub fn get_vocab(&self) -> LlamaVocab {
         let llama_vocab = unsafe { llama_model_get_vocab(self.model.as_ptr()) } as *mut llama_vocab;
 
