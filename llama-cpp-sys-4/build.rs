@@ -1,8 +1,8 @@
 use cmake::Config;
 use glob::glob;
-use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::{env, fs};
 
 macro_rules! debug_log {
     ($($arg:tt)*) => {
@@ -173,13 +173,15 @@ fn main() {
     }
     // Speed up build
     // TODO: Audit that the environment access only happens in single-threaded code.
-    unsafe { env::set_var(
-        "CMAKE_BUILD_PARALLEL_LEVEL",
-        std::thread::available_parallelism()
-            .unwrap()
-            .get()
-            .to_string(),
-    ) };
+    unsafe {
+        env::set_var(
+            "CMAKE_BUILD_PARALLEL_LEVEL",
+            std::thread::available_parallelism()
+                .unwrap()
+                .get()
+                .to_string(),
+        )
+    };
 
     // point to CC and CXX binaries on macOS
     if cfg!(all(feature = "mpi", target_os = "macos")) {
@@ -197,7 +199,7 @@ fn main() {
         // "fatal error: 'string' file not found" on macOS
         .clang_arg("-xc++")
         .clang_arg("-std=c++11")
-        .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
+        // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
@@ -235,8 +237,14 @@ fn main() {
     // Write the generated bindings to an output file
     let bindings_path = out_dir.join("bindings.rs");
     bindings
-        .write_to_file(bindings_path)
+        .write_to_file(bindings_path.clone())
         .expect("Failed to write bindings");
+
+    // temporary fix for https://github.com/rust-lang/rust/issues/123743 in
+    // cargo +nightly build
+    let contents = std::fs::read_to_string(bindings_path.clone()).unwrap();
+    let contents = contents.replace("unsafe extern \"C\" {", " extern \"C\" {");
+    fs::write(bindings_path, contents).unwrap();
 
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=./sherpa-onnx");
