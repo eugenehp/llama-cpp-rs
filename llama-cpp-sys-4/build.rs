@@ -172,18 +172,21 @@ fn main() {
         copy_folder(&llama_src, &llama_dst);
     }
     // Speed up build
-    env::set_var(
+    // TODO: Audit that the environment access only happens in single-threaded code.
+    unsafe { env::set_var(
         "CMAKE_BUILD_PARALLEL_LEVEL",
         std::thread::available_parallelism()
             .unwrap()
             .get()
             .to_string(),
-    );
+    ) };
 
     // point to CC and CXX binaries on macOS
     if cfg!(all(feature = "mpi", target_os = "macos")) {
-        env::set_var("CC", "/opt/homebrew/bin/mpicc");
-        env::set_var("CXX", "/opt/homebrew/bin/mpicxx");
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("CC", "/opt/homebrew/bin/mpicc") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("CXX", "/opt/homebrew/bin/mpicxx") };
     }
 
     // Bindings
