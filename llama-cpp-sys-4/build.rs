@@ -194,6 +194,7 @@ fn main() {
         // "fatal error: 'string' file not found" on macOS
         .clang_arg("-xc++")
         .clang_arg("-std=c++11")
+        .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
