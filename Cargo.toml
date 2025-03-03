@@ -14,7 +14,7 @@ thiserror = "2.0.12"
 tracing = "0.1"
 
 # examples and benchmarks
-hf-hub = { version = "0.4.1" }
+hf-hub = { version = "0.4.2" }
 criterion = "0.5.1"
 pprof = "0.14.0"
 bindgen = "0.71.1"
