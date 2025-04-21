@@ -20,7 +20,7 @@ pprof = "0.14.0"
 bindgen = "0.71.1"
 cc = "1.2.19"
 anyhow = "1.0.98"
-clap = "4.5.36"
+clap = "4.5.37"
 encoding_rs = "0.8.35"
 
 [workspace.lints.rust]
