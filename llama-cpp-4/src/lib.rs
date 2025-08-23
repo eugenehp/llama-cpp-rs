@@ -13,6 +13,7 @@
 //!
 //! - `cuda` enables CUDA gpu support.
 //! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
+//! - `multimodal` enables support for processing images and audio alongside text.
 use std::ffi::NulError;
 use std::fmt::Debug;
 use std::num::NonZeroI32;
@@ -30,6 +31,9 @@ pub mod model;
 pub mod sampling;
 pub mod token;
 pub mod token_type;
+
+#[cfg(feature = "multimodal")]
+pub mod multimodal;
 
 /// A failable result from a llama.cpp function.
 pub type Result<T> = std::result::Result<T, LLamaCppError>;

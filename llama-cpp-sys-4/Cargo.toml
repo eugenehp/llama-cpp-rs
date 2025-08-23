@@ -58,6 +58,11 @@ include = [
     "/llama.cpp/cmake",
     "/llama.cpp/ggml/cmake",
     "/llama.cpp/common/cmake",
+    
+    # Multimodal support files (included when multimodal feature is enabled)
+    "/llama.cpp/tools/mtmd/*.h",
+    "/llama.cpp/tools/mtmd/*.cpp",
+    "/llama.cpp/tools/mtmd/CMakeLists.txt",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -78,3 +83,4 @@ vulkan = []
 native = []
 openmp = []
 mpi = []
+multimodal = []

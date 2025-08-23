@@ -192,7 +192,7 @@ fn main() {
     }
 
     // Bindings
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .generate_comments(true)
         // https://github.com/rust-lang/rust-bindgen/issues/1834
@@ -225,7 +225,30 @@ fn main() {
         .opaque_type("llama_sampler_chain")
         // .opaque_type("llama_context_deleter")
         // .blocklist_type("llama_model_deleter")
-        .opaque_type("std::.*")
+        .opaque_type("std::.*");
+    
+    // Add multimodal support if feature is enabled
+    if cfg!(feature = "multimodal") {
+        builder = builder
+            .clang_arg("-DMULTIMODAL_SUPPORT")
+            .clang_arg(format!("-I{}", llama_dst.join("tools/mtmd").display()))
+            .allowlist_function("mtmd_.*")
+            .allowlist_type("mtmd_.*")
+            .allowlist_function("clip_.*")
+            .allowlist_type("clip_.*")
+            .allowlist_item("MTMD_.*")
+            .opaque_type("mtmd_context")
+            .opaque_type("mtmd_bitmap")
+            .opaque_type("mtmd_image_tokens")
+            .opaque_type("mtmd_input_chunk")
+            .opaque_type("mtmd_input_chunks")
+            .opaque_type("clip_ctx")
+            .opaque_type("clip_image_u8")
+            .opaque_type("clip_image_f32")
+            .opaque_type("clip_image_f32_batch");
+    }
+    
+    let bindings = builder
         // .layout_tests(false)
         // .derive_default(true)
         // .enable_cxx_namespaces()
@@ -261,6 +284,14 @@ fn main() {
     config.define("LLAMA_BUILD_TESTS", "OFF");
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
+    
+    // Enable multimodal support if feature is enabled
+    // Note: mtmd is built as part of LLAMA_BUILD_TOOLS
+    if cfg!(feature = "multimodal") {
+        config.define("LLAMA_BUILD_TOOLS", "ON");
+    } else {
+        config.define("LLAMA_BUILD_TOOLS", "OFF");
+    }
 
     config.define(
         "BUILD_SHARED_LIBS",
