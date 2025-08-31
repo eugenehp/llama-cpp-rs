@@ -6,6 +6,7 @@ members = [
     "examples/embeddings",
     "examples/simple",
     "examples/chat",
+    "examples/multimodal",
 ]
 
 [workspace.dependencies]
