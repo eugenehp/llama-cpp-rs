@@ -192,7 +192,7 @@ fn main() {
     }
 
     // Bindings
-    let bindings = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .generate_comments(true)
         // https://github.com/rust-lang/rust-bindgen/issues/1834
@@ -202,6 +202,8 @@ fn main() {
         // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
+        .clang_arg(format!("-I{}", llama_dst.join("src").display()))
+        .clang_arg(format!("-I{}", llama_dst.join("common").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
         .allowlist_function("ggml_.*")
@@ -225,7 +227,17 @@ fn main() {
         .opaque_type("llama_sampler_chain")
         // .opaque_type("llama_context_deleter")
         // .blocklist_type("llama_model_deleter")
-        .opaque_type("std::.*")
+        .opaque_type("std::.*");
+    
+    // Add RPC support if feature is enabled
+    if cfg!(feature = "rpc") {
+        builder = builder
+            .clang_arg("-DRPC_SUPPORT")
+            .allowlist_function("ggml_backend_rpc_.*")
+            .allowlist_type("ggml_backend_rpc_.*");
+    }
+    
+    let bindings = builder
         // .layout_tests(false)
         // .derive_default(true)
         // .enable_cxx_namespaces()
@@ -326,6 +338,10 @@ fn main() {
 
     if cfg!(all(feature = "mpi")) {
         config.define("LLAMA_MPI", "ON");
+    }
+
+    if cfg!(feature = "rpc") {
+        config.define("GGML_RPC", "ON");
     }
 
     // General
