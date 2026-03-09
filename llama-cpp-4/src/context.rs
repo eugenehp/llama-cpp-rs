@@ -362,12 +362,15 @@ impl<'model> LlamaContext<'model> {
         scale: f32,
     ) -> Result<(), LlamaLoraAdapterSetError> {
         let err_code = unsafe {
-            // after renaming happened
-            // https://github.com/ggerganov/llama.cpp/commit/afa8a9ec9b520137bbd1ca6838cda93ee39baf20#diff-201cbc8fd17750764ed4a0862232e81503550c201995e16dc2e2766754eaa57aR1016
-            llama_cpp_sys_4::llama_set_adapter_lora(
+            // llama_set_adapter_lora / llama_rm_adapter_lora were replaced by llama_set_adapters_lora
+            // which takes a full list of adapters + scales at once (b8249+)
+            let mut adapter_ptr = adapter.lora_adapter.as_ptr();
+            let mut scale_val = scale;
+            llama_cpp_sys_4::llama_set_adapters_lora(
                 self.context.as_ptr(),
-                adapter.lora_adapter.as_ptr(),
-                scale,
+                &mut adapter_ptr,
+                1,
+                &mut scale_val,
             )
         };
         if err_code != 0 {
@@ -378,19 +381,25 @@ impl<'model> LlamaContext<'model> {
         Ok(())
     }
 
-    /// Remove a lora adapter.
+    /// Remove all lora adapters from the context.
+    ///
+    /// Note: as of llama.cpp b8249 the per-adapter remove API was replaced by
+    /// [`llama_set_adapters_lora`] which operates on the full adapter list at once.
+    /// Calling this function clears **all** adapters currently set on the context.
     ///
     /// # Errors
     ///
     /// See [`LlamaLoraAdapterRemoveError`] for more information.
     pub fn lora_adapter_remove(
         &self,
-        adapter: &mut LlamaLoraAdapter,
+        _adapter: &mut LlamaLoraAdapter,
     ) -> Result<(), LlamaLoraAdapterRemoveError> {
         let err_code = unsafe {
-            llama_cpp_sys_4::llama_rm_adapter_lora(
+            llama_cpp_sys_4::llama_set_adapters_lora(
                 self.context.as_ptr(),
-                adapter.lora_adapter.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
             )
         };
         if err_code != 0 {

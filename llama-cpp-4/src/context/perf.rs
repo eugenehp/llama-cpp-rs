@@ -47,6 +47,7 @@ impl PerfContextData {
                 // n_sample,
                 n_p_eval,
                 n_eval,
+                n_reused: 0,
             },
         }
     }

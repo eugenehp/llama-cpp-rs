@@ -1,7 +1,7 @@
 //! Safe wrapper around `llama_sampler`.
 
 use std::borrow::Borrow;
-use std::ffi::CString;
+use std::ffi::{c_char, CString};
 use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 
@@ -11,12 +11,6 @@ use crate::context::LlamaContext;
 use crate::model::LlamaModel;
 use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
-
-#[cfg(target_os = "android")]
-type CChar = u8;
-
-#[cfg(not(target_os = "android"))]
-type CChar = i8;
 
 /// A safe wrapper around `llama_sampler`.
 pub struct LlamaSampler {
@@ -350,7 +344,9 @@ impl LlamaSampler {
             .into_iter()
             .map(|s| CString::new(s.as_ref()).unwrap())
             .collect();
-        let mut seq_breaker_pointers: Vec<*const CChar> =
+        // CString::as_ptr() returns *const c_char, which matches what the binding
+        // expects on every platform (signed on macOS/x86 Linux, unsigned on musl ARM).
+        let mut seq_breaker_pointers: Vec<*const c_char> =
             seq_breakers.iter().map(|s| s.as_ptr()).collect();
 
         let sampler = unsafe {

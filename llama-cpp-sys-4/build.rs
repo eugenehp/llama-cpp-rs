@@ -198,7 +198,7 @@ fn main() {
         // https://github.com/rust-lang/rust-bindgen/issues/1834
         // "fatal error: 'string' file not found" on macOS
         .clang_arg("-xc++")
-        .clang_arg("-std=c++11")
+        .clang_arg("-std=c++17")
         // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
@@ -206,6 +206,21 @@ fn main() {
         .clang_arg(format!("-I{}", llama_dst.join("common").display()))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
+        // Do not derive PartialEq on types that contain function-pointer fields.
+        // Deriving PartialEq on those triggers the
+        // `unpredictable_function_pointer_comparisons` lint on newer rustc
+        // because function addresses are not stable across codegen units.
+        // macOS FILE internals (function pointers _close/_read/_seek/_write)
+        .no_partialeq("__sFILE")
+        .no_partialeq("ggml_cplan")
+        .no_partialeq("ggml_type_traits")
+        .no_partialeq("ggml_type_traits_cpu")
+        .no_partialeq("ggml_context")
+        .no_partialeq("ggml_opt_params")
+        .no_partialeq("llama_model_params")
+        .no_partialeq("llama_context_params")
+        .no_partialeq("llama_sampler_i")
+        .no_partialeq("llama_opt_params")
         .allowlist_function("ggml_.*")
         .allowlist_type("ggml_.*")
         .allowlist_function("llama_.*")
@@ -376,9 +391,17 @@ fn main() {
         );
     }
 
-    // OpenMP
-    if cfg!(feature = "openmp") {
-        if target.contains("gnu") {
+    // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
+    // This can happen even without the "openmp" feature because cmake's FindOpenMP
+    // is invoked unconditionally on some platforms (e.g. ARM) when the
+    // ggml-cpu CMakeLists includes OpenMP support at the variant level.
+    let cmake_cache_path = out_dir.join("build").join("CMakeCache.txt");
+    let openmp_enabled_in_cmake = std::fs::read_to_string(&cmake_cache_path)
+        .map(|contents| contents.contains("GGML_OPENMP_ENABLED:INTERNAL=ON"))
+        .unwrap_or(false);
+
+    if cfg!(feature = "openmp") || openmp_enabled_in_cmake {
+        if target.contains("gnu") || target.contains("musl") {
             println!("cargo:rustc-link-lib=gomp");
         }
     }
