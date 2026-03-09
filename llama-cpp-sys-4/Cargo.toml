@@ -60,11 +60,6 @@ include = [
     "/llama.cpp/common/cmake",
 ]
 
-exclude = [
-    "llama.cpp/ggml/src/ggml-kompute/kompute/examples/*",
-    "llama.cpp/ggml/src/ggml-kompute/kompute/test/*"
-]
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
