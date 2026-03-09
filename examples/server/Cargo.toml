@@ -8,6 +8,7 @@ description = "Minimal OpenAI-compatible chat completion server"
 [dependencies]
 llama-cpp-4 = { path = "../../llama-cpp-4" }
 actix-web = "4"
+actix-multipart = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 encoding_rs = { workspace = true }
@@ -18,14 +19,20 @@ tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["sync", "rt"] }
 futures-util = "0.3"
+# Optional dependencies pulled in by the `mtmd` feature.
+base64  = { version = "0.22", optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
 
 [dev-dependencies]
-reqwest = { version = "0.13.2", features = ["blocking", "json"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [features]
-cuda = ["llama-cpp-4/cuda"]
-metal = ["llama-cpp-4/metal"]
+cuda   = ["llama-cpp-4/cuda"]
+metal  = ["llama-cpp-4/metal"]
 vulkan = ["llama-cpp-4/vulkan"]
+# Enables multimodal (image / audio) support via the mtmd library.
+# Requires a --mmproj <path> argument at runtime.
+mtmd   = ["llama-cpp-4/mtmd", "dep:base64", "dep:reqwest"]
 
 [lints]
 workspace = true

@@ -7,3 +7,8 @@
 #ifdef RPC_SUPPORT
 #include "ggml-rpc.h"
 #endif
+
+#ifdef MTMD_SUPPORT
+#include "mtmd.h"
+#include "mtmd-helper.h"
+#endif

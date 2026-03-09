@@ -14,6 +14,7 @@
 //! - `cuda` enables CUDA gpu support.
 //! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
 //! - `rpc` enables RPC backend support for distributed inference across multiple machines.
+//! - `mtmd` enables multimodal (image + audio) support via `libmtmd`.
 use std::ffi::NulError;
 use std::fmt::Debug;
 use std::num::NonZeroI32;
@@ -34,6 +35,9 @@ pub mod token_type;
 
 #[cfg(feature = "rpc")]
 pub mod rpc;
+
+#[cfg(feature = "mtmd")]
+pub mod mtmd;
 
 /// A failable result from a llama.cpp function.
 pub type Result<T> = std::result::Result<T, LLamaCppError>;

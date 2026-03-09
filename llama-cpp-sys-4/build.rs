@@ -322,6 +322,17 @@ fn main() {
             .allowlist_function("ggml_backend_rpc_.*")
             .allowlist_type("ggml_backend_rpc_.*");
     }
+
+    // Add mtmd (multimodal) support if feature is enabled
+    if cfg!(feature = "mtmd") {
+        builder = builder
+            .clang_arg("-DMTMD_SUPPORT")
+            .clang_arg(format!("-I{}", llama_dst.join("tools/mtmd").display()))
+            .allowlist_function("mtmd_.*")
+            .allowlist_type("mtmd_.*")
+            .allowlist_item("MTMD_.*")
+            .no_partialeq("mtmd_context_params");
+    }
     
     let bindings = builder
         // .layout_tests(false)
@@ -359,7 +370,16 @@ fn main() {
     config.define("LLAMA_BUILD_TESTS", "OFF");
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
-    config.define("LLAMA_BUILD_TOOLS", "OFF");
+
+    // Build tools (including the mtmd library) only when the mtmd feature is
+    // requested.  Common is also required because the CMakeLists gate for
+    // tools is `if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)`.
+    if cfg!(feature = "mtmd") {
+        config.define("LLAMA_BUILD_TOOLS", "ON");
+        config.define("LLAMA_BUILD_COMMON", "ON");
+    } else {
+        config.define("LLAMA_BUILD_TOOLS", "OFF");
+    }
 
     config.define(
         "BUILD_SHARED_LIBS",
