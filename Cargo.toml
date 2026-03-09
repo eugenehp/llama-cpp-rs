@@ -17,8 +17,8 @@ tracing = "0.1"
 
 # examples and benchmarks
 hf-hub = { version = "0.5.0" }
-criterion = "0.5.1"
-pprof = "0.14.0"
+criterion = "0.8.2"
+pprof = "0.15.0"
 bindgen = "0.72.1"
 cc = "1.2.56"
 anyhow = "1.0.102"
