@@ -186,7 +186,15 @@ curl http://localhost:8080/v1/chat/completions \
 ## Multimodal Images:
 
 ```shell
-cargo run -p openai-server --features mtmd -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+cargo run -p openai-server --features mtmd --release -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+```
+
+OR
+
+```shell
+cargo run -p openai-server --features mtmd -- \
+--mmproj mmproj-BF16.gguf \
+hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
 ```
 
 ```shell
@@ -203,6 +211,25 @@ curl http://localhost:8080/v1/chat/completions \
 }],
 "max_tokens": 256
 }'
+```
+
+Working end to end:
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-d '{
+"messages": [{
+"role": "user",
+"content": [
+{"type": "text", "text": "What is in this picture?"},
+{"type": "image_url", "image_url": {"url":
+"https://upload.wikimedia.org/wikipedia/commons/6/68/Orange_tabby_cat_sitting_on_fallen_leaves-Hisashi-01A.jpg"}}
+]
+}],
+"max_tokens": 256
+}'
+{"choices":[{"finish_reason":"length","index":0,"message":{"content":"<think>\n\n</think>\n\nThis picture feature a **ginger and white cat** sitting upright outdoor on a bed of dry, brown leaves.\n\nHere’s a detaile breakdo:\n\n- **Subject**: The main focus is the cat, which has a classic “orange tabby and white” coat pattern.\n  - Its fur is mostly ginger (orange) with distinc darker orange stripes — typical of a tabby.\n  - It has a white face mask around its nose and mouth, a white chest and belly, and white paws (“socks”).\n  - Its eyes are strikin greenish-yellow, and it’s looking directl at the camera with an alert, calm express.\n  - The ears are perked up, and whiskers are clearly visible.\n\n- **Setting**: The cat is seated on the ground covered in fallen, dried leaves — suggest an autumn or early winter scene, possibl in a garden or wooded area.\n  - The backgro is softly blurred (shallow depth of field), drawing attenti to the cat while hinting at more foliage or grass behind it.\n\n- **Photography Style**: The image is well-composed, with natural lightin that highlig the texture of the cat’s fur and the rich colors. The bokeh effect","role":"assistant"}}],"created":1773097066,"id":"chatcmpl-1773097066","model":"Qwen3.5-27B-Q4_0","object":"chat.completion","usage":{"completion_tokens":256,"prompt_tokens":0,"total_tokens":256}}% 
 ```
 
 ---
@@ -222,13 +249,13 @@ If you use gpu-fft in academic work, please cite it as:
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.0},
+  version   = {0.2.1},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
 
 **Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.0).
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.1).
 > https://github.com/eugenehp/llama-cpp-rs
 
 ## License

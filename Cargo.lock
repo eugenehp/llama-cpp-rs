@@ -450,7 +450,7 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chat"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -797,7 +797,7 @@ checksum = "3dca9240753cf90908d7e4aac30f630662b02aebaa1b58a3cadabdb23385b58b"
 
 [[package]]
 name = "embeddings"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1523,7 +1523,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "bindgen",
  "cc",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "mtmd"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1692,7 +1692,7 @@ checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
 
 [[package]]
 name = "openai-server"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "actix-multipart",
  "actix-web",
@@ -2277,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "simple"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
