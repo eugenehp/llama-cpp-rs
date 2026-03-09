@@ -327,6 +327,137 @@ impl ModelSource {
 }
 
 // ---------------------------------------------------------------------------
+// mmproj auto-detection and download
+// ---------------------------------------------------------------------------
+
+/// Try to download the best mmproj GGUF from a HuggingFace repo.
+///
+/// Lists the repo's files, picks the best `mmproj-*.gguf` by the same
+/// preference order as [`find_mmproj_in_dir`], downloads (or retrieves from
+/// local cache) and returns its path.
+#[cfg(feature = "mtmd")]
+fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
+    let api = match ApiBuilder::new().with_progress(true).build() {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!("Could not build HF API client for mmproj lookup: {e}");
+            return None;
+        }
+    };
+    let api_repo = api.model(repo.to_string());
+
+    let info = match api_repo.info() {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!("Could not fetch repo info for '{repo}': {e}");
+            return None;
+        }
+    };
+
+    // Collect all mmproj GGUF filenames from the repo listing.
+    let mut candidates: Vec<String> = info
+        .siblings
+        .into_iter()
+        .map(|s| s.rfilename)
+        .filter(|name| name.starts_with("mmproj") && name.ends_with(".gguf"))
+        .collect();
+
+    if candidates.is_empty() {
+        tracing::warn!(
+            "No mmproj-*.gguf files found in repo '{repo}'. \
+             The repo may not include a vision projector."
+        );
+        return None;
+    }
+
+    // Sort by preference (same order as MMPROJ_PREFER).
+    candidates.sort_by(|a, b| {
+        let score = |name: &str| {
+            MMPROJ_PREFER
+                .iter()
+                .position(|suf| name.ends_with(suf))
+                .unwrap_or(MMPROJ_PREFER.len())
+        };
+        score(a).cmp(&score(b)).then_with(|| a.cmp(b))
+    });
+
+    let chosen = &candidates[0];
+    tracing::info!(
+        "Downloading mmproj '{chosen}' from '{repo}'{}…",
+        if candidates.len() > 1 {
+            format!(" ({} candidates; use --mmproj to override)", candidates.len())
+        } else {
+            String::new()
+        }
+    );
+
+    match api_repo.get(chosen) {
+        Ok(path) => {
+            tracing::info!("mmproj cached at: {}", path.display());
+            Some(path)
+        }
+        Err(e) => {
+            tracing::warn!("Failed to download '{chosen}' from '{repo}': {e}");
+            None
+        }
+    }
+}
+
+/// Preference order when multiple mmproj files are found in the same directory.
+/// Earlier entries win.
+const MMPROJ_PREFER: &[&str] = &["-F16.gguf", "-f16.gguf", "-BF16.gguf", "-bf16.gguf", "-F32.gguf", "-f32.gguf"];
+
+/// Scan `dir` for files whose names start with `mmproj` and end with `.gguf`.
+/// Returns the best match according to [`MMPROJ_PREFER`], or the first
+/// alphabetically if none of the preferred suffixes match.
+///
+/// Skips the directory silently if it cannot be read.
+#[cfg(feature = "mtmd")]
+fn find_mmproj_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().and_then(|e| e.to_str()) == Some("gguf")
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("mmproj"))
+                    .unwrap_or(false)
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    // Sort by preference, then alphabetically for a stable result.
+    candidates.sort_by(|a, b| {
+        let score = |p: &PathBuf| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            MMPROJ_PREFER
+                .iter()
+                .position(|suf| name.ends_with(suf))
+                .unwrap_or(MMPROJ_PREFER.len())
+        };
+        score(a).cmp(&score(b)).then_with(|| a.cmp(b))
+    });
+
+    let chosen = candidates.remove(0);
+    if !candidates.is_empty() {
+        tracing::info!(
+            "Auto-detected mmproj: {} ({} other candidate(s) in same dir; \
+             use --mmproj to override)",
+            chosen.display(),
+            candidates.len()
+        );
+    } else {
+        tracing::info!("Auto-detected mmproj: {}", chosen.display());
+    }
+    Some(chosen)
+}
+
+// ---------------------------------------------------------------------------
 // File store
 // ---------------------------------------------------------------------------
 
@@ -562,6 +693,7 @@ impl FinishReason {
 /// Decode a `data:` URI or fetch an `http(s)://` URL, returning raw bytes.
 #[cfg(feature = "mtmd")]
 async fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, HttpError> {
+    tracing::info!("Fetching image: {}…", &url[..url.len().min(120)]);
     if let Some(rest) = url.strip_prefix("data:") {
         // data:[<mediatype>][;base64],<data>
         let comma = rest
@@ -571,20 +703,80 @@ async fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, HttpError> {
         let data = &rest[comma + 1..];
         if meta.ends_with(";base64") {
             use base64::Engine as _;
-            base64::engine::general_purpose::STANDARD
+            let bytes = base64::engine::general_purpose::STANDARD
                 .decode(data)
-                .map_err(|e| bad_request(format!("base64 decode error: {e}")))
+                .map_err(|e| bad_request(format!("base64 decode error: {e}")))?;
+            tracing::info!("Decoded {} bytes from data URI", bytes.len());
+            Ok(bytes)
         } else {
             // Plain text / URL-encoded — treat the raw bytes as the payload.
             Ok(data.as_bytes().to_vec())
         }
     } else if url.starts_with("http://") || url.starts_with("https://") {
-        let bytes = reqwest::get(url)
+        // Many CDNs (including Wikimedia) block requests that lack a
+        // browser-like User-Agent and return an HTML error page instead of the
+        // image.  stb_image then fails because it receives HTML, not JPEG/PNG.
+        let client = reqwest::Client::builder()
+            .user_agent(
+                "Mozilla/5.0 (compatible; llama-cpp-rs; \
+                 +https://github.com/utilityai/llama-cpp-rs)",
+            )
+            .build()
+            .map_err(|e| internal_error(format!("reqwest client: {e}")))?;
+
+        let resp = client
+            .get(url)
+            .send()
             .await
-            .map_err(|e| bad_request(format!("failed to fetch image URL: {e}")))?
+            .map_err(|e| bad_request(format!("failed to fetch image URL: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(bad_request(format!(
+                "image URL returned HTTP {status}: {url}"
+            )));
+        }
+
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .to_owned();
+
+        let bytes = resp
             .bytes()
             .await
             .map_err(|e| bad_request(format!("failed to read image response: {e}")))?;
+
+        tracing::info!(
+            "Downloaded {} bytes (content-type: {content_type}) from URL",
+            bytes.len()
+        );
+
+        // Anything under 1 KB cannot be a real image — print the body so the
+        // user can see what the server actually returned (redirect HTML, JSON
+        // error, Cloudflare challenge, etc.).
+        if bytes.len() < 1024 {
+            let preview = std::str::from_utf8(&bytes).unwrap_or("(binary)");
+            return Err(bad_request(format!(
+                "image URL returned only {} bytes — not a valid image file. \
+                 Response body: {preview:?}",
+                bytes.len()
+            )));
+        }
+
+        // Warn if the response looks like HTML rather than binary image data.
+        // JPEG magic = 0xFF 0xD8; PNG = 0x89 0x50 0x4E; GIF = 0x47 0x49 0x46.
+        if bytes.starts_with(b"<!") || bytes.starts_with(b"<h") || bytes.starts_with(b"<H") {
+            return Err(bad_request(format!(
+                "image URL returned HTML instead of an image. \
+                 The server likely rejected the request (check the URL and any auth). \
+                 First 200 bytes: {:?}",
+                std::str::from_utf8(&bytes[..bytes.len().min(200)]).unwrap_or("(invalid utf-8)")
+            )));
+        }
+
         Ok(bytes.to_vec())
     } else {
         Err(bad_request(
@@ -677,8 +869,15 @@ where
         .tokenize(&input_text, &bitmap_refs, &mut chunks)
         .map_err(|e| internal_error(format!("mtmd_tokenize: {e}")))?;
 
+    tracing::info!(
+        "run_inference_multimodal: {} image(s), prompt_len={}",
+        params.image_bytes.len(),
+        params.prompt.len()
+    );
+
     // ── Evaluate all chunks (encodes images + decodes everything) ─────────────
     let mut n_past: i32 = 0;
+    tracing::info!("Calling eval_chunks…");
     mtmd_ctx
         .eval_chunks(
             ctx.as_ptr(),
@@ -690,6 +889,7 @@ where
             &mut n_past,
         )
         .map_err(|e| internal_error(format!("mtmd_eval_chunks: {e}")))?;
+    tracing::info!("eval_chunks done, n_past={n_past}");
 
     // ── Sampler chain ─────────────────────────────────────────────────────────
     let mut chain: Vec<LlamaSampler> = Vec::new();
@@ -1102,17 +1302,25 @@ async fn chat_completions(
     #[cfg(feature = "mtmd")]
     let (base_msg_pairs, image_sources) = {
         let marker = MtmdContext::default_marker();
+        tracing::debug!("mtmd media marker: {:?}", marker);
         let (pairs, sources) = match normalise_messages_multimodal(&parsed, marker) {
             Ok(r) => r,
             Err(e) => return error_response(e),
         };
+        if !sources.is_empty() {
+            tracing::info!(
+                n_images = sources.len(),
+                mtmd_ctx_present = state.mtmd_ctx.is_some(),
+                "Detected multimodal content in request"
+            );
+        }
         if !sources.is_empty() && state.mtmd_ctx.is_none() {
             tracing::warn!(
                 n_images = sources.len(),
                 "Request contains image(s) but the server was started without --mmproj. \
                  Images will be IGNORED and the prompt processed as plain text. \
                  Restart with `--mmproj <path-to-mmproj.gguf>` and a vision-capable model \
-                 (e.g. Qwen2-VL, LLaVA, Llama-3.2-Vision, MiniCPM-V) to enable multimodal inference."
+                 to enable multimodal inference."
             );
             // Fall back to the text-only normaliser so markers are not left in the prompt.
             match normalise_messages(&parsed) {
@@ -1163,8 +1371,16 @@ async fn chat_completions(
     // ── Resolve image sources → raw bytes (mtmd path only) ───────────────────
     #[cfg(feature = "mtmd")]
     if !image_sources.is_empty() {
+        tracing::info!("Resolving {} image source(s)…", image_sources.len());
         match resolve_image_sources(image_sources, &state.file_store).await {
-            Ok(bytes) => params.image_bytes = bytes,
+            Ok(bytes) => {
+                tracing::info!(
+                    "Images ready: {} image(s), sizes: {:?}",
+                    bytes.len(),
+                    bytes.iter().map(|b| b.len()).collect::<Vec<_>>()
+                );
+                params.image_bytes = bytes;
+            }
             Err(e) => return error_response(e),
         }
     }
@@ -1900,6 +2116,14 @@ async fn main() -> std::io::Result<()> {
 
     let args = Args::parse();
 
+    // Capture the HF repo ID before `args.model` is consumed by `resolve()`.
+    // Used later to auto-download the matching mmproj from the same repo.
+    #[cfg(feature = "mtmd")]
+    let hf_repo: Option<String> = match &args.model {
+        ModelSource::HuggingFace { repo, .. } => Some(repo.clone()),
+        ModelSource::Local { .. } => None,
+    };
+
     let model_path = args
         .model
         .resolve()
@@ -1942,29 +2166,64 @@ async fn main() -> std::io::Result<()> {
 
     // ── Multimodal projector (optional) ───────────────────────────────────────
     #[cfg(feature = "mtmd")]
-    let mtmd_ctx: Option<MtmdContext> = if let Some(ref mmproj_path) = args.mmproj {
-        tracing::info!("Loading mmproj: {}", mmproj_path.display());
-        let ctx_params = MtmdContextParams::default()
-            .use_gpu(!args.no_mmproj_gpu)
-            .n_threads(args.mmproj_n_threads);
-        match MtmdContext::init_from_file(mmproj_path, &model, ctx_params) {
-            Ok(ctx) => {
-                tracing::info!(
-                    "  vision={} audio={}",
-                    ctx.supports_vision(),
-                    ctx.supports_audio()
-                );
-                Some(ctx)
+    let mtmd_ctx: Option<MtmdContext> = {
+        tracing::info!("Model resolved to: {}", model_path.display());
+        let model_dir = model_path.parent().unwrap_or(std::path::Path::new("."));
+        tracing::info!("Scanning for mmproj in: {}", model_dir.display());
+
+        // Resolve the mmproj path:
+        //  1. --mmproj given as an absolute/relative path → use as-is.
+        //  2. --mmproj given as a bare filename (no directory component) →
+        //     look for it next to the model file.
+        //  3. --mmproj not given → scan the model's directory for any
+        //     `mmproj-*.gguf` and pick the best one automatically.
+        let mmproj_path: Option<PathBuf> = match &args.mmproj {
+            Some(p) if p.components().count() == 1 && p.parent() == Some(std::path::Path::new("")) => {
+                // bare filename — resolve relative to model directory
+                let candidate = model_path.parent()
+                    .map(|d| d.join(p))
+                    .filter(|f| f.exists());
+                if candidate.is_none() {
+                    tracing::warn!(
+                        "mmproj '{}' not found next to model ({}); skipping multimodal",
+                        p.display(), model_dir.display()
+                    );
+                }
+                candidate
             }
-            Err(e) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("failed to load mmproj '{}': {e}", mmproj_path.display()),
-                ))
+            Some(p) => Some(p.clone()),
+            None => {
+                // 1. Scan the local cache directory (fast, no network).
+                find_mmproj_in_dir(model_dir)
+                // 2. Fall back: download from the same HuggingFace repo.
+                .or_else(|| hf_repo.as_deref().and_then(download_mmproj_from_hf))
             }
+        };
+
+        if let Some(ref p) = mmproj_path {
+            tracing::info!("Loading mmproj: {}", p.display());
+            let ctx_params = MtmdContextParams::default()
+                .use_gpu(!args.no_mmproj_gpu)
+                .n_threads(args.mmproj_n_threads);
+            match MtmdContext::init_from_file(p, &model, ctx_params) {
+                Ok(ctx) => {
+                    tracing::info!(
+                        "  vision={} audio={}",
+                        ctx.supports_vision(),
+                        ctx.supports_audio()
+                    );
+                    Some(ctx)
+                }
+                Err(e) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("failed to load mmproj '{}': {e}", p.display()),
+                    ))
+                }
+            }
+        } else {
+            None
         }
-    } else {
-        None
     };
 
     #[cfg(not(feature = "mtmd"))]
