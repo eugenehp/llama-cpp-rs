@@ -7,6 +7,7 @@ members = [
     "examples/simple",
     "examples/chat",
     "examples/split_model",
+    "examples/server",
 ]
 
 [workspace.dependencies]
@@ -21,7 +22,7 @@ pprof = "0.14.0"
 bindgen = "0.72.1"
 cc = "1.2.56"
 anyhow = "1.0.102"
-clap = "4.5.60"
+clap = { version = "4.5.60", features = ["derive"] }
 encoding_rs = "0.8.35"
 
 [workspace.lints.rust]

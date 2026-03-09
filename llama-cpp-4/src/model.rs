@@ -808,7 +808,7 @@ impl LlamaModel {
         &self,
         _: &LlamaBackend,
         params: LlamaContextParams,
-    ) -> Result<LlamaContext, LlamaContextLoadError> {
+    ) -> Result<LlamaContext<'_>, LlamaContextLoadError> {
         let context_params = params.context_params;
         let context = unsafe { llama_new_context_with_model(self.model.as_ptr(), context_params) };
         let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;

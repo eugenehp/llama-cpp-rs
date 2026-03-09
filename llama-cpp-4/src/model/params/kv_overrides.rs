@@ -78,7 +78,7 @@ pub struct KvOverrides<'a> {
 }
 
 impl KvOverrides<'_> {
-    pub(super) fn new(model_params: &LlamaModelParams) -> KvOverrides {
+    pub(super) fn new(model_params: &LlamaModelParams) -> KvOverrides<'_> {
         KvOverrides { model_params }
     }
 }
