@@ -388,40 +388,7 @@ fn parse_single_call(json: &str) -> Option<ToolCall> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// GBNF grammar for forced tool calling
-// ---------------------------------------------------------------------------
 
-/// A GBNF grammar that constrains the model output to one or more
-/// `<tool_call>…</tool_call>` blocks containing a valid JSON object.
-/// Used when `tool_choice` is `Required` or a specific function is forced.
-///
-/// Optionally limits the `"name"` field to a fixed string when a specific
-/// function is required.
-pub fn tool_call_grammar(forced_name: Option<&str>) -> String {
-    let name_rule = if let Some(n) = forced_name {
-        // Literal string for the forced name.
-        format!("\"\\\"{}\\\"\"", n.replace('"', "\\\""))
-    } else {
-        // Any JSON string.
-        "json-string".to_owned()
-    };
-
-    format!(
-        r#"root      ::= tool-call+ trailing-ws
-tool-call ::= "<tool_call>" ws call-obj ws "</tool_call>" ws
-call-obj  ::= "{{" ws "\"name\"" ws ":" ws {name_rule} ws "," ws "\"arguments\"" ws ":" ws json-object ws "}}"
-json-object ::= "{{" ws (json-pair ("," ws json-pair)*)? "}}"
-json-pair   ::= json-string ws ":" ws json-value
-json-value  ::= json-object | json-array | json-string | json-number | "true" | "false" | "null"
-json-array  ::= "[" ws (json-value ("," ws json-value)*)? "]"
-json-string ::= "\"" ([^"\\] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F]))* "\""
-json-number ::= "-"? ([0-9] | [1-9] [0-9]*) ("." [0-9]+)? (([eE] [-+]? [0-9]+))?
-trailing-ws ::= [ \t\n\r]*
-ws          ::= [ \t\n\r]*
-"#
-    )
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -705,26 +672,6 @@ mod tests {
         });
         let msgs = normalise_messages(&req).unwrap();
         assert_eq!(msgs[0].1, "Hello world");
-    }
-
-    // ── tool_call_grammar ────────────────────────────────────────────────────
-
-    #[test]
-    fn grammar_is_valid_gbnf_string() {
-        let g = tool_call_grammar(None);
-        assert!(g.contains("root"));
-        assert!(g.contains("<tool_call>"));
-        assert!(g.contains("json-object"));
-    }
-
-    #[test]
-    fn grammar_forced_name_contains_literal() {
-        let g = tool_call_grammar(Some("get_weather"));
-        assert!(g.contains("get_weather"));
-        // The forced-name grammar should not contain the generic json-string
-        // rule for the name field (it should be a literal).
-        let without_name_rule = g.replace("json-string", "");
-        assert!(!without_name_rule.contains("json-string"));
     }
 
     // ── ToolDef round-trip ───────────────────────────────────────────────────

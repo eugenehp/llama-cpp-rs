@@ -1,7 +1,7 @@
-// #include "llama.cpp/include/llama-cpp.h"
+// Only include the public headers that ship in llama.cpp/include/.
+// llama-grammar.h and llama-sampler.h live in src/ (internal) — everything
+// we need from them is already re-exported through llama.h.
 #include "llama.h"
-#include "llama-grammar.h"
-#include "llama-sampler.h"
 #include "common.h"
 
 #ifdef RPC_SUPPORT

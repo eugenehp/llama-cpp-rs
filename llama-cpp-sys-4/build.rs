@@ -28,6 +28,48 @@ fn get_cargo_target_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Erro
     Ok(target_dir.to_path_buf())
 }
 
+/// Return a string that uniquely identifies the current state of the llama.cpp
+/// submodule so we know when a re-copy is needed.
+///
+/// Priority:
+/// 1. The commit hash from the submodule's git HEAD (most precise).
+/// 2. The mtime of `CMakeLists.txt` (fallback for non-git trees).
+fn llama_src_version(src: &Path) -> String {
+    // In a git submodule the `.git` entry is a *file* whose content is:
+    //   gitdir: ../../.git/modules/llama-cpp-sys-4/llama.cpp
+    let git_file = src.join(".git");
+    if git_file.is_file() {
+        if let Ok(text) = std::fs::read_to_string(&git_file) {
+            if let Some(rel) = text.strip_prefix("gitdir:").map(str::trim) {
+                let head_path = git_file.parent().unwrap().join(rel).join("HEAD");
+                if let Ok(head) = std::fs::read_to_string(&head_path) {
+                    // HEAD is either a commit hash or "ref: refs/heads/…"
+                    let head = head.trim();
+                    if head.starts_with("ref:") {
+                        // Resolve the ref to the actual commit hash.
+                        let ref_path = head
+                            .strip_prefix("ref:")
+                            .map(str::trim)
+                            .unwrap_or(head);
+                        let commit_path =
+                            git_file.parent().unwrap().join(rel).join(ref_path);
+                        if let Ok(hash) = std::fs::read_to_string(commit_path) {
+                            return hash.trim().to_owned();
+                        }
+                    }
+                    return head.to_owned();
+                }
+            }
+        }
+    }
+    // Fallback: modification time of the top-level CMakeLists.txt.
+    src.join("CMakeLists.txt")
+        .metadata()
+        .and_then(|m| m.modified())
+        .map(|t| format!("{t:?}"))
+        .unwrap_or_else(|_| "unknown".to_owned())
+}
+
 fn copy_folder(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("Failed to create dst directory");
     if cfg!(unix) {
@@ -167,9 +209,38 @@ fn main() {
     debug_log!("OUT_DIR: {}", out_dir.display());
     debug_log!("BUILD_SHARED: {}", build_shared_libs);
 
-    if !llama_dst.exists() {
+    // ── Source copy with version tracking ────────────────────────────────────
+    // The copy only ran when the OUT_DIR was fresh, so updating the submodule
+    // (which adds/removes files like ggml-cpu/) would silently use stale data.
+    // We now store the current submodule HEAD in a sentinel file and re-copy
+    // whenever it changes.
+    let sentinel = out_dir.join(".llama-src-version");
+    let current_version = llama_src_version(&llama_src);
+    let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
+    let needs_copy = !llama_dst.exists() || stored_version.trim() != current_version.trim();
+    if needs_copy {
+        if llama_dst.exists() {
+            debug_log!("Source version changed — removing stale OUT_DIR copy");
+            std::fs::remove_dir_all(&llama_dst).ok();
+        }
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
+        std::fs::write(&sentinel, &current_version)
+            .expect("failed to write source version sentinel");
+    }
+    // Tell cargo to rerun this script when the submodule HEAD changes.
+    // In a git submodule, llama.cpp/.git is a file pointing at the real HEAD.
+    let submodule_git = llama_src.join(".git");
+    if submodule_git.is_file() {
+        // .git file contains "gitdir: ../../.git/modules/llama-cpp-sys-4/llama.cpp"
+        if let Ok(contents) = std::fs::read_to_string(&submodule_git) {
+            if let Some(gitdir) = contents.strip_prefix("gitdir:").map(|s| s.trim()) {
+                let head = submodule_git.parent().unwrap().join(gitdir).join("HEAD");
+                if head.exists() {
+                    println!("cargo:rerun-if-changed={}", head.display());
+                }
+            }
+        }
     }
     // Speed up build
     // TODO: Audit that the environment access only happens in single-threaded code.

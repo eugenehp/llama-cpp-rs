@@ -169,7 +169,51 @@ cargo build          # build.rs regenerates bindings automatically
 
 ---
 
+### Quick test
+
+```shell
+cargo run -p openai-server -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+```
+
+Send request via CURL:
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-d '{"model":"default","messages":[{"role":"user","content":"What is 2+2?"}],"stream":false,"max_tokens":500}'
+```
+
+---
+
 ## Credits
 
 Originally derived from [llama-cpp-2](https://crates.io/crates/llama-cpp-2) — thanks to those contributors.  
 See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-quantized BitNet model support.
+
+## Citation
+
+If you use gpu-fft in academic work, please cite it as:
+
+**BibTeX**
+```bibtex
+@software{hauptmann2025gpufft,
+  author    = {Hauptmann, Eugene},
+  title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
+  year      = {2026},
+  version   = {1.0.0},
+  url       = {https://github.com/eugenehp/llama-cpp-rs},
+}
+```
+
+**Plain text (APA)**
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v1.0.0).
+> https://github.com/eugenehp/gpu-fft
+
+## License
+
+This project is licensed under the [MIT License](/LICENSE).
+
+## Copyright
+
+© 2025-2026, Eugene Hauptmann
+
