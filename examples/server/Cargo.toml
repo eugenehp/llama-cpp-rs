@@ -16,6 +16,8 @@ clap = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["sync", "rt"] }
+futures-util = "0.3"
 
 [features]
 cuda = ["llama-cpp-4/cuda"]
