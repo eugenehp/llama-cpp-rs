@@ -1588,10 +1588,12 @@ dependencies = [
  "anyhow",
  "clap",
  "encoding_rs",
+ "futures-util",
  "hf-hub",
  "llama-cpp-4",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]
