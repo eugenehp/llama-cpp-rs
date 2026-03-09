@@ -864,14 +864,14 @@ impl LlamaModel {
         chat: Vec<LlamaChatMessage>,
         add_ass: bool,
     ) -> Result<String, ApplyChatTemplateError> {
-        // Buffer is twice the length of messages per their recommendation
-        let message_length = chat.iter().fold(0, |acc, c| {
+        // Compute raw message byte total from the original LlamaChatMessage vec
+        // *before* we shadow `chat` with the sys-type vec below.
+        let message_length = chat.iter().fold(0usize, |acc, c| {
             acc + c.role.to_bytes().len() + c.content.to_bytes().len()
         });
-        let mut buff = vec![0; message_length * 4];
 
-        // Build our llama_cpp_sys_2 chat messages
-        let chat: Vec<llama_chat_message> = chat
+        // Build our llama_cpp_sys chat messages (raw pointers into CStrings).
+        let chat_sys: Vec<llama_chat_message> = chat
             .iter()
             .map(|c| llama_chat_message {
                 role: c.role.as_ptr(),
@@ -879,35 +879,57 @@ impl LlamaModel {
             })
             .collect();
 
-        // Set the tmpl pointer
+        // Set the tmpl pointer.
         let tmpl = tmpl.map(CString::new);
         let tmpl_ptr = match &tmpl {
             Some(str) => str.as_ref().map_err(Clone::clone)?.as_ptr(),
             None => std::ptr::null(),
         };
 
-        let formatted_chat = unsafe {
-            let res = llama_chat_apply_template(
-                // self.model.as_ptr(),
-                tmpl_ptr,
-                chat.as_ptr(),
-                chat.len(),
-                add_ass,
-                buff.as_mut_ptr(),
-                buff.len() as i32,
-            );
-            // A buffer twice the size should be sufficient for all models, if this is not the case for a new model, we can increase it
-            // The error message informs the user to contact a maintainer
-            if res > buff.len() as i32 {
+        // `message_length * 4` is far too small for models whose built-in chat
+        // template adds a long default system prompt (e.g. Qwen3.5 prepends
+        // ~80+ chars of markup even for a one-word user message).  Start with
+        // at least 4 KiB so short inputs like "hi" always have room.
+        //
+        // `llama_chat_apply_template` returns the number of bytes it *actually*
+        // needed when the buffer was too small, so we retry exactly once with
+        // that precise size rather than giving up immediately.
+        let mut buf_size = message_length.saturating_mul(4).max(4096);
+
+        for _ in 0..2 {
+            // Use i8 (c_char) directly so the pointer types match the binding.
+            let mut buff = vec![0i8; buf_size];
+            let res = unsafe {
+                llama_chat_apply_template(
+                    tmpl_ptr,
+                    chat_sys.as_ptr(),
+                    chat_sys.len(),
+                    add_ass,
+                    buff.as_mut_ptr(),
+                    buff.len() as i32,
+                )
+            };
+
+            if res < 0 {
                 return Err(ApplyChatTemplateError::BuffSizeError);
             }
-            Ok::<String, ApplyChatTemplateError>(
-                CStr::from_ptr(buff.as_mut_ptr())
+
+            let needed = res as usize;
+            if needed > buf_size {
+                // Buffer was too small — retry with the exact size llama.cpp reported.
+                buf_size = needed + 1; // +1 for null terminator
+                continue;
+            }
+
+            let formatted = unsafe {
+                CStr::from_ptr(buff.as_ptr())
                     .to_string_lossy()
-                    .to_string(),
-            )
-        }?;
-        Ok(formatted_chat)
+                    .into_owned()
+            };
+            return Ok(formatted);
+        }
+
+        Err(ApplyChatTemplateError::BuffSizeError)
     }
 
     /// Build a split GGUF file path for a specific chunk.

@@ -51,7 +51,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, Semaphore};
-use tools::{ToolChoice, extract_tool_calls, inject_tools, normalise_messages, parse_tool_choice, parse_tools, tool_call_grammar};
+use tools::{extract_tool_calls, inject_tools, normalise_messages, parse_tool_choice, parse_tools};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -85,6 +85,16 @@ struct Args {
     /// inference while keeping HTTP connections responsive.
     #[arg(long, default_value_t = 1)]
     parallel: usize,
+
+    /// Resolve (and download) the model, print its absolute local path to
+    /// stdout, then exit without starting the server.
+    /// Useful for scripts that need the cache path before launching.
+    ///
+    /// Example:
+    ///   MODEL=$(cargo run -p openai-server -- --print-path \
+    ///               hf-model bartowski/Llama-3.2-1B-Instruct-GGUF Q4_K_M)
+    #[arg(long)]
+    print_path: bool,
 
     #[command(subcommand)]
     model: ModelSource,
@@ -502,14 +512,30 @@ where
         .map_err(|e| internal_error(format!("tokenisation failed: {e}")))?;
 
     let n_prompt = tokens.len() as u32;
+
+    // When no explicit --ctx-size is set, default to the model's training
+    // context but cap it at 4096.  n_ctx_train for modern models can be
+    // 32 K–128 K tokens; allocating a full-size KV cache + compute buffer
+    // for every request consumes tens of GB and reliably triggers OOM.
+    // Users who need a larger window can set --ctx-size explicitly.
+    const DEFAULT_MAX_CTX: u32 = 4096;
     let n_ctx = state
         .default_ctx_size
-        .map_or(state.model.n_ctx_train(), NonZeroU32::get)
+        .map_or_else(
+            || state.model.n_ctx_train().min(DEFAULT_MAX_CTX),
+            NonZeroU32::get,
+        )
         .max(n_prompt + params.max_tokens);
+
+    // n_batch controls the compute-buffer size inside llama.cpp.  Matching it
+    // to n_ctx when n_ctx is large (e.g. 32 K) allocates a huge scratch
+    // buffer even if the actual sequence is short.  Cap it independently.
+    const DEFAULT_MAX_BATCH: u32 = 2048;
+    let n_batch = n_ctx.min(DEFAULT_MAX_BATCH);
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(n_ctx))
-        .with_n_batch(n_ctx);
+        .with_n_batch(n_batch);
 
     let mut ctx = state
         .model
@@ -550,15 +576,33 @@ where
     let mut n_cur = batch.n_tokens();
     let max_pos = n_cur + params.max_tokens as i32;
     let mut completion_tokens: u32 = 0;
-    let mut generated = String::new(); // only used for stop-sequence matching
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut finish_reason = FinishReason::Stop;
 
-    'decode: while n_cur < max_pos {
+    // For stop-sequence detection we keep a small rolling window of recently
+    // generated (but not-yet-emitted) text.  Everything before the window has
+    // already been forwarded to `on_piece`, so we never re-emit it when a stop
+    // sequence is finally matched.
+    let max_stop_len = params
+        .stop_seqs
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(0);
+    let mut window = String::new();
+    let mut cancelled = false;
+
+    'decode: loop {
+        if n_cur >= max_pos {
+            finish_reason = FinishReason::Length;
+            break;
+        }
+
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         if state.model.is_eog_token(token) {
             break;
         }
+
         let bytes = state
             .model
             .token_to_bytes(token, Special::Plaintext)
@@ -567,39 +611,40 @@ where
         let _ = decoder.decode_to_string(&bytes, &mut piece, false);
         completion_tokens += 1;
 
-        // Check stop sequences *before* emitting (so the stop string itself
-        // never appears in the output).
-        generated.push_str(&piece);
+        window.push_str(&piece);
+
+        // Check stop sequences against the current window.
         for stop in &params.stop_seqs {
-            if !stop.is_empty() && generated.ends_with(stop.as_str()) {
-                let trim_to = generated.len() - stop.len();
-                // Emit the part before the stop token.
-                let safe = &generated[..trim_to];
-                // Emit only the new part (everything after what we've already
-                // sent to on_piece).  To keep this simple we track how many
-                // bytes we've already sent via a dedicated counter.
-                // (The closure is responsible for flushing partial UTF-8.)
-                let _ = on_piece(safe);
+            if !stop.is_empty() && window.ends_with(stop.as_str()) {
+                // Emit only the content that precedes the stop string.
+                let emit_len = window.len() - stop.len();
+                if emit_len > 0 {
+                    let _ = on_piece(&window[..emit_len]);
+                }
                 break 'decode;
             }
         }
 
-        if !on_piece(&piece) {
-            break;
-        }
-
-        // Trim generated buffer: keep only the last max-stop-len bytes so
-        // stop-sequence matching doesn't accumulate the entire response.
-        let max_keep = params
-            .stop_seqs
-            .iter()
-            .map(|s| s.len())
-            .max()
-            .unwrap_or(0)
-            .max(1);
-        if generated.len() > max_keep * 4 {
-            let drop_to = generated.len() - max_keep;
-            generated.drain(..drop_to);
+        // Emit the safe portion of the window – everything except the last
+        // `max_stop_len` bytes, which might be a prefix of an upcoming stop
+        // sequence and must stay buffered until we can rule that out.
+        if max_stop_len == 0 {
+            if !on_piece(&window) {
+                cancelled = true;
+                break;
+            }
+            window.clear();
+        } else {
+            let keep = window.len().min(max_stop_len);
+            let emit_len = window.len().saturating_sub(keep);
+            if emit_len > 0 {
+                if !on_piece(&window[..emit_len]) {
+                    cancelled = true;
+                    break;
+                }
+                let remaining = window[emit_len..].to_owned();
+                window = remaining;
+            }
         }
 
         batch.clear();
@@ -611,8 +656,10 @@ where
             .map_err(|e| internal_error(format!("decode: {e}")))?;
     }
 
-    if n_cur >= max_pos {
-        finish_reason = FinishReason::Length;
+    // Flush whatever remains in the window when the loop ended without
+    // matching a stop sequence (EOG token, max_tokens, or caller cancel).
+    if !cancelled && !window.is_empty() {
+        let _ = on_piece(&window);
     }
 
     Ok((completion_tokens, finish_reason))
@@ -659,6 +706,47 @@ async fn chat_completions(
 
     let streaming = parsed.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
+    // ── Early parameter validation ────────────────────────────────────────────
+    // Validate sampling params *before* the expensive apply_chat_template call.
+    // This guarantees that invalid values (e.g. temperature < 0) return the
+    // correct 400 response rather than a 500 from a later failure.
+    {
+        let temperature = parsed
+            .get("temperature")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        if temperature < 0.0 {
+            return error_response(bad_request("'temperature' must be >= 0"));
+        }
+        let top_p = parsed
+            .get("top_p")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        if !(0.0 < top_p && top_p <= 1.0) {
+            return error_response(bad_request("'top_p' must be in (0, 1]"));
+        }
+        let top_k = parsed
+            .get("top_k")
+            .and_then(Value::as_i64)
+            .unwrap_or(0) as i32;
+        if top_k < 0 {
+            return error_response(bad_request("'top_k' must be >= 0"));
+        }
+        if parsed
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            == Some(0)
+        {
+            return error_response(bad_request("'max_tokens' must be > 0"));
+        }
+        if matches!(
+            parsed.get("grammar"),
+            Some(v) if !v.is_string() && !v.is_null()
+        ) {
+            return error_response(bad_request("'grammar' must be a GBNF string"));
+        }
+    }
+
     // ── Parse tools ──────────────────────────────────────────────────────────
     let tool_defs = match parse_tools(&parsed) {
         Ok(t) => t,
@@ -697,25 +785,21 @@ async fn chat_completions(
     };
 
     // ── Sampling params ───────────────────────────────────────────────────────
-    // For forced tool calling, override grammar with the tool call grammar.
-    let grammar_override = match &tool_choice {
-        ToolChoice::Required => Some(tool_call_grammar(None)),
-        ToolChoice::Function(name) => Some(tool_call_grammar(Some(name))),
-        _ => None,
-    };
-
     let mut params = match InferenceParams::from_request(&parsed, prompt) {
         Ok(p) => p,
         Err(e) => return error_response(e),
     };
-    if let Some(g) = grammar_override {
-        params.grammar = Some(g);
-    }
 
-    // When waiting for a forced tool call, suppress </tool_call> from counting
-    // toward max_tokens (don't cut off mid-call).  Simply increase the budget.
-    if !tool_defs.is_empty() && params.max_tokens < 512 {
-        params.max_tokens = 512;
+    // When tools are in play, give the model enough room to think and then
+    // emit a complete tool call (thinking models like Qwen3.5 need extra
+    // tokens for their <think>…</think> block before the <tool_call>).
+    // Grammar-based forcing is intentionally NOT used here: GBNF grammars
+    // conflict with models that use special tokens such as <tool_call>, and
+    // they prevent thinking models from emitting their reasoning prefix.
+    // The system-prompt injection (inject_tools) is sufficient for capable
+    // models and avoids all of those compatibility issues.
+    if !tool_defs.is_empty() && params.max_tokens < 1024 {
+        params.max_tokens = 1024;
     }
 
     let model_name = parsed
@@ -1239,6 +1323,12 @@ async fn main() -> std::io::Result<()> {
         .resolve()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
 
+    // --print-path: output the resolved path and exit immediately.
+    if args.print_path {
+        println!("{}", model_path.display());
+        return Ok(());
+    }
+
     let model_name = model_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -1256,7 +1346,7 @@ async fn main() -> std::io::Result<()> {
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    let chat_template = model.get_chat_template(4096).ok();
+    let chat_template = model.get_chat_template(65536).ok();
     if chat_template.is_some() {
         tracing::info!("Loaded built-in chat template from model");
     } else {
