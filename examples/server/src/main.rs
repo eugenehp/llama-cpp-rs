@@ -29,6 +29,8 @@
 //! ```
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+mod tools;
+
 use actix_web::{http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use anyhow::Context as _;
 use clap::Parser;
@@ -49,6 +51,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, Semaphore};
+use tools::{ToolChoice, extract_tool_calls, inject_tools, normalise_messages, parse_tool_choice, parse_tools, tool_call_grammar};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -310,6 +313,7 @@ struct AppState {
 // HTTP error helpers
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 struct HttpError {
     status: StatusCode,
     r#type: &'static str,
@@ -391,39 +395,14 @@ fn parse_stop_sequences(req: &Value) -> Result<Vec<String>, HttpError> {
     }
 }
 
-fn parse_messages(req: &Value) -> Result<Vec<LlamaChatMessage>, HttpError> {
-    let arr = req
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad_request("'messages' must be an array"))?;
-    arr.iter()
-        .map(|m| {
-            let role = m
-                .get("role")
-                .and_then(Value::as_str)
-                .ok_or_else(|| bad_request("each message must have a 'role' string"))?;
-            let content = match m.get("content") {
-                Some(Value::String(s)) => s.clone(),
-                Some(Value::Array(parts)) => parts
-                    .iter()
-                    .filter_map(|p| {
-                        if p.get("type").and_then(Value::as_str) == Some("text") {
-                            p.get("text").and_then(Value::as_str).map(str::to_owned)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(""),
-                Some(Value::Null) | None => String::new(),
-                _ => {
-                    return Err(bad_request(
-                        "message 'content' must be a string or array of content parts",
-                    ))
-                }
-            };
-            LlamaChatMessage::new(role.to_owned(), content)
-                .map_err(|e| bad_request(format!("invalid message: {e}")))
+/// Convert `(role, content)` pairs into the `LlamaChatMessage` vec that
+/// `apply_chat_template` expects.
+fn to_chat_messages(pairs: Vec<(String, String)>) -> Result<Vec<LlamaChatMessage>, HttpError> {
+    pairs
+        .into_iter()
+        .map(|(role, content)| {
+            LlamaChatMessage::new(role.clone(), content)
+                .map_err(|e| bad_request(format!("invalid message (role={role}): {e}")))
         })
         .collect()
 }
@@ -680,42 +659,78 @@ async fn chat_completions(
 
     let streaming = parsed.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
-    // Apply chat template to build the prompt string.
+    // ── Parse tools ──────────────────────────────────────────────────────────
+    let tool_defs = match parse_tools(&parsed) {
+        Ok(t) => t,
+        Err(e) => return error_response(e),
+    };
+    let tool_choice = match parse_tool_choice(&parsed) {
+        Ok(c) => c,
+        Err(e) => return error_response(e),
+    };
+
+    // ── Build prompt from messages ───────────────────────────────────────────
     let prompt = {
-        let messages = match parse_messages(&parsed) {
+        let mut msg_pairs = match normalise_messages(&parsed) {
             Ok(m) => m,
             Err(e) => return error_response(e),
         };
+
+        // Inject tool definitions + usage instructions into the system message.
+        inject_tools(&mut msg_pairs, &tool_defs, &tool_choice);
+
+        let chat_msgs = match to_chat_messages(msg_pairs) {
+            Ok(m) => m,
+            Err(e) => return error_response(e),
+        };
+
         let template_override = match parsed.get("chat_template") {
             Some(Value::String(s)) => Some(s.clone()),
             Some(Value::Null) | None => None,
             _ => return error_response(bad_request("'chat_template' must be a string")),
         };
         let template = template_override.or_else(|| state.chat_template.clone());
-        match state.model.apply_chat_template(template, messages, true) {
+        match state.model.apply_chat_template(template, chat_msgs, true) {
             Ok(p) => p,
             Err(e) => return error_response(internal_error(format!("chat template: {e}"))),
         }
     };
 
-    let params = match InferenceParams::from_request(&parsed, prompt) {
+    // ── Sampling params ───────────────────────────────────────────────────────
+    // For forced tool calling, override grammar with the tool call grammar.
+    let grammar_override = match &tool_choice {
+        ToolChoice::Required => Some(tool_call_grammar(None)),
+        ToolChoice::Function(name) => Some(tool_call_grammar(Some(name))),
+        _ => None,
+    };
+
+    let mut params = match InferenceParams::from_request(&parsed, prompt) {
         Ok(p) => p,
         Err(e) => return error_response(e),
     };
+    if let Some(g) = grammar_override {
+        params.grammar = Some(g);
+    }
+
+    // When waiting for a forced tool call, suppress </tool_call> from counting
+    // toward max_tokens (don't cut off mid-call).  Simply increase the budget.
+    if !tool_defs.is_empty() && params.max_tokens < 512 {
+        params.max_tokens = 512;
+    }
 
     let model_name = parsed
         .get("model")
         .and_then(Value::as_str)
         .unwrap_or(&state.model_name)
         .to_owned();
-
+    let has_tools = !tool_defs.is_empty();
     let created = now_secs();
     let id = format!("chatcmpl-{created}");
 
     if streaming {
-        run_chat_stream(state, params, id, model_name, created, "chat.completion.chunk").await
+        run_chat_stream(state, params, id, model_name, created, has_tools).await
     } else {
-        run_chat_blocking(state, params, id, model_name, created).await
+        run_chat_blocking(state, params, id, model_name, created, has_tools).await
     }
 }
 
@@ -725,37 +740,56 @@ async fn run_chat_blocking(
     id: String,
     model_name: String,
     created: u64,
+    has_tools: bool,
 ) -> HttpResponse {
     let permit = state.inference_semaphore.clone().acquire_owned().await;
     let state2 = state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let _permit = permit; // released when this closure ends
-        let mut text = String::new();
+        let _permit = permit;
+        let mut raw = String::new();
         let outcome = run_inference(&state2, &params, |piece| {
-            text.push_str(piece);
+            raw.push_str(piece);
             true
         });
-        outcome.map(|(tokens, reason)| (text, tokens, reason))
+        outcome.map(|(tokens, reason)| (raw, tokens, reason))
     })
     .await;
 
     match result {
-        Ok(Ok((content, completion_tokens, finish_reason))) => {
-            let prompt_tokens = state
-                .model
-                .str_to_token(&content, AddBos::Always)
-                .map_or(0, |t| t.len()) as u32;
+        Ok(Ok((raw_output, completion_tokens, finish_reason))) => {
+            let prompt_tokens = 0u32; // cheap approximation; full count needs a 2nd tokenise pass
+
+            // Parse tool calls out of the raw output.
+            let (content, tool_calls) = if has_tools {
+                extract_tool_calls(&raw_output)
+            } else {
+                (raw_output, vec![])
+            };
+
+            let (final_finish, message) = if tool_calls.is_empty() {
+                (
+                    finish_reason.as_str(),
+                    json!({ "role": "assistant", "content": content }),
+                )
+            } else {
+                let calls_json: Vec<Value> = tool_calls.iter().map(|c| c.to_value()).collect();
+                (
+                    "tool_calls",
+                    json!({
+                        "role": "assistant",
+                        "content": if content.is_empty() { Value::Null } else { Value::String(content) },
+                        "tool_calls": calls_json
+                    }),
+                )
+            };
+
             HttpResponse::Ok().content_type("application/json").body(
                 json!({
                     "id": id,
                     "object": "chat.completion",
                     "created": created,
                     "model": model_name,
-                    "choices": [{
-                        "index": 0,
-                        "message": { "role": "assistant", "content": content },
-                        "finish_reason": finish_reason.as_str()
-                    }],
+                    "choices": [{"index": 0, "message": message, "finish_reason": final_finish}],
                     "usage": {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
@@ -776,7 +810,7 @@ async fn run_chat_stream(
     id: String,
     model_name: String,
     created: u64,
-    object: &'static str,
+    has_tools: bool,
 ) -> HttpResponse {
     let (tx, rx) = mpsc::channel::<web::Bytes>(32);
     let id2 = id.clone();
@@ -786,46 +820,73 @@ async fn run_chat_stream(
     let state2 = state.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        const OBJ: &str = "chat.completion.chunk";
 
-        // First chunk carries the role.
-        let first = sse_chunk(&json!({
-            "id": id2,
-            "object": object,
-            "created": created,
-            "model": model2,
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]
-        }));
-        let _ = tx.blocking_send(first);
+        // First chunk: role delta.
+        let _ = tx.blocking_send(sse_chunk(&json!({
+            "id": id2, "object": OBJ, "created": created, "model": model2,
+            "choices": [{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]
+        })));
 
+        // Collect the whole output when tools are present so we can parse
+        // tool calls before streaming; otherwise stream token-by-token.
         let mut finish_reason = FinishReason::Stop;
-        let result = run_inference(&state2, &params, |piece| {
-            let chunk = sse_chunk(&json!({
-                "id": id2,
-                "object": object,
-                "created": created,
-                "model": model2,
-                "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": null}]
-            }));
-            tx.blocking_send(chunk).is_ok()
-        });
 
-        if let Ok((_, fr)) = result {
-            finish_reason = fr;
+        if has_tools {
+            // Buffered mode: collect, parse, then emit.
+            let mut raw = String::new();
+            if let Ok((_, fr)) = run_inference(&state2, &params, |piece| {
+                raw.push_str(piece);
+                true
+            }) {
+                finish_reason = fr;
+            }
+
+            let (content, tool_calls) = extract_tool_calls(&raw);
+
+            if tool_calls.is_empty() {
+                // No tool calls — stream content as a single delta.
+                let _ = tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{"content":content},"finish_reason":null}]
+                })));
+                let _ = tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{},"finish_reason":finish_reason.as_str()}]
+                })));
+            } else {
+                // Emit tool_calls delta.
+                let calls_json: Vec<Value> = tool_calls.iter().map(|c| c.to_value()).collect();
+                let content_val = if content.is_empty() { Value::Null } else { Value::String(content) };
+                let _ = tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{"content":content_val,"tool_calls":calls_json},"finish_reason":null}]
+                })));
+                let _ = tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{},"finish_reason":"tool_calls"}]
+                })));
+            }
+        } else {
+            // Pure streaming: emit each token piece immediately.
+            if let Ok((_, fr)) = run_inference(&state2, &params, |piece| {
+                let ok = tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{"content":piece},"finish_reason":null}]
+                }))).is_ok();
+                ok
+            }) {
+                finish_reason = fr;
+            }
+            let _ = tx.blocking_send(sse_chunk(&json!({
+                "id": id2, "object": OBJ, "created": created, "model": model2,
+                "choices": [{"index":0,"delta":{},"finish_reason":finish_reason.as_str()}]
+            })));
         }
 
-        // Final chunk with finish_reason.
-        let last = sse_chunk(&json!({
-            "id": id2,
-            "object": object,
-            "created": created,
-            "model": model2,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason.as_str()}]
-        }));
-        let _ = tx.blocking_send(last);
         let _ = tx.blocking_send(sse_done());
     });
 
-    // Convert the mpsc receiver into an actix streaming body.
     let body_stream = stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|chunk| (Ok::<_, actix_web::Error>(chunk), rx))
     });
@@ -1246,4 +1307,75 @@ async fn main() -> std::io::Result<()> {
     .bind(&addr)?
     .run()
     .await
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── collect_groups ───────────────────────────────────────────────────────
+
+    #[test]
+    fn single_plain_gguf() {
+        let files = vec!["model.Q4_K_M.gguf".to_string()];
+        let groups = collect_groups(files);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].files.len(), 1);
+    }
+
+    #[test]
+    fn sharded_flat_files_grouped() {
+        let files = vec![
+            "model-Q4_K_M-00001-of-00003.gguf".to_string(),
+            "model-Q4_K_M-00002-of-00003.gguf".to_string(),
+            "model-Q4_K_M-00003-of-00003.gguf".to_string(),
+        ];
+        let groups = collect_groups(files);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].files.len(), 3);
+        assert_eq!(groups[0].files[0], "model-Q4_K_M-00001-of-00003.gguf");
+    }
+
+    #[test]
+    fn subdirectory_files_grouped_by_dir() {
+        let files = vec![
+            "Q4_K_M/model-00001-of-00006.gguf".to_string(),
+            "Q4_K_M/model-00002-of-00006.gguf".to_string(),
+            "Q3_K_M/model-00001-of-00005.gguf".to_string(),
+            "Q3_K_M/model-00002-of-00005.gguf".to_string(),
+        ];
+        let groups = collect_groups(files);
+        assert_eq!(groups.len(), 2);
+        // BTreeMap orders alphabetically: Q3 before Q4
+        assert_eq!(groups[0].label, "Q3_K_M  [2 shards]");
+        assert_eq!(groups[1].label, "Q4_K_M  [2 shards]");
+    }
+
+    #[test]
+    fn mixed_quants_each_get_own_group() {
+        let files = vec![
+            "llama-Q4_K_M.gguf".to_string(),
+            "llama-Q8_0.gguf".to_string(),
+        ];
+        let groups = collect_groups(files);
+        assert_eq!(groups.len(), 2);
+    }
+
+    #[test]
+    fn preference_score_orders_correctly() {
+        let files = vec![
+            "Q8_0/model.gguf".to_string(),
+            "Q4_K_M/model.gguf".to_string(),
+            "Q3_K_S/model.gguf".to_string(),
+        ];
+        let groups = collect_groups(files);
+        let mut scores: Vec<_> = groups.iter().map(|g| (g.preference_score(), &g.label)).collect();
+        scores.sort();
+        // Q4_K_M should have the lowest (best) score
+        assert!(scores[0].1.contains("Q4_K_M"), "got {scores:?}");
+    }
 }
