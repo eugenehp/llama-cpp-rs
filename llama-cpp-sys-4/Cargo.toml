@@ -19,12 +19,27 @@ include = [
     "/llama.cpp/ggml/src/*.h",
     "/llama.cpp/ggml/src/*.c",
     "/llama.cpp/ggml/src/*.cpp",
-    "/llama.cpp/ggml/**/*.cpp",
-    "/llama.cpp/ggml/**/*.h",
-    "/llama.cpp/ggml/**/*.metal",
-    "/llama.cpp/ggml/**/*.m",
-    "/llama.cpp/ggml/**/*.c",
-    "/llama.cpp/ggml/**/CMakeLists.txt",
+    # Enumerate each ggml backend directory explicitly.
+    # ggml-kompute is intentionally omitted: its only content is an
+    # uninitialised nested submodule (`kompute/`) that has no git-tracked
+    # files.  The broad `**` globs that used to be here matched those
+    # untracked files and caused `cargo publish` to abort with "uncommitted
+    # changes".
+    "/llama.cpp/ggml/src/ggml-blas/**/*",
+    "/llama.cpp/ggml/src/ggml-cann/**/*",
+    "/llama.cpp/ggml/src/ggml-cpu/**/*",
+    "/llama.cpp/ggml/src/ggml-hexagon/**/*",
+    "/llama.cpp/ggml/src/ggml-hip/**/*",
+    "/llama.cpp/ggml/src/ggml-metal/**/*",
+    "/llama.cpp/ggml/src/ggml-musa/**/*",
+    "/llama.cpp/ggml/src/ggml-opencl/**/*",
+    "/llama.cpp/ggml/src/ggml-rpc/**/*",
+    "/llama.cpp/ggml/src/ggml-sycl/**/*",
+    "/llama.cpp/ggml/src/ggml-virtgpu/**/*",
+    "/llama.cpp/ggml/src/ggml-vulkan/**/*",
+    "/llama.cpp/ggml/src/ggml-webgpu/**/*",
+    "/llama.cpp/ggml/src/ggml-zdnn/**/*",
+    "/llama.cpp/ggml/src/ggml-zendnn/**/*",
     "/llama.cpp/src/*.h",
     "/llama.cpp/src/*.cpp",
 
