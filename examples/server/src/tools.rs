@@ -391,6 +391,148 @@ fn parse_single_call(json: &str) -> Option<ToolCall> {
 
 
 // ---------------------------------------------------------------------------
+// Multimodal message normalisation
+// ---------------------------------------------------------------------------
+
+/// Where an image or audio file comes from inside a multimodal message.
+#[cfg(feature = "mtmd")]
+#[derive(Debug, Clone)]
+pub enum ImageSource {
+    /// `"image_url"` content part — a `data:` URI or an `http(s)://` URL.
+    Url(String),
+    /// `"image_file"` content part — a file ID returned by `POST /v1/files`.
+    FileId(String),
+}
+
+/// Like [`normalise_messages`] but also recognises multimodal content parts:
+///
+/// - `{"type":"image_url","image_url":{"url":"..."}}` — replaced with
+///   `media_marker` in the text; the URL is collected.
+/// - `{"type":"image_file","image_file":{"file_id":"..."}}` — replaced with
+///   `media_marker`; the file ID is collected.
+///
+/// Returns `(message_pairs, image_sources)` where `image_sources` are ordered
+/// by their first appearance in the prompt text so they align one-to-one with
+/// the markers embedded in the messages.
+#[cfg(feature = "mtmd")]
+pub fn normalise_messages_multimodal(
+    req: &Value,
+    media_marker: &str,
+) -> Result<(Vec<(String, String)>, Vec<ImageSource>), HttpError> {
+    let arr = req
+        .get("messages")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad_request("'messages' must be an array"))?;
+
+    let mut out = Vec::with_capacity(arr.len());
+    let mut sources: Vec<ImageSource> = Vec::new();
+
+    for m in arr {
+        let role = m
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| bad_request("each message must have a 'role' string"))?
+            .to_owned();
+
+        // ── assistant messages with tool_calls (same as normalise_messages) ─
+        if role == "assistant" {
+            if let Some(Value::Array(calls)) = m.get("tool_calls") {
+                let mut content = String::new();
+                for call in calls {
+                    let name = call
+                        .pointer("/function/name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown");
+                    let args = call
+                        .pointer("/function/arguments")
+                        .and_then(Value::as_str)
+                        .unwrap_or("{}");
+                    let _ = std::fmt::write(
+                        &mut content,
+                        format_args!(
+                            "<tool_call>{{\"name\":\"{name}\",\"arguments\":{args}}}</tool_call>\n"
+                        ),
+                    );
+                }
+                if let Some(Value::String(s)) = m.get("content") {
+                    if !s.is_empty() {
+                        content = format!("{s}\n{content}");
+                    }
+                }
+                out.push((role, content.trim_end().to_owned()));
+                continue;
+            }
+        }
+
+        // ── tool messages (pass through unchanged) ───────────────────────────
+        if role == "tool" {
+            let content = match m.get("content") {
+                Some(Value::String(s)) => s.clone(),
+                Some(Value::Null) | None => String::new(),
+                _ => return Err(bad_request("tool message 'content' must be a string")),
+            };
+            out.push((role, content));
+            continue;
+        }
+
+        // ── normal messages (text + optional image parts) ────────────────────
+        let content = match m.get("content") {
+            Some(Value::String(s)) => s.clone(),
+
+            Some(Value::Array(parts)) => {
+                let mut text = String::new();
+                for part in parts {
+                    match part.get("type").and_then(Value::as_str) {
+                        Some("text") => {
+                            text.push_str(
+                                part.get("text").and_then(Value::as_str).unwrap_or(""),
+                            );
+                        }
+                        Some("image_url") => {
+                            let url = part
+                                .get("image_url")
+                                .and_then(|u| u.get("url"))
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    bad_request("image_url part must have an 'image_url.url' field")
+                                })?;
+                            sources.push(ImageSource::Url(url.to_owned()));
+                            text.push_str(media_marker);
+                        }
+                        Some("image_file") => {
+                            let file_id = part
+                                .get("image_file")
+                                .and_then(|f| f.get("file_id"))
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| {
+                                    bad_request(
+                                        "image_file part must have an 'image_file.file_id' field",
+                                    )
+                                })?;
+                            sources.push(ImageSource::FileId(file_id.to_owned()));
+                            text.push_str(media_marker);
+                        }
+                        _ => {} // ignore unknown content part types
+                    }
+                }
+                text
+            }
+
+            Some(Value::Null) | None => String::new(),
+            _ => {
+                return Err(bad_request(
+                    "message 'content' must be a string or array of content parts",
+                ))
+            }
+        };
+
+        out.push((role, content));
+    }
+
+    Ok((out, sources))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

@@ -897,15 +897,15 @@ impl LlamaModel {
         let mut buf_size = message_length.saturating_mul(4).max(4096);
 
         for _ in 0..2 {
-            // Use i8 (c_char) directly so the pointer types match the binding.
-            let mut buff = vec![0i8; buf_size];
+            // Use u8 so that as_mut_ptr()/as_ptr() match the binding (*mut u8 / *const u8).
+            let mut buff = vec![0u8; buf_size];
             let res = unsafe {
                 llama_chat_apply_template(
                     tmpl_ptr,
                     chat_sys.as_ptr(),
                     chat_sys.len(),
                     add_ass,
-                    buff.as_mut_ptr(),
+                    buff.as_mut_ptr().cast(),
                     buff.len() as i32,
                 )
             };
@@ -921,8 +921,10 @@ impl LlamaModel {
                 continue;
             }
 
+            // SAFETY: llama_chat_apply_template wrote a NUL-terminated string
+            // into `buff`; `needed` bytes were used.
             let formatted = unsafe {
-                CStr::from_ptr(buff.as_ptr())
+                CStr::from_ptr(buff.as_ptr().cast())
                     .to_string_lossy()
                     .into_owned()
             };

@@ -183,6 +183,28 @@ curl http://localhost:8080/v1/chat/completions \
 -d '{"model":"default","messages":[{"role":"user","content":"What is 2+2?"}],"stream":false,"max_tokens":500}'
 ```
 
+## Multimodal Images:
+
+```shell
+cargo run -p openai-server --features mtmd -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+```
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-d '{
+"messages": [{
+"role": "user",
+"content": [
+{"type": "text", "text": "What is in this picture?"},
+{"type": "image_url", "image_url": {"url":
+"https://upload.wikimedia.org/wikipedia/commons/6/68/Orange_tabby_cat_sitting_on_fallen_leaves-Hisashi-01A.jpg"}}
+]
+}],
+"max_tokens": 256
+}'
+```
+
 ---
 
 ## Credits
@@ -196,18 +218,18 @@ If you use gpu-fft in academic work, please cite it as:
 
 **BibTeX**
 ```bibtex
-@software{hauptmann2025gpufft,
+@software{hauptmann2025llamacpprs,
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
-  year      = {2026},
-  version   = {1.0.0},
+  year      = {2025},
+  version   = {0.2.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
 
 **Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v1.0.0).
-> https://github.com/eugenehp/gpu-fft
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.0).
+> https://github.com/eugenehp/llama-cpp-rs
 
 ## License
 

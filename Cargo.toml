@@ -8,6 +8,7 @@ members = [
     "examples/chat",
     "examples/split_model",
     "examples/server",
+    "examples/mtmd",
 ]
 
 [workspace.dependencies]

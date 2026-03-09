@@ -31,10 +31,11 @@
 
 mod tools;
 
+use actix_multipart::Multipart;
 use actix_web::{http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
 use anyhow::Context as _;
 use clap::Parser;
-use futures_util::stream;
+use futures_util::{stream, StreamExt as _};
 use hf_hub::api::sync::{Api, ApiBuilder};
 use llama_cpp_4::{
     context::params::LlamaContextParams,
@@ -43,15 +44,22 @@ use llama_cpp_4::{
     model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel, Special},
     sampling::LlamaSampler,
 };
+#[cfg(feature = "mtmd")]
+use llama_cpp_4::mtmd::{
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
+};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     num::NonZeroU32,
     path::PathBuf,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use tools::{extract_tool_calls, inject_tools, normalise_messages, parse_tool_choice, parse_tools};
+#[cfg(feature = "mtmd")]
+use tools::{normalise_messages_multimodal, ImageSource};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -95,6 +103,21 @@ struct Args {
     ///               hf-model bartowski/Llama-3.2-1B-Instruct-GGUF Q4_K_M)
     #[arg(long)]
     print_path: bool,
+
+    // ── Multimodal (mtmd) ──────────────────────────────────────────────────
+    /// Path to the multimodal projector (mmproj) GGUF file.
+    /// Enables the `POST /v1/files` endpoint and image/audio inputs in chat
+    /// completions.  Requires the `mtmd` Cargo feature.
+    #[arg(long, value_name = "FILE")]
+    mmproj: Option<PathBuf>,
+
+    /// Number of threads used by the vision/audio encoder (default: 4).
+    #[arg(long, default_value_t = 4)]
+    mmproj_n_threads: i32,
+
+    /// Do NOT offload the mmproj model to the GPU.
+    #[arg(long)]
+    no_mmproj_gpu: bool,
 
     #[command(subcommand)]
     model: ModelSource,
@@ -304,6 +327,34 @@ impl ModelSource {
 }
 
 // ---------------------------------------------------------------------------
+// File store
+// ---------------------------------------------------------------------------
+
+/// A file uploaded via `POST /v1/files`.
+#[derive(Debug, Clone)]
+struct FileEntry {
+    id: String,
+    filename: String,
+    bytes: Vec<u8>,
+    purpose: String,
+    created_at: u64,
+}
+
+/// Generate a stable file ID by FNV-1a hashing the content + timestamp.
+fn gen_file_id(data: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325u64;
+    for &b in data {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    for &b in &now_secs().to_le_bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("file-{h:016x}")
+}
+
+// ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
 
@@ -317,6 +368,11 @@ struct AppState {
     inference_semaphore: Arc<Semaphore>,
     /// Optional bearer token that every request must present.
     api_key: Option<String>,
+    /// In-memory store for files uploaded via `POST /v1/files`.
+    file_store: Arc<RwLock<HashMap<String, FileEntry>>>,
+    /// Multimodal context — `Some` when `--mmproj` is provided.
+    #[cfg(feature = "mtmd")]
+    mtmd_ctx: Option<MtmdContext>,
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +488,10 @@ struct InferenceParams {
     stop_seqs: Vec<String>,
     /// Optional GBNF grammar string.
     grammar: Option<String>,
+    /// Raw bytes for each media item (image or audio), in the order their
+    /// markers appear in `prompt`.  Populated only when the `mtmd` feature is
+    /// active and the request contains multimodal content.
+    image_bytes: Vec<Vec<u8>>,
 }
 
 impl InferenceParams {
@@ -474,6 +534,7 @@ impl InferenceParams {
             max_tokens,
             stop_seqs,
             grammar,
+            image_bytes: Vec::new(), // populated later by the multimodal path
         })
     }
 }
@@ -494,10 +555,284 @@ impl FinishReason {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Multimodal helpers  (compiled only when the `mtmd` feature is active)
+// ---------------------------------------------------------------------------
+
+/// Decode a `data:` URI or fetch an `http(s)://` URL, returning raw bytes.
+#[cfg(feature = "mtmd")]
+async fn fetch_url_bytes(url: &str) -> Result<Vec<u8>, HttpError> {
+    if let Some(rest) = url.strip_prefix("data:") {
+        // data:[<mediatype>][;base64],<data>
+        let comma = rest
+            .find(',')
+            .ok_or_else(|| bad_request("invalid data URI: missing ','"))?;
+        let meta = &rest[..comma];
+        let data = &rest[comma + 1..];
+        if meta.ends_with(";base64") {
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .map_err(|e| bad_request(format!("base64 decode error: {e}")))
+        } else {
+            // Plain text / URL-encoded — treat the raw bytes as the payload.
+            Ok(data.as_bytes().to_vec())
+        }
+    } else if url.starts_with("http://") || url.starts_with("https://") {
+        let bytes = reqwest::get(url)
+            .await
+            .map_err(|e| bad_request(format!("failed to fetch image URL: {e}")))?
+            .bytes()
+            .await
+            .map_err(|e| bad_request(format!("failed to read image response: {e}")))?;
+        Ok(bytes.to_vec())
+    } else {
+        Err(bad_request(
+            "unsupported image source: must start with 'data:', 'http://', or 'https://'",
+        ))
+    }
+}
+
+/// Resolve a list of [`ImageSource`] items to raw byte vectors.
+/// `FileId` sources are looked up in the shared file store;
+/// `Url` sources are decoded / fetched from the network.
+#[cfg(feature = "mtmd")]
+async fn resolve_image_sources(
+    sources: Vec<ImageSource>,
+    file_store: &RwLock<HashMap<String, FileEntry>>,
+) -> Result<Vec<Vec<u8>>, HttpError> {
+    let mut out = Vec::with_capacity(sources.len());
+    for src in sources {
+        let bytes = match src {
+            ImageSource::Url(url) => fetch_url_bytes(&url).await?,
+            ImageSource::FileId(id) => {
+                let store = file_store.read().await;
+                store
+                    .get(&id)
+                    .map(|e| e.bytes.clone())
+                    .ok_or_else(|| bad_request(format!("file '{id}' not found — upload it first via POST /v1/files")))?
+            }
+        };
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
+/// Multimodal inference: encode images with mtmd, then decode as normal.
+///
+/// Works like [`run_inference`] but uses `mtmd_tokenize` + `mtmd_helper_eval_chunks`
+/// for the prefill step instead of a plain `llama_decode`.
+#[cfg(feature = "mtmd")]
+fn run_inference_multimodal<F>(
+    state: &AppState,
+    params: &InferenceParams,
+    on_piece: F,
+) -> Result<(u32, FinishReason), HttpError>
+where
+    F: FnMut(&str) -> bool,
+{
+    let mut on_piece = on_piece;
+    let mtmd_ctx = state
+        .mtmd_ctx
+        .as_ref()
+        .expect("run_inference_multimodal called without mtmd_ctx");
+
+    // Vision models often embed 256–1024 tokens per image, so default to 8 K.
+    const MM_DEFAULT_CTX: u32 = 8192;
+    let n_ctx = state
+        .default_ctx_size
+        .map_or_else(
+            || state.model.n_ctx_train().min(MM_DEFAULT_CTX),
+            NonZeroU32::get,
+        )
+        .max(n_ctx_for_params(params));
+
+    let n_batch = n_ctx.min(2048);
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(n_ctx))
+        .with_n_batch(n_batch);
+
+    let mut ctx = state
+        .model
+        .new_context(&state.backend, ctx_params)
+        .map_err(|e| internal_error(format!("context init: {e}")))?;
+
+    // ── Load bitmaps from raw bytes ───────────────────────────────────────────
+    let bitmaps: Vec<MtmdBitmap> = params
+        .image_bytes
+        .iter()
+        .enumerate()
+        .map(|(i, bytes)| {
+            MtmdBitmap::from_buf(mtmd_ctx, bytes)
+                .map_err(|e| internal_error(format!("bitmap {i}: {e}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // ── Tokenize (text + image markers → chunks) ──────────────────────────────
+    let input_text = MtmdInputText::new(&params.prompt, true, true);
+    let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+    let mut chunks = MtmdInputChunks::new();
+    mtmd_ctx
+        .tokenize(&input_text, &bitmap_refs, &mut chunks)
+        .map_err(|e| internal_error(format!("mtmd_tokenize: {e}")))?;
+
+    // ── Evaluate all chunks (encodes images + decodes everything) ─────────────
+    let mut n_past: i32 = 0;
+    mtmd_ctx
+        .eval_chunks(
+            ctx.as_ptr(),
+            &chunks,
+            /* n_past */ 0,
+            /* seq_id */ 0,
+            n_batch as i32,
+            /* logits_last */ true,
+            &mut n_past,
+        )
+        .map_err(|e| internal_error(format!("mtmd_eval_chunks: {e}")))?;
+
+    // ── Sampler chain ─────────────────────────────────────────────────────────
+    let mut chain: Vec<LlamaSampler> = Vec::new();
+    if let Some(gbnf) = &params.grammar {
+        chain.push(LlamaSampler::grammar(&state.model, gbnf, "root"));
+    }
+    if params.temperature > 0.0 {
+        if params.top_k > 0 {
+            chain.push(LlamaSampler::top_k(params.top_k));
+        }
+        if params.top_p < 1.0 {
+            chain.push(LlamaSampler::top_p(params.top_p, 1));
+        }
+        chain.push(LlamaSampler::temp(params.temperature));
+        chain.push(LlamaSampler::dist(params.seed));
+    } else {
+        chain.push(LlamaSampler::greedy());
+    }
+    let sampler = LlamaSampler::chain_simple(chain);
+
+    // ── Decode loop (identical structure to run_inference) ────────────────────
+    let max_pos = n_past + params.max_tokens as i32;
+    let mut completion_tokens: u32 = 0;
+    let mut decoder = encoding_rs::UTF_8.new_decoder();
+    let mut finish_reason = FinishReason::Stop;
+
+    let max_stop_len = params
+        .stop_seqs
+        .iter()
+        .map(|s| s.len())
+        .max()
+        .unwrap_or(0);
+    let mut window = String::new();
+    let mut cancelled = false;
+
+    let mut batch = LlamaBatch::new(1, 0);
+
+    'decode: loop {
+        if n_past >= max_pos {
+            finish_reason = FinishReason::Length;
+            break;
+        }
+
+        // -1 means "sample from the last position with logits computed".
+        // After eval_chunks this is always correct, matching the mtmd-cli.cpp pattern.
+        let token = sampler.sample(&ctx, -1);
+        if state.model.is_eog_token(token) {
+            break;
+        }
+
+        let bytes = state
+            .model
+            .token_to_bytes(token, Special::Plaintext)
+            .map_err(|e| internal_error(format!("token_to_bytes: {e}")))?;
+        let mut piece = String::with_capacity(8);
+        let _ = decoder.decode_to_string(&bytes, &mut piece, false);
+        completion_tokens += 1;
+
+        window.push_str(&piece);
+
+        for stop in &params.stop_seqs {
+            if !stop.is_empty() && window.ends_with(stop.as_str()) {
+                let emit_len = window.len() - stop.len();
+                if emit_len > 0 {
+                    let _ = on_piece(&window[..emit_len]);
+                }
+                break 'decode;
+            }
+        }
+
+        if max_stop_len == 0 {
+            if !on_piece(&window) {
+                cancelled = true;
+                break;
+            }
+            window.clear();
+        } else {
+            let keep = window.len().min(max_stop_len);
+            let emit_len = window.len().saturating_sub(keep);
+            if emit_len > 0 {
+                if !on_piece(&window[..emit_len]) {
+                    cancelled = true;
+                    break;
+                }
+                let remaining = window[emit_len..].to_owned();
+                window = remaining;
+            }
+        }
+
+        batch.clear();
+        batch
+            .add(token, n_past, &[0], true)
+            .map_err(|e| internal_error(format!("batch add: {e}")))?;
+        n_past += 1;
+        ctx.decode(&mut batch)
+            .map_err(|e| internal_error(format!("decode: {e}")))?;
+    }
+
+    if !cancelled && !window.is_empty() {
+        let _ = on_piece(&window);
+    }
+
+    Ok((completion_tokens, finish_reason))
+}
+
+/// Minimum context size needed to hold the prompt + generated tokens.
+fn n_ctx_for_params(params: &InferenceParams) -> u32 {
+    // Rough upper bound: 4 chars per token on average.
+    let prompt_est = (params.prompt.len() / 4 + 1) as u32;
+    prompt_est + params.max_tokens
+}
+
 /// Run the full inference loop, calling `on_piece` for each decoded text
 /// fragment.  `on_piece` returns `false` to stop early (e.g. cancelled
 /// stream).  Returns `(completion_token_count, finish_reason)`.
 fn run_inference<F>(
+    state: &AppState,
+    params: &InferenceParams,
+    on_piece: F,
+) -> Result<(u32, FinishReason), HttpError>
+where
+    F: FnMut(&str) -> bool,
+{
+    // ── Dispatch to multimodal path when images are present ───────────────────
+    #[cfg(feature = "mtmd")]
+    if !params.image_bytes.is_empty() {
+        return if state.mtmd_ctx.is_some() {
+            run_inference_multimodal(state, params, on_piece)
+        } else {
+            tracing::warn!(
+                "Request contains {} image(s) but the server was started without --mmproj; \
+                 images will be ignored and the prompt will be processed as text.",
+                params.image_bytes.len()
+            );
+            // fall through to the text-only path below
+            run_inference_text(state, params, on_piece)
+        };
+    }
+
+    run_inference_text(state, params, on_piece)
+}
+
+fn run_inference_text<F>(
     state: &AppState,
     params: &InferenceParams,
     mut on_piece: F,
@@ -757,12 +1092,47 @@ async fn chat_completions(
         Err(e) => return error_response(e),
     };
 
-    // ── Build prompt from messages ───────────────────────────────────────────
-    let prompt = {
-        let mut msg_pairs = match normalise_messages(&parsed) {
-            Ok(m) => m,
+    // ── Parse messages (with multimodal support when available) ─────────────
+    // When `mtmd` is active and the server has an mmproj model, use the
+    // multimodal normaliser: it replaces image_url / image_file parts with
+    // the mtmd media marker and returns the sources for later resolution.
+    // Otherwise fall back to the text-only normaliser (images are stripped).
+    // Always run the multimodal parser so we can count image parts,
+    // even when there is no mmproj — we use the count only for the warning.
+    #[cfg(feature = "mtmd")]
+    let (base_msg_pairs, image_sources) = {
+        let marker = MtmdContext::default_marker();
+        let (pairs, sources) = match normalise_messages_multimodal(&parsed, marker) {
+            Ok(r) => r,
             Err(e) => return error_response(e),
         };
+        if !sources.is_empty() && state.mtmd_ctx.is_none() {
+            tracing::warn!(
+                n_images = sources.len(),
+                "Request contains image(s) but the server was started without --mmproj. \
+                 Images will be IGNORED and the prompt processed as plain text. \
+                 Restart with `--mmproj <path-to-mmproj.gguf>` and a vision-capable model \
+                 (e.g. Qwen2-VL, LLaVA, Llama-3.2-Vision, MiniCPM-V) to enable multimodal inference."
+            );
+            // Fall back to the text-only normaliser so markers are not left in the prompt.
+            match normalise_messages(&parsed) {
+                Ok(text_pairs) => (text_pairs, vec![]),
+                Err(e) => return error_response(e),
+            }
+        } else {
+            (pairs, sources)
+        }
+    };
+
+    #[cfg(not(feature = "mtmd"))]
+    let base_msg_pairs = match normalise_messages(&parsed) {
+        Ok(m) => m,
+        Err(e) => return error_response(e),
+    };
+
+    // ── Build prompt from messages ───────────────────────────────────────────
+    let prompt = {
+        let mut msg_pairs = base_msg_pairs;
 
         // Inject tool definitions + usage instructions into the system message.
         inject_tools(&mut msg_pairs, &tool_defs, &tool_choice);
@@ -789,6 +1159,15 @@ async fn chat_completions(
         Ok(p) => p,
         Err(e) => return error_response(e),
     };
+
+    // ── Resolve image sources → raw bytes (mtmd path only) ───────────────────
+    #[cfg(feature = "mtmd")]
+    if !image_sources.is_empty() {
+        match resolve_image_sources(image_sources, &state.file_store).await {
+            Ok(bytes) => params.image_bytes = bytes,
+            Err(e) => return error_response(e),
+        }
+    }
 
     // When tools are in play, give the model enough room to think and then
     // emit a complete tool call (thinking models like Qwen3.5 need extra
@@ -1269,6 +1648,209 @@ fn embed_inputs(state: &AppState, inputs: &[String]) -> Result<Vec<Vec<f32>>, Ht
 }
 
 // ---------------------------------------------------------------------------
+// File store handlers  POST/GET/DELETE /v1/files
+// ---------------------------------------------------------------------------
+
+/// `POST /v1/files`  — upload a file (multipart/form-data with `file` + `purpose`).
+async fn upload_file(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    mut payload: Multipart,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+
+    let mut file_bytes: Option<Vec<u8>> = None;
+    let mut filename = "upload".to_owned();
+    let mut purpose = "assistants".to_owned();
+
+    while let Some(item) = payload.next().await {
+        let mut field = match item {
+            Ok(f) => f,
+            Err(e) => return error_response(bad_request(format!("multipart error: {e}"))),
+        };
+
+        // Read metadata (returns a borrow; we convert to owned before streaming).
+        let field_name = field
+            .content_disposition()
+            .and_then(|cd| cd.get_name())
+            .unwrap_or("")
+            .to_owned();
+        let field_filename = field
+            .content_disposition()
+            .and_then(|cd| cd.get_filename())
+            .map(str::to_owned);
+
+        let mut data: Vec<u8> = Vec::new();
+        while let Some(chunk) = field.next().await {
+            match chunk {
+                Ok(bytes) => data.extend_from_slice(&bytes),
+                Err(e) => {
+                    return error_response(internal_error(format!("chunk read error: {e}")))
+                }
+            }
+        }
+
+        match field_name.as_str() {
+            "file" => {
+                filename = field_filename.unwrap_or_else(|| "upload".to_owned());
+                file_bytes = Some(data);
+            }
+            "purpose" => {
+                purpose = String::from_utf8_lossy(&data).into_owned();
+            }
+            _ => {}
+        }
+    }
+
+    let bytes = match file_bytes {
+        Some(b) => b,
+        None => {
+            return error_response(bad_request(
+                "'file' field is required (multipart/form-data)",
+            ))
+        }
+    };
+
+    let id = gen_file_id(&bytes);
+    let size = bytes.len();
+    let created_at = now_secs();
+
+    state.file_store.write().await.insert(
+        id.clone(),
+        FileEntry {
+            id: id.clone(),
+            filename: filename.clone(),
+            bytes,
+            purpose: purpose.clone(),
+            created_at,
+        },
+    );
+
+    tracing::info!("Stored file {id} ({size} bytes, purpose={purpose})");
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(
+            json!({
+                "id": id,
+                "object": "file",
+                "bytes": size,
+                "created_at": created_at,
+                "filename": filename,
+                "purpose": purpose,
+                "status": "processed",
+                "status_details": null
+            })
+            .to_string(),
+        )
+}
+
+/// `GET /v1/files` — list all uploaded files.
+async fn list_files(req: HttpRequest, state: web::Data<AppState>) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let store = state.file_store.read().await;
+    let data: Vec<Value> = store
+        .values()
+        .map(|e| {
+            json!({
+                "id": e.id,
+                "object": "file",
+                "bytes": e.bytes.len(),
+                "created_at": e.created_at,
+                "filename": e.filename,
+                "purpose": e.purpose,
+            })
+        })
+        .collect();
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(json!({"object": "list", "data": data}).to_string())
+}
+
+/// `GET /v1/files/{file_id}` — retrieve file metadata.
+async fn get_file(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let id = path.into_inner();
+    let store = state.file_store.read().await;
+    match store.get(&id) {
+        Some(e) => HttpResponse::Ok().content_type("application/json").body(
+            json!({
+                "id": e.id,
+                "object": "file",
+                "bytes": e.bytes.len(),
+                "created_at": e.created_at,
+                "filename": e.filename,
+                "purpose": e.purpose,
+            })
+            .to_string(),
+        ),
+        None => error_response(HttpError {
+            status: StatusCode::NOT_FOUND,
+            r#type: "invalid_request_error",
+            message: format!("No file with id '{id}'"),
+        }),
+    }
+}
+
+/// `GET /v1/files/{file_id}/content` — download raw file bytes.
+async fn get_file_content(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let id = path.into_inner();
+    let store = state.file_store.read().await;
+    match store.get(&id) {
+        Some(e) => HttpResponse::Ok()
+            .content_type("application/octet-stream")
+            .body(e.bytes.clone()),
+        None => error_response(HttpError {
+            status: StatusCode::NOT_FOUND,
+            r#type: "invalid_request_error",
+            message: format!("No file with id '{id}'"),
+        }),
+    }
+}
+
+/// `DELETE /v1/files/{file_id}` — delete an uploaded file.
+async fn delete_file(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let id = path.into_inner();
+    let removed = state.file_store.write().await.remove(&id).is_some();
+    if removed {
+        HttpResponse::Ok()
+            .content_type("application/json")
+            .body(json!({"id": id, "object": "file", "deleted": true}).to_string())
+    } else {
+        error_response(HttpError {
+            status: StatusCode::NOT_FOUND,
+            r#type: "invalid_request_error",
+            message: format!("No file with id '{id}'"),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Simple handlers
 // ---------------------------------------------------------------------------
 
@@ -1358,6 +1940,41 @@ async fn main() -> std::io::Result<()> {
         tracing::info!("API key authentication enabled");
     }
 
+    // ── Multimodal projector (optional) ───────────────────────────────────────
+    #[cfg(feature = "mtmd")]
+    let mtmd_ctx: Option<MtmdContext> = if let Some(ref mmproj_path) = args.mmproj {
+        tracing::info!("Loading mmproj: {}", mmproj_path.display());
+        let ctx_params = MtmdContextParams::default()
+            .use_gpu(!args.no_mmproj_gpu)
+            .n_threads(args.mmproj_n_threads);
+        match MtmdContext::init_from_file(mmproj_path, &model, ctx_params) {
+            Ok(ctx) => {
+                tracing::info!(
+                    "  vision={} audio={}",
+                    ctx.supports_vision(),
+                    ctx.supports_audio()
+                );
+                Some(ctx)
+            }
+            Err(e) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("failed to load mmproj '{}': {e}", mmproj_path.display()),
+                ))
+            }
+        }
+    } else {
+        None
+    };
+
+    #[cfg(not(feature = "mtmd"))]
+    if args.mmproj.is_some() {
+        tracing::warn!(
+            "--mmproj was provided but this binary was compiled without the `mtmd` feature. \
+             Rebuild with `--features mtmd` to enable multimodal support."
+        );
+    }
+
     let state = web::Data::new(AppState {
         backend,
         model,
@@ -1366,16 +1983,24 @@ async fn main() -> std::io::Result<()> {
         default_ctx_size: args.ctx_size,
         inference_semaphore: Arc::new(Semaphore::new(parallel)),
         api_key: args.api_key,
+        file_store: Arc::new(RwLock::new(HashMap::new())),
+        #[cfg(feature = "mtmd")]
+        mtmd_ctx,
     });
 
     let addr = format!("{}:{}", args.host, args.port);
     tracing::info!("Listening on http://{addr}  (parallel={parallel})");
     tracing::info!("Endpoints:");
-    tracing::info!("  GET  /health");
-    tracing::info!("  GET  /v1/models");
-    tracing::info!("  POST /v1/chat/completions  (streaming supported)");
-    tracing::info!("  POST /v1/completions       (streaming supported)");
-    tracing::info!("  POST /v1/embeddings");
+    tracing::info!("  GET    /health");
+    tracing::info!("  GET    /v1/models");
+    tracing::info!("  POST   /v1/chat/completions  (streaming supported)");
+    tracing::info!("  POST   /v1/completions       (streaming supported)");
+    tracing::info!("  POST   /v1/embeddings");
+    tracing::info!("  POST   /v1/files             (upload image/audio for multimodal)");
+    tracing::info!("  GET    /v1/files             (list uploaded files)");
+    tracing::info!("  GET    /v1/files/{{id}}        (file metadata)");
+    tracing::info!("  GET    /v1/files/{{id}}/content (download file)");
+    tracing::info!("  DELETE /v1/files/{{id}}        (delete file)");
 
     HttpServer::new(move || {
         App::new()
@@ -1393,6 +2018,12 @@ async fn main() -> std::io::Result<()> {
             .route("/v1/chat/completions", web::post().to(chat_completions))
             .route("/v1/completions", web::post().to(completions))
             .route("/v1/embeddings", web::post().to(embeddings))
+            // File store
+            .route("/v1/files", web::post().to(upload_file))
+            .route("/v1/files", web::get().to(list_files))
+            .route("/v1/files/{file_id}", web::get().to(get_file))
+            .route("/v1/files/{file_id}/content", web::get().to(get_file_content))
+            .route("/v1/files/{file_id}", web::delete().to(delete_file))
     })
     .bind(&addr)?
     .run()

@@ -60,6 +60,14 @@ include = [
 
     "/llama.cpp/pocs",
 
+    # mtmd (multimodal) support
+    "/llama.cpp/tools/CMakeLists.txt",
+    "/llama.cpp/tools/mtmd/**/*",
+    "/llama.cpp/vendor/stb/**/*",
+    "/llama.cpp/vendor/miniaudio/**/*",
+    "/llama.cpp/vendor/sheredom/**/*",
+    "/llama.cpp/common/**/*",
+
     "/llama.cpp/CMakeLists.txt",
     "/llama.cpp/ggml/CMakeLists.txt",
     "/llama.cpp/ggml/src/CMakeLists.txt",
@@ -88,3 +96,4 @@ native = []
 openmp = []
 mpi = []
 rpc = []
+mtmd = []
