@@ -436,6 +436,29 @@ fn main() {
         .very_verbose(std::env::var("CMAKE_VERBOSE").is_ok()) // Not verbose by default
         .always_configure(false);
 
+    // The cmake crate skips re-configuration when CMakeCache.txt already exists
+    // (always_configure = false).  If a previous run left a CMakeCache.txt but
+    // never wrote the actual build-system files (Makefile / build.ninja), the
+    // subsequent `cmake --build` call fails with "No such file or directory".
+    // Detect that broken state and remove CMakeCache.txt so cmake is forced to
+    // configure from scratch.
+    {
+        let cmake_build_dir = out_dir.join("build");
+        let cache = cmake_build_dir.join("CMakeCache.txt");
+        if cache.exists() {
+            let has_makefile = cmake_build_dir.join("Makefile").exists();
+            let has_ninja = cmake_build_dir.join("build.ninja").exists();
+            if !has_makefile && !has_ninja {
+                debug_log!(
+                    "CMakeCache.txt exists but no Makefile/build.ninja found — \
+                     removing cache to force reconfiguration"
+                );
+                std::fs::remove_file(&cache)
+                    .expect("failed to remove stale CMakeCache.txt");
+            }
+        }
+    }
+
     let build_dir = config.build();
 
     // Search paths
