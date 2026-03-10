@@ -467,27 +467,66 @@ fn main() {
         // Force the flag explicitly so ggml always sees it.
         config.define("CMAKE_CROSSCOMPILING", "TRUE");
 
-        // Honour CC / CXX set by the caller (e.g. cargo cross, zig cc, …).
-        // If they are not set, fall back to the conventional
-        // `{target-triple}-gcc` / `{target-triple}-g++` names so that
-        // CMake picks up the right cross-compiler automatically.
-        if let Ok(cc) = env::var("CC") {
-            config.define("CMAKE_C_COMPILER", &cc);
-        } else {
-            let cc_guess = format!("{}-gcc", target);
-            config.define("CMAKE_C_COMPILER", &cc_guess);
-        }
-        if let Ok(cxx) = env::var("CXX") {
-            config.define("CMAKE_CXX_COMPILER", &cxx);
-        } else {
-            let cxx_guess = format!("{}-g++", target);
-            config.define("CMAKE_CXX_COMPILER", &cxx_guess);
-        }
+        if target.contains("apple") {
+            // ── Apple cross-arch (e.g. x86_64-apple-darwin → aarch64-apple-darwin) ──
+            //
+            // Apple's Clang is already a universal cross-compiler; switching
+            // to a different compiler binary is neither needed nor possible
+            // (there is no `aarch64-apple-darwin-gcc` in Xcode).  The right
+            // CMake knob for same-SDK Apple cross-arch builds is
+            // CMAKE_OSX_ARCHITECTURES, which makes Clang add the `-arch`
+            // flag automatically.
+            let osx_arch = if target.contains("aarch64") || target.contains("arm64") {
+                "arm64"
+            } else if target.contains("x86_64") {
+                "x86_64"
+            } else if target.contains("i686") {
+                "i386"
+            } else {
+                // Fallback: strip the vendor/OS suffix and use the raw arch.
+                target.split('-').next().unwrap_or("arm64")
+            };
+            config.define("CMAKE_OSX_ARCHITECTURES", osx_arch);
+            debug_log!("Apple cross-arch: CMAKE_OSX_ARCHITECTURES={osx_arch}");
 
-        // Propagate a sysroot when provided (e.g. via --sysroot or
-        // CARGO_TARGET_<TRIPLE>_RUSTFLAGS / CMAKE_SYSROOT env var).
-        if let Ok(sysroot) = env::var("CMAKE_SYSROOT") {
-            config.define("CMAKE_SYSROOT", &sysroot);
+            // Propagate an explicit SDK path when the caller provides one.
+            if let Ok(sdk) = env::var("CMAKE_OSX_SYSROOT") {
+                config.define("CMAKE_OSX_SYSROOT", &sdk);
+            }
+            // Honour an explicit compiler override (e.g. osxcross), but do
+            // NOT guess a compiler name: the system Clang is always correct
+            // for same-SDK cross-arch and osxcross users set CC themselves.
+            if let Ok(cc) = env::var("CC") {
+                config.define("CMAKE_C_COMPILER", &cc);
+            }
+            if let Ok(cxx) = env::var("CXX") {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            }
+        } else {
+            // ── Non-Apple cross-compilation ───────────────────────────────────────
+            //
+            // Honour CC / CXX set by the caller (e.g. cargo cross, zig cc, …).
+            // If they are not set, fall back to the conventional
+            // `{target-triple}-gcc` / `{target-triple}-g++` names so that
+            // CMake picks up the right cross-compiler automatically.
+            if let Ok(cc) = env::var("CC") {
+                config.define("CMAKE_C_COMPILER", &cc);
+            } else {
+                let cc_guess = format!("{}-gcc", target);
+                config.define("CMAKE_C_COMPILER", &cc_guess);
+            }
+            if let Ok(cxx) = env::var("CXX") {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            } else {
+                let cxx_guess = format!("{}-g++", target);
+                config.define("CMAKE_CXX_COMPILER", &cxx_guess);
+            }
+
+            // Propagate a sysroot when provided (e.g. via --sysroot or
+            // CARGO_TARGET_<TRIPLE>_RUSTFLAGS / CMAKE_SYSROOT env var).
+            if let Ok(sysroot) = env::var("CMAKE_SYSROOT") {
+                config.define("CMAKE_SYSROOT", &sysroot);
+            }
         }
     }
 
@@ -673,15 +712,15 @@ fn main() {
     // runtime, which is hidden in a non-default path.
     // More details at https://github.com/alexcrichton/curl-rust/issues/279.
     if target.contains("apple") {
-        // When cross-compiling, try to use the target-specific clang binary
-        // so that --print-search-dirs returns paths relevant to the target SDK.
-        let clang_bin = if is_cross {
-            // e.g. "aarch64-apple-darwin-clang" from a cross-toolchain, or
-            // whatever CC the caller has set.
-            env::var("CC").unwrap_or_else(|_| format!("{}-clang", target))
-        } else {
-            "clang".to_owned()
-        };
+        // For same-SDK Apple cross-arch builds (e.g. x86_64-apple-darwin →
+        // aarch64-apple-darwin) the host's plain `clang` is still the right
+        // binary to ask: both arches share the same Xcode SDK and therefore
+        // the same library search directories.
+        //
+        // For osxcross (Linux → macOS) the user sets CC, so we honour that;
+        // we do NOT guess a `{target}-clang` name because it is not a stable
+        // convention and the SDK paths it would report are likely wrong anyway.
+        let clang_bin = env::var("CC").unwrap_or_else(|_| "clang".to_owned());
         if let Some(path) = macos_link_search_path(&clang_bin) {
             println!("cargo:rustc-link-lib=clang_rt.osx");
             println!("cargo:rustc-link-search={}", path);
