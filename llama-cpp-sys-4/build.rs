@@ -80,9 +80,7 @@ fn copy_folder(src: &Path, dst: &Path) {
             .arg(dst.parent().unwrap())
             .status()
             .expect("Failed to execute cp command");
-    }
-
-    if cfg!(windows) {
+    } else if cfg!(windows) {
         std::process::Command::new("robocopy.exe")
             .arg("/e")
             .arg(src)
@@ -97,20 +95,26 @@ fn copy_folder(src: &Path, dst: &Path) {
 /// `target` is the Rust target triple of the *cross-compilation target* so
 /// that the correct file extensions are chosen even when cross-compiling.
 fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> Vec<String> {
-    let lib_pattern = if target.contains("windows") {
+    // MSVC produces `.lib` for both static archives and import libraries.
+    // MinGW/GCC (windows-gnu / windows-gnullvm) produces `.a` for static
+    // archives and `.dll.a` for import libraries — both end in `.a`, so the
+    // single pattern covers both cases.
+    let lib_pattern = if target.contains("windows-msvc") {
         "*.lib"
+    } else if target.contains("windows") {
+        // MinGW / GCC-based Windows toolchain (cross or native).
+        // Static libs: libfoo.a  |  Shared import libs: libfoo.dll.a
+        "*.a"
     } else if target.contains("apple") {
         if build_shared_libs {
             "*.dylib"
         } else {
             "*.a"
         }
+    } else if build_shared_libs {
+        "*.so"
     } else {
-        if build_shared_libs {
-            "*.so"
-        } else {
-            "*.a"
-        }
+        "*.a"
     };
     let libs_dir = out_dir.join("lib*");
     let pattern = libs_dir.join(lib_pattern);
@@ -125,7 +129,21 @@ fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> V
                 let stem = path.file_stem().unwrap();
                 let stem_str = stem.to_str().unwrap();
 
-                // Remove the "lib" prefix if present
+                // For MinGW import libraries the file is named `libfoo.dll.a`.
+                // `file_stem()` strips the final `.a` extension, leaving
+                // `libfoo.dll`.  We additionally need to strip the trailing
+                // `.dll` so that the link name becomes `foo` rather than
+                // `foo.dll`.
+                let stem_str = if target.contains("windows")
+                    && !target.contains("msvc")
+                    && stem_str.ends_with(".dll")
+                {
+                    &stem_str[..stem_str.len() - 4]
+                } else {
+                    stem_str
+                };
+
+                // Remove the "lib" prefix if present (Unix/MinGW convention).
                 let lib_name = if stem_str.starts_with("lib") {
                     stem_str.strip_prefix("lib").unwrap_or(stem_str)
                 } else {
@@ -445,7 +463,6 @@ fn main() {
     fs::write(bindings_path, contents).unwrap();
 
     println!("cargo:rerun-if-changed=wrapper.h");
-    println!("cargo:rerun-if-changed=./sherpa-onnx");
 
     debug_log!("Bindings Created");
 
@@ -843,6 +860,15 @@ fn main() {
     // Linux libstdc++
     if target.contains("linux") {
         println!("cargo:rustc-link-lib=dylib=stdc++");
+    }
+
+    // Windows MinGW (GCC-based, not MSVC): link the C++ and threading runtimes.
+    // MSVC handles its own C++ runtime via the CRT; MinGW needs explicit flags
+    // because Rust's linker driver does not add them automatically.
+    // `winpthread` provides POSIX threading support on Windows with MinGW.
+    if target.contains("windows") && !target.contains("msvc") {
+        println!("cargo:rustc-link-lib=static=stdc++");
+        println!("cargo:rustc-link-lib=static=winpthread");
     }
 
     // On (older) macOS / Apple targets we may need to link against the clang

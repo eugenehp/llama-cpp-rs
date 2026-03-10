@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-03-10
+
+### Fixed
+
+- **Windows MinGW cross-compilation (critical)** — `extract_lib_names` in
+  `build.rs` used `*.lib` for every Windows target, but MinGW/GCC toolchains
+  (`windows-gnu`, `windows-gnullvm`) produce `.a` static archives, not `.lib`
+  files.  Cross-compiling to any `*-windows-gnu` target would find zero
+  libraries and immediately panic on `assert_ne!(llama_libs.len(), 0)`.  Fixed
+  by splitting on `windows-msvc` (→ `*.lib`) vs. all other Windows targets
+  (→ `*.a`).
+- **MinGW import-library name extraction** — MinGW shared import libraries are
+  named `libfoo.dll.a`.  `file_stem()` strips the final `.a`, leaving
+  `libfoo.dll`; stripping the `lib` prefix then produced the incorrect link
+  name `foo.dll`.  Added a second strip of the trailing `.dll` suffix for
+  Windows non-MSVC targets so the correct name `foo` is emitted to
+  `cargo:rustc-link-lib`.
+- **Missing C++ and threading runtime linkage for Windows MinGW** — Linux
+  builds emit `cargo:rustc-link-lib=dylib=stdc++` and macOS emits
+  `cargo:rustc-link-lib=c++`, but Windows MinGW targets had no equivalent.
+  Added `cargo:rustc-link-lib=static=stdc++` and
+  `cargo:rustc-link-lib=static=winpthread` for all `windows` non-`msvc`
+  targets.  Static linkage avoids a runtime dependency on MinGW DLLs.
+- **`copy_folder` double-evaluation guard** — the two consecutive
+  `if cfg!(unix)` / `if cfg!(windows)` blocks could theoretically both
+  evaluate on a host where neither macro resolves.  Changed to `if / else if`
+  to make the mutual exclusion explicit.
+- **Stale `rerun-if-changed=./sherpa-onnx`** — this watch directive pointed
+  at a path that does not exist in this repository (leftover from a different
+  project).  Cargo re-evaluates `build.rs` on every run when a watched path
+  is missing, slowing incremental builds.  Removed.
+- **Invalid `target_arch = "arm64"` in `llama-cpp-4/Cargo.toml`** — Rust's
+  `cfg` predicate system has no `target_arch = "arm64"`; the correct
+  identifier for 64-bit ARM (including Apple Silicon) is `aarch64`.  The
+  stale `any(target_arch = "aarch64", target_arch = "arm64")` condition was
+  silently identical to `target_arch = "aarch64"` alone.  Cleaned up to a
+  single, correctly documented entry.
+
+### Changed
+
+- All example crate versions synced to `0.2.5` (were stale at `0.2.1`).
+
 ## [0.2.3] - 2026-03-10
 
 ### Added
@@ -99,6 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Features: `cuda`, `metal`, `vulkan`, `openmp`, `rpc`, `mpi`, `dynamic-link`.
 - Examples: `simple`, `chat`, `embeddings`, `split_model`, `server`, `rpc`.
 
+[0.2.5]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.0...v0.2.1
