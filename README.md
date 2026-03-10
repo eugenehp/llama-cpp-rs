@@ -249,13 +249,13 @@ If you use gpu-fft in academic work, please cite it as:
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.1},
+  version   = {0.2.5},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
 
 **Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.1).
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.5).
 > https://github.com/eugenehp/llama-cpp-rs
 
 ## License
