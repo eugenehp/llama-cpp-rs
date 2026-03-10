@@ -577,13 +577,14 @@ fn main() {
     // Override the cmake default explicitly so a stale CMakeCache.txt can
     // never re-enable it after the user switches from a native to a cross
     // build in the same OUT_DIR.
+    let want_native = cfg!(feature = "native") && !is_cross;
     if is_cross {
         // Belt-and-suspenders: even though CMAKE_CROSSCOMPILING=TRUE above
         // already causes ggml to default GGML_NATIVE to OFF, we pin it here
         // too so the cmake crate's cache-skip path cannot resurrect a
         // previously cached ON value.
         config.define("GGML_NATIVE", "OFF");
-    } else if cfg!(feature = "native") {
+    } else if want_native {
         // The `native` Cargo feature explicitly opts in to host-CPU
         // optimisation for non-cross builds.
         config.define("GGML_NATIVE", "ON");
@@ -592,6 +593,32 @@ fn main() {
         // portable across machines of the same architecture (matching the
         // behaviour users expect from a Rust crate).
         config.define("GGML_NATIVE", "OFF");
+    }
+
+    // ── ARM portable baseline ────────────────────────────────────────────────
+    // When GGML_NATIVE=OFF and no explicit GGML_CPU_ARM_ARCH is set, ggml's
+    // cmake does not emit any -march/-mcpu flag.  On Alpine/Debian GCC that
+    // is fine because GCC is configured with --with-arch=armv8-a.  But on
+    // Apple Clang the arm64-apple-macosx target triple *implicitly* defines
+    // __ARM_FEATURE_DOTPROD / __ARM_FEATURE_MATMUL_INT8 (because every
+    // M-series chip has them), so cmake's check_cxx_source_compiles sees
+    // those macros as defined and compiles dotprod/i8mm intrinsics into the
+    // ggml-cpu library — which then crashes with SIGILL on any aarch64 chip
+    // that lacks those extensions (Cortex-A53, older Graviton, etc.).
+    //
+    // Pinning GGML_CPU_ARM_ARCH=armv8-a passes -march=armv8-a to the
+    // compiler, which overrides the target-triple default and prevents any
+    // higher-arch macros from being defined.  Users who want native
+    // performance on their own machine should add --features native, which
+    // takes the GGML_NATIVE=ON path above and skips this block entirely.
+    let is_arm_target =
+        target.starts_with("aarch64") || target.starts_with("arm");
+    if is_arm_target && !want_native && !target.contains("android") {
+        // Don't override if the caller already set a custom arch via env var
+        // (e.g. GGML_CPU_ARM_ARCH=armv8.2-a+dotprod for a specific fleet).
+        if env::var("GGML_CPU_ARM_ARCH").is_err() {
+            config.define("GGML_CPU_ARM_ARCH", "armv8-a");
+        }
     }
 
     // Disable OpenMP on 32-bit ARM Windows (compiler support is absent).
@@ -665,11 +692,20 @@ fn main() {
         .always_configure(false);
 
     // The cmake crate skips re-configuration when CMakeCache.txt already exists
-    // (always_configure = false).  If a previous run left a CMakeCache.txt but
-    // never wrote the actual build-system files (Makefile / build.ninja), the
-    // subsequent `cmake --build` call fails with "No such file or directory".
-    // Detect that broken state and remove CMakeCache.txt so cmake is forced to
-    // configure from scratch.
+    // (always_configure = false).  Detect and clear any stale cache that
+    // would cause the wrong cmake settings to be used:
+    //
+    //  1. CMakeCache.txt exists but no Makefile / build.ninja: the previous
+    //     configure run was interrupted.  cmake --build would fail with "No
+    //     such file or directory".
+    //
+    //  2. CMakeCache.txt has GGML_NATIVE set to the wrong value: this happens
+    //     when build.rs is updated (e.g. the GGML_NATIVE=OFF fix) without
+    //     bumping the crate version, so Cargo reuses the same OUT_DIR and the
+    //     cmake crate skips configuration entirely — leaving the old ON value
+    //     in the cache and baking -mcpu=native into the library, which then
+    //     crashes with SIGILL on any chip that lacks the build host's ISA
+    //     extensions.
     {
         let cmake_build_dir = out_dir.join("build");
         let cache = cmake_build_dir.join("CMakeCache.txt");
@@ -683,6 +719,68 @@ fn main() {
                 );
                 std::fs::remove_file(&cache)
                     .expect("failed to remove stale CMakeCache.txt");
+            } else {
+                // Check whether the cached GGML_NATIVE value matches what we
+                // are about to configure.  A mismatch means a previous build
+                // used a different build.rs (or a different `native` feature
+                // state) and the cmake crate's cache-skip path will silently
+                // use the wrong value.
+                let desired_native_str = if want_native { "ON" } else { "OFF" };
+                let cache_contents =
+                    std::fs::read_to_string(&cache).unwrap_or_default();
+
+                // 2a. GGML_NATIVE mismatch.
+                let cached_native_on =
+                    cache_contents.contains("GGML_NATIVE:BOOL=ON");
+                let cached_native_off =
+                    cache_contents.contains("GGML_NATIVE:BOOL=OFF");
+                let native_mismatch = (want_native && cached_native_off)
+                    || (!want_native && cached_native_on);
+
+                // 2b. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
+                //     to set (ARM non-native non-android builds).  Without an
+                //     explicit -march flag, Apple Clang silently enables
+                //     dotprod/i8mm for arm64-apple-macosx targets, producing
+                //     a binary that crashes with SIGILL on older ARMv8 chips.
+                //
+                //     The cache entry looks like "GGML_CPU_ARM_ARCH:STRING="
+                //     (empty) when cmake used its default.  We want "armv8-a".
+                let is_arm_target_local =
+                    target.starts_with("aarch64") || target.starts_with("arm");
+                let we_set_arm_arch = is_arm_target_local
+                    && !want_native
+                    && !target.contains("android")
+                    && env::var("GGML_CPU_ARM_ARCH").is_err();
+                // Extract the cached GGML_CPU_ARM_ARCH value.  The line is
+                // "GGML_CPU_ARM_ARCH:STRING=<value>" so we look for that prefix.
+                let cached_arm_arch = cache_contents
+                    .lines()
+                    .find(|l| l.starts_with("GGML_CPU_ARM_ARCH:"))
+                    .and_then(|l| l.splitn(2, '=').nth(1))
+                    .unwrap_or("");
+                let arm_arch_mismatch =
+                    we_set_arm_arch && cached_arm_arch != "armv8-a";
+
+                let mismatch = native_mismatch || arm_arch_mismatch;
+                if mismatch {
+                    debug_log!(
+                        "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
+                         GGML_CPU_ARM_ARCH: cache={:?} want={}) — removing cache \
+                         to force reconfiguration",
+                        if cached_native_on {
+                            "ON"
+                        } else if cached_native_off {
+                            "OFF"
+                        } else {
+                            "?"
+                        },
+                        desired_native_str,
+                        cached_arm_arch,
+                        if we_set_arm_arch { "armv8-a" } else { "(not set)" },
+                    );
+                    std::fs::remove_file(&cache)
+                        .expect("failed to remove stale CMakeCache.txt");
+                }
             }
         }
     }
