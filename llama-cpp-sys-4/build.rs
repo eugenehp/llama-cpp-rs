@@ -70,6 +70,7 @@ fn llama_src_version(src: &Path) -> String {
         .unwrap_or_else(|_| "unknown".to_owned())
 }
 
+/// Copy a directory tree.  This runs on the *host*, so cfg!(unix/windows) is correct here.
 fn copy_folder(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("Failed to create dst directory");
     if cfg!(unix) {
@@ -91,10 +92,14 @@ fn copy_folder(src: &Path, dst: &Path) {
     }
 }
 
-fn extract_lib_names(out_dir: &Path, build_shared_libs: bool) -> Vec<String> {
-    let lib_pattern = if cfg!(windows) {
+/// Extract library names from the build output directory.
+///
+/// `target` is the Rust target triple of the *cross-compilation target* so
+/// that the correct file extensions are chosen even when cross-compiling.
+fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> Vec<String> {
+    let lib_pattern = if target.contains("windows") {
         "*.lib"
-    } else if cfg!(target_os = "macos") {
+    } else if target.contains("apple") {
         if build_shared_libs {
             "*.dylib"
         } else {
@@ -134,16 +139,19 @@ fn extract_lib_names(out_dir: &Path, build_shared_libs: bool) -> Vec<String> {
     lib_names
 }
 
-fn extract_lib_assets(out_dir: &Path) -> Vec<PathBuf> {
-    let shared_lib_pattern = if cfg!(windows) {
+/// Extract shared-library asset paths from the build output directory.
+///
+/// `target` is the Rust target triple of the *cross-compilation target*.
+fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
+    let shared_lib_pattern = if target.contains("windows") {
         "*.dll"
-    } else if cfg!(target_os = "macos") {
+    } else if target.contains("apple") {
         "*.dylib"
     } else {
         "*.so"
     };
 
-    let shared_libs_dir = if cfg!(windows) { "bin" } else { "lib" };
+    let shared_libs_dir = if target.contains("windows") { "bin" } else { "lib" };
     let libs_dir = out_dir.join(shared_libs_dir);
     let pattern = libs_dir.join(shared_lib_pattern);
     debug_log!("Extract lib assets {}", pattern.display());
@@ -161,14 +169,19 @@ fn extract_lib_assets(out_dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn macos_link_search_path() -> Option<String> {
-    let output = Command::new("clang")
+/// Ask a clang binary for its library search path (macOS link helper).
+///
+/// `clang_binary` should be the bare name or full path of the clang binary to
+/// query — e.g. `"clang"` for native builds or `"aarch64-apple-darwin-clang"`
+/// for a cross-compiler.
+fn macos_link_search_path(clang_binary: &str) -> Option<String> {
+    let output = Command::new(clang_binary)
         .arg("--print-search-dirs")
         .output()
         .ok()?;
     if !output.status.success() {
         println!(
-            "failed to run 'clang --print-search-dirs', continuing without a link search path"
+            "failed to run '{clang_binary} --print-search-dirs', continuing without a link search path"
         );
         return None;
     }
@@ -185,8 +198,46 @@ fn macos_link_search_path() -> Option<String> {
     None
 }
 
+/// Map a Rust target triple to the CMake `CMAKE_SYSTEM_NAME` value.
+fn cmake_system_name(target: &str) -> &'static str {
+    if target.contains("-android") || target.contains("android-") {
+        "Android"
+    } else if target.contains("-apple-ios") {
+        "iOS"
+    } else if target.contains("-apple-") {
+        "Darwin"
+    } else if target.contains("-windows") {
+        "Windows"
+    } else if target.contains("-linux") {
+        "Linux"
+    } else {
+        // Generic UNIX-like fallback
+        "Linux"
+    }
+}
+
+/// Map a Rust target triple to the CMake `CMAKE_SYSTEM_PROCESSOR` value.
+fn cmake_system_processor(target: &str) -> String {
+    let arch = target.split('-').next().unwrap_or("unknown");
+    match arch {
+        "x86_64" => "x86_64".to_owned(),
+        "i686" | "i386" => "x86".to_owned(),
+        "aarch64" | "arm64" => "aarch64".to_owned(),
+        "armv7" | "armv7s" | "armv7k" => "armv7-a".to_owned(),
+        "arm" => "arm".to_owned(),
+        "riscv64gc" | "riscv64" => "riscv64".to_owned(),
+        "powerpc64le" => "ppc64le".to_owned(),
+        "powerpc64" => "ppc64".to_owned(),
+        "s390x" => "s390x".to_owned(),
+        "wasm32" => "wasm32".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 fn main() {
     let target = env::var("TARGET").unwrap();
+    let host = env::var("HOST").unwrap();
+    let is_cross = host != target;
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let target_dir = get_cargo_target_dir().unwrap();
@@ -203,7 +254,9 @@ fn main() {
         .map(|v| v == "1")
         .unwrap_or(false);
 
+    debug_log!("HOST: {}", host);
     debug_log!("TARGET: {}", target);
+    debug_log!("CROSS_COMPILING: {}", is_cross);
     debug_log!("CARGO_MANIFEST_DIR: {}", manifest_dir);
     debug_log!("TARGET_DIR: {}", target_dir.display());
     debug_log!("OUT_DIR: {}", out_dir.display());
@@ -254,15 +307,17 @@ fn main() {
         )
     };
 
-    // point to CC and CXX binaries on macOS
-    if cfg!(all(feature = "mpi", target_os = "macos")) {
+    // Point CC/CXX at the MPI wrappers when building with MPI on macOS.
+    // Check the *target* OS, not the host, so that cross-compilation from a
+    // macOS host to a non-Apple target does not accidentally set these.
+    if cfg!(feature = "mpi") && target.contains("apple") {
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::set_var("CC", "/opt/homebrew/bin/mpicc") };
         // TODO: Audit that the environment access only happens in single-threaded code.
         unsafe { env::set_var("CXX", "/opt/homebrew/bin/mpicxx") };
     }
 
-    // Bindings
+    // ── Bindgen ──────────────────────────────────────────────────────────────
     let mut builder = bindgen::Builder::default()
         .header("wrapper.h")
         .generate_comments(true)
@@ -270,6 +325,10 @@ fn main() {
         // "fatal error: 'string' file not found" on macOS
         .clang_arg("-xc++")
         .clang_arg("-std=c++17")
+        // When cross-compiling, tell libclang/bindgen the target triple so
+        // that layout, pointer sizes, and type widths are computed for the
+        // *target* architecture rather than the host.
+        .clang_arg(format!("--target={}", target))
         // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
@@ -314,7 +373,7 @@ fn main() {
         // .opaque_type("llama_context_deleter")
         // .blocklist_type("llama_model_deleter")
         .opaque_type("std::.*");
-    
+
     // Add RPC support if feature is enabled
     if cfg!(feature = "rpc") {
         builder = builder
@@ -333,7 +392,7 @@ fn main() {
             .allowlist_item("MTMD_.*")
             .no_partialeq("mtmd_context_params");
     }
-    
+
     let bindings = builder
         // .layout_tests(false)
         // .derive_default(true)
@@ -360,7 +419,7 @@ fn main() {
 
     debug_log!("Bindings Created");
 
-    // Build with Cmake
+    // ── CMake build ──────────────────────────────────────────────────────────
 
     let mut config = Config::new(&llama_dst);
 
@@ -386,17 +445,87 @@ fn main() {
         if build_shared_libs { "ON" } else { "OFF" },
     );
 
-    // use BLAS instead of OpenMP
-    // if cfg!(target_os = "macos") {
-    //     config.define("GGML_BLAS", "OFF");
-    // }
+    // ── Cross-compilation CMake configuration ────────────────────────────────
+    // When building for a different target than the host, tell CMake the
+    // target system so that it does not auto-detect the host as the target.
+    // Android is handled separately below via its NDK toolchain file.
+    if is_cross && !target.contains("android") {
+        let system_name = cmake_system_name(&target);
+        let system_processor = cmake_system_processor(&target);
+        debug_log!("Cross-compiling: CMAKE_SYSTEM_NAME={system_name} CMAKE_SYSTEM_PROCESSOR={system_processor}");
+        config.define("CMAKE_SYSTEM_NAME", system_name);
+        config.define("CMAKE_SYSTEM_PROCESSOR", &system_processor);
 
-    // see https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md
-    if cfg!(all(target_os = "windows", target_arch = "arm")) {
+        // CMake only sets CMAKE_CROSSCOMPILING=TRUE automatically when
+        // CMAKE_SYSTEM_NAME differs from the host OS name.  For same-OS
+        // cross-arch builds (e.g. x86_64-linux → aarch64-linux) the OS
+        // names are identical, so CMAKE_CROSSCOMPILING stays FALSE and
+        // ggml's guard (`if (CMAKE_CROSSCOMPILING)` in ggml/CMakeLists.txt)
+        // never fires — leaving GGML_NATIVE_DEFAULT=ON and causing
+        // `-march=native` (tuned for the build host) to be baked into the
+        // target binary, which crashes with SIGILL on the target.
+        // Force the flag explicitly so ggml always sees it.
+        config.define("CMAKE_CROSSCOMPILING", "TRUE");
+
+        // Honour CC / CXX set by the caller (e.g. cargo cross, zig cc, …).
+        // If they are not set, fall back to the conventional
+        // `{target-triple}-gcc` / `{target-triple}-g++` names so that
+        // CMake picks up the right cross-compiler automatically.
+        if let Ok(cc) = env::var("CC") {
+            config.define("CMAKE_C_COMPILER", &cc);
+        } else {
+            let cc_guess = format!("{}-gcc", target);
+            config.define("CMAKE_C_COMPILER", &cc_guess);
+        }
+        if let Ok(cxx) = env::var("CXX") {
+            config.define("CMAKE_CXX_COMPILER", &cxx);
+        } else {
+            let cxx_guess = format!("{}-g++", target);
+            config.define("CMAKE_CXX_COMPILER", &cxx_guess);
+        }
+
+        // Propagate a sysroot when provided (e.g. via --sysroot or
+        // CARGO_TARGET_<TRIPLE>_RUSTFLAGS / CMAKE_SYSROOT env var).
+        if let Ok(sysroot) = env::var("CMAKE_SYSROOT") {
+            config.define("CMAKE_SYSROOT", &sysroot);
+        }
+    }
+
+    // ── GGML_NATIVE ──────────────────────────────────────────────────────────
+    // GGML_NATIVE=ON tells ggml to detect and use the *build host's* CPU
+    // features (e.g. -march=native, check_cxx_source_runs for ARM NEON/SVE,
+    // FindSIMD.cmake for MSVC).  That is wrong for cross-compilation: the
+    // probed features belong to the build host, not the target, so the
+    // resulting binary would crash with SIGILL on a different microarch.
+    //
+    // Override the cmake default explicitly so a stale CMakeCache.txt can
+    // never re-enable it after the user switches from a native to a cross
+    // build in the same OUT_DIR.
+    if is_cross {
+        // Belt-and-suspenders: even though CMAKE_CROSSCOMPILING=TRUE above
+        // already causes ggml to default GGML_NATIVE to OFF, we pin it here
+        // too so the cmake crate's cache-skip path cannot resurrect a
+        // previously cached ON value.
+        config.define("GGML_NATIVE", "OFF");
+    } else if cfg!(feature = "native") {
+        // The `native` Cargo feature explicitly opts in to host-CPU
+        // optimisation for non-cross builds.
+        config.define("GGML_NATIVE", "ON");
+    } else {
+        // Default native builds to OFF so that the resulting library is
+        // portable across machines of the same architecture (matching the
+        // behaviour users expect from a Rust crate).
+        config.define("GGML_NATIVE", "OFF");
+    }
+
+    // Disable OpenMP on 32-bit ARM Windows (compiler support is absent).
+    // Use the TARGET env var, not cfg!(), so the check works when
+    // cross-compiling from a non-Windows host.
+    if target.contains("windows") && target.starts_with("arm") && !target.starts_with("aarch64") {
         config.define("GGML_OPENMP", "OFF");
     }
 
-    if cfg!(windows) {
+    if target.contains("windows") {
         config.static_crt(static_crt);
     }
 
@@ -420,7 +549,7 @@ fn main() {
 
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
-        if cfg!(windows) {
+        if target.contains("windows") {
             let vulkan_path = env::var("VULKAN_SDK")
                 .expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
             let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
@@ -428,7 +557,7 @@ fn main() {
             println!("cargo:rustc-link-lib=vulkan-1");
         }
 
-        if cfg!(target_os = "linux") {
+        if target.contains("linux") {
             println!("cargo:rustc-link-lib=vulkan");
         }
     }
@@ -443,7 +572,7 @@ fn main() {
         config.define("GGML_OPENMP", "OFF");
     }
 
-    if cfg!(all(feature = "mpi")) {
+    if cfg!(feature = "mpi") {
         config.define("LLAMA_MPI", "ON");
     }
 
@@ -482,7 +611,7 @@ fn main() {
 
     let build_dir = config.build();
 
-    // Search paths
+    // ── Link search paths ────────────────────────────────────────────────────
     println!("cargo:rustc-link-search={}", out_dir.join("lib").display());
     println!(
         "cargo:rustc-link-search={}",
@@ -490,9 +619,9 @@ fn main() {
     );
     println!("cargo:rustc-link-search={}", build_dir.display());
 
-    // Link libraries
+    // ── Link libraries ───────────────────────────────────────────────────────
     let llama_libs_kind = if build_shared_libs { "dylib" } else { "static" };
-    let llama_libs = extract_lib_names(&out_dir, build_shared_libs);
+    let llama_libs = extract_lib_names(&out_dir, build_shared_libs, &target);
     assert_ne!(llama_libs.len(), 0);
 
     for lib in llama_libs {
@@ -521,13 +650,13 @@ fn main() {
         }
     }
 
-    // Windows debug
-    if cfg!(all(debug_assertions, windows)) {
+    // Windows debug runtime
+    if cfg!(debug_assertions) && target.contains("windows") {
         println!("cargo:rustc-link-lib=dylib=msvcrtd");
     }
 
-    // macOS
-    if cfg!(target_os = "macos") {
+    // macOS frameworks and libc++
+    if target.contains("apple") {
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=Metal");
         println!("cargo:rustc-link-lib=framework=MetalKit");
@@ -535,25 +664,33 @@ fn main() {
         println!("cargo:rustc-link-lib=c++");
     }
 
-    // Linux
-    if cfg!(target_os = "linux") {
+    // Linux libstdc++
+    if target.contains("linux") {
         println!("cargo:rustc-link-lib=dylib=stdc++");
     }
 
+    // On (older) macOS / Apple targets we may need to link against the clang
+    // runtime, which is hidden in a non-default path.
+    // More details at https://github.com/alexcrichton/curl-rust/issues/279.
     if target.contains("apple") {
-        // On (older) OSX we need to link against the clang runtime,
-        // which is hidden in some non-default path.
-        //
-        // More details at https://github.com/alexcrichton/curl-rust/issues/279.
-        if let Some(path) = macos_link_search_path() {
+        // When cross-compiling, try to use the target-specific clang binary
+        // so that --print-search-dirs returns paths relevant to the target SDK.
+        let clang_bin = if is_cross {
+            // e.g. "aarch64-apple-darwin-clang" from a cross-toolchain, or
+            // whatever CC the caller has set.
+            env::var("CC").unwrap_or_else(|_| format!("{}-clang", target))
+        } else {
+            "clang".to_owned()
+        };
+        if let Some(path) = macos_link_search_path(&clang_bin) {
             println!("cargo:rustc-link-lib=clang_rt.osx");
             println!("cargo:rustc-link-search={}", path);
         }
     }
 
-    // copy DLLs to target
+    // ── Copy shared-library assets to the Cargo target directory ─────────────
     if build_shared_libs {
-        let libs_assets = extract_lib_assets(&out_dir);
+        let libs_assets = extract_lib_assets(&out_dir, &target);
         for asset in libs_assets {
             let asset_clone = asset.clone();
             let filename = asset_clone.file_name().unwrap();
