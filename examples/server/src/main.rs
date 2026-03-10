@@ -37,16 +37,16 @@ use anyhow::Context as _;
 use clap::Parser;
 use futures_util::{stream, StreamExt as _};
 use hf_hub::api::sync::{Api, ApiBuilder};
+#[cfg(feature = "mtmd")]
+use llama_cpp_4::mtmd::{
+    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
+};
 use llama_cpp_4::{
     context::params::LlamaContextParams,
     llama_backend::LlamaBackend,
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel, Special},
     sampling::LlamaSampler,
-};
-#[cfg(feature = "mtmd")]
-use llama_cpp_4::mtmd::{
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
 };
 use serde_json::{json, Value};
 use std::{
@@ -150,8 +150,8 @@ enum ModelSource {
 // ---------------------------------------------------------------------------
 
 const QUANT_PREFERENCE: &[&str] = &[
-    "Q4_K_M", "Q4_K_S", "Q4_0", "Q5_K_M", "Q5_K_S", "Q5_0", "Q3_K_M", "Q3_K_S", "Q8_0",
-    "Q6_K", "Q2_K", "IQ4_XS", "IQ3_M",
+    "Q4_K_M", "Q4_K_S", "Q4_0", "Q5_K_M", "Q5_K_S", "Q5_0", "Q3_K_M", "Q3_K_S", "Q8_0", "Q6_K",
+    "Q2_K", "IQ4_XS", "IQ3_M",
 ];
 
 #[derive(Debug)]
@@ -385,7 +385,10 @@ fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
     tracing::info!(
         "Downloading mmproj '{chosen}' from '{repo}'{}…",
         if candidates.len() > 1 {
-            format!(" ({} candidates; use --mmproj to override)", candidates.len())
+            format!(
+                " ({} candidates; use --mmproj to override)",
+                candidates.len()
+            )
         } else {
             String::new()
         }
@@ -405,7 +408,14 @@ fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
 
 /// Preference order when multiple mmproj files are found in the same directory.
 /// Earlier entries win.
-const MMPROJ_PREFER: &[&str] = &["-F16.gguf", "-f16.gguf", "-BF16.gguf", "-bf16.gguf", "-F32.gguf", "-f32.gguf"];
+const _MMPROJ_PREFER: &[&str] = &[
+    "-F16.gguf",
+    "-f16.gguf",
+    "-BF16.gguf",
+    "-bf16.gguf",
+    "-F32.gguf",
+    "-f32.gguf",
+];
 
 /// Scan `dir` for files whose names start with `mmproj` and end with `.gguf`.
 /// Returns the best match according to [`MMPROJ_PREFER`], or the first
@@ -609,6 +619,7 @@ fn to_chat_messages(pairs: Vec<(String, String)>) -> Result<Vec<LlamaChatMessage
 // ---------------------------------------------------------------------------
 
 /// All sampling / generation parameters extracted from a request.
+#[allow(unused)]
 struct InferenceParams {
     prompt: String,
     temperature: f32,
@@ -799,10 +810,11 @@ async fn resolve_image_sources(
             ImageSource::Url(url) => fetch_url_bytes(&url).await?,
             ImageSource::FileId(id) => {
                 let store = file_store.read().await;
-                store
-                    .get(&id)
-                    .map(|e| e.bytes.clone())
-                    .ok_or_else(|| bad_request(format!("file '{id}' not found — upload it first via POST /v1/files")))?
+                store.get(&id).map(|e| e.bytes.clone()).ok_or_else(|| {
+                    bad_request(format!(
+                        "file '{id}' not found — upload it first via POST /v1/files"
+                    ))
+                })?
             }
         };
         out.push(bytes);
@@ -916,12 +928,7 @@ where
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut finish_reason = FinishReason::Stop;
 
-    let max_stop_len = params
-        .stop_seqs
-        .iter()
-        .map(|s| s.len())
-        .max()
-        .unwrap_or(0);
+    let max_stop_len = params.stop_seqs.iter().map(|s| s.len()).max().unwrap_or(0);
     let mut window = String::new();
     let mut cancelled = false;
 
@@ -996,7 +1003,7 @@ where
 }
 
 /// Minimum context size needed to hold the prompt + generated tokens.
-fn n_ctx_for_params(params: &InferenceParams) -> u32 {
+fn _n_ctx_for_params(params: &InferenceParams) -> u32 {
     // Rough upper bound: 4 chars per token on average.
     let prompt_est = (params.prompt.len() / 4 + 1) as u32;
     prompt_est + params.max_tokens
@@ -1118,12 +1125,7 @@ where
     // generated (but not-yet-emitted) text.  Everything before the window has
     // already been forwarded to `on_piece`, so we never re-emit it when a stop
     // sequence is finally matched.
-    let max_stop_len = params
-        .stop_seqs
-        .iter()
-        .map(|s| s.len())
-        .max()
-        .unwrap_or(0);
+    let max_stop_len = params.stop_seqs.iter().map(|s| s.len()).max().unwrap_or(0);
     let mut window = String::new();
     let mut cancelled = false;
 
@@ -1239,7 +1241,10 @@ async fn chat_completions(
         Err(e) => return error_response(bad_request(format!("invalid JSON: {e}"))),
     };
 
-    let streaming = parsed.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let streaming = parsed
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     // ── Early parameter validation ────────────────────────────────────────────
     // Validate sampling params *before* the expensive apply_chat_template call.
@@ -1253,25 +1258,15 @@ async fn chat_completions(
         if temperature < 0.0 {
             return error_response(bad_request("'temperature' must be >= 0"));
         }
-        let top_p = parsed
-            .get("top_p")
-            .and_then(Value::as_f64)
-            .unwrap_or(1.0) as f32;
+        let top_p = parsed.get("top_p").and_then(Value::as_f64).unwrap_or(1.0) as f32;
         if !(0.0 < top_p && top_p <= 1.0) {
             return error_response(bad_request("'top_p' must be in (0, 1]"));
         }
-        let top_k = parsed
-            .get("top_k")
-            .and_then(Value::as_i64)
-            .unwrap_or(0) as i32;
+        let top_k = parsed.get("top_k").and_then(Value::as_i64).unwrap_or(0) as i32;
         if top_k < 0 {
             return error_response(bad_request("'top_k' must be >= 0"));
         }
-        if parsed
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            == Some(0)
-        {
+        if parsed.get("max_tokens").and_then(Value::as_u64) == Some(0) {
             return error_response(bad_request("'max_tokens' must be > 0"));
         }
         if matches!(
@@ -1536,7 +1531,11 @@ async fn run_chat_stream(
             } else {
                 // Emit tool_calls delta.
                 let calls_json: Vec<Value> = tool_calls.iter().map(|c| c.to_value()).collect();
-                let content_val = if content.is_empty() { Value::Null } else { Value::String(content) };
+                let content_val = if content.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(content)
+                };
                 let _ = tx.blocking_send(sse_chunk(&json!({
                     "id": id2, "object": OBJ, "created": created, "model": model2,
                     "choices": [{"index":0,"delta":{"content":content_val,"tool_calls":calls_json},"finish_reason":null}]
@@ -1549,10 +1548,12 @@ async fn run_chat_stream(
         } else {
             // Pure streaming: emit each token piece immediately.
             if let Ok((_, fr)) = run_inference(&state2, &params, |piece| {
-                let ok = tx.blocking_send(sse_chunk(&json!({
-                    "id": id2, "object": OBJ, "created": created, "model": model2,
-                    "choices": [{"index":0,"delta":{"content":piece},"finish_reason":null}]
-                }))).is_ok();
+                let ok = tx
+                    .blocking_send(sse_chunk(&json!({
+                        "id": id2, "object": OBJ, "created": created, "model": model2,
+                        "choices": [{"index":0,"delta":{"content":piece},"finish_reason":null}]
+                    })))
+                    .is_ok();
                 ok
             }) {
                 finish_reason = fr;
@@ -1567,7 +1568,9 @@ async fn run_chat_stream(
     });
 
     let body_stream = stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|chunk| (Ok::<_, actix_web::Error>(chunk), rx))
+        rx.recv()
+            .await
+            .map(|chunk| (Ok::<_, actix_web::Error>(chunk), rx))
     });
 
     HttpResponse::Ok()
@@ -1610,7 +1613,10 @@ async fn completions(
         _ => return error_response(bad_request("'prompt' must be a string")),
     };
 
-    let streaming = parsed.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let streaming = parsed
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let params = match InferenceParams::from_request(&parsed, prompt) {
         Ok(p) => p,
         Err(e) => return error_response(e),
@@ -1719,7 +1725,9 @@ async fn run_completion_stream(
     });
 
     let body_stream = stream::unfold(rx, |mut rx| async move {
-        rx.recv().await.map(|chunk| (Ok::<_, actix_web::Error>(chunk), rx))
+        rx.recv()
+            .await
+            .map(|chunk| (Ok::<_, actix_web::Error>(chunk), rx))
     });
 
     HttpResponse::Ok()
@@ -1902,9 +1910,7 @@ async fn upload_file(
         while let Some(chunk) = field.next().await {
             match chunk {
                 Ok(bytes) => data.extend_from_slice(&bytes),
-                Err(e) => {
-                    return error_response(internal_error(format!("chunk read error: {e}")))
-                }
+                Err(e) => return error_response(internal_error(format!("chunk read error: {e}"))),
             }
         }
 
@@ -1946,21 +1952,19 @@ async fn upload_file(
 
     tracing::info!("Stored file {id} ({size} bytes, purpose={purpose})");
 
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .body(
-            json!({
-                "id": id,
-                "object": "file",
-                "bytes": size,
-                "created_at": created_at,
-                "filename": filename,
-                "purpose": purpose,
-                "status": "processed",
-                "status_details": null
-            })
-            .to_string(),
-        )
+    HttpResponse::Ok().content_type("application/json").body(
+        json!({
+            "id": id,
+            "object": "file",
+            "bytes": size,
+            "created_at": created_at,
+            "filename": filename,
+            "purpose": purpose,
+            "status": "processed",
+            "status_details": null
+        })
+        .to_string(),
+    )
 }
 
 /// `GET /v1/files` — list all uploaded files.
@@ -2077,22 +2081,20 @@ async fn list_models(req: HttpRequest, state: web::Data<AppState>) -> HttpRespon
     let n_ctx = state
         .default_ctx_size
         .map_or(state.model.n_ctx_train(), NonZeroU32::get);
-    HttpResponse::Ok()
-        .content_type("application/json")
-        .body(
-            json!({
-                "object": "list",
-                "data": [{
-                    "id": state.model_name,
-                    "object": "model",
-                    "created": now_secs(),
-                    "owned_by": "llama.cpp",
-                    "context_length": n_ctx,
-                    "embedding_length": state.model.n_embd()
-                }]
-            })
-            .to_string(),
-        )
+    HttpResponse::Ok().content_type("application/json").body(
+        json!({
+            "object": "list",
+            "data": [{
+                "id": state.model_name,
+                "object": "model",
+                "created": now_secs(),
+                "owned_by": "llama.cpp",
+                "context_length": n_ctx,
+                "embedding_length": state.model.n_embd()
+            }]
+        })
+        .to_string(),
+    )
 }
 
 async fn health() -> HttpResponse {
@@ -2178,15 +2180,19 @@ async fn main() -> std::io::Result<()> {
         //  3. --mmproj not given → scan the model's directory for any
         //     `mmproj-*.gguf` and pick the best one automatically.
         let mmproj_path: Option<PathBuf> = match &args.mmproj {
-            Some(p) if p.components().count() == 1 && p.parent() == Some(std::path::Path::new("")) => {
+            Some(p)
+                if p.components().count() == 1 && p.parent() == Some(std::path::Path::new("")) =>
+            {
                 // bare filename — resolve relative to model directory
-                let candidate = model_path.parent()
+                let candidate = model_path
+                    .parent()
                     .map(|d| d.join(p))
                     .filter(|f| f.exists());
                 if candidate.is_none() {
                     tracing::warn!(
                         "mmproj '{}' not found next to model ({}); skipping multimodal",
-                        p.display(), model_dir.display()
+                        p.display(),
+                        model_dir.display()
                     );
                 }
                 candidate
@@ -2195,8 +2201,8 @@ async fn main() -> std::io::Result<()> {
             None => {
                 // 1. Scan the local cache directory (fast, no network).
                 find_mmproj_in_dir(model_dir)
-                // 2. Fall back: download from the same HuggingFace repo.
-                .or_else(|| hf_repo.as_deref().and_then(download_mmproj_from_hf))
+                    // 2. Fall back: download from the same HuggingFace repo.
+                    .or_else(|| hf_repo.as_deref().and_then(download_mmproj_from_hf))
             }
         };
 
@@ -2281,7 +2287,10 @@ async fn main() -> std::io::Result<()> {
             .route("/v1/files", web::post().to(upload_file))
             .route("/v1/files", web::get().to(list_files))
             .route("/v1/files/{file_id}", web::get().to(get_file))
-            .route("/v1/files/{file_id}/content", web::get().to(get_file_content))
+            .route(
+                "/v1/files/{file_id}/content",
+                web::get().to(get_file_content),
+            )
             .route("/v1/files/{file_id}", web::delete().to(delete_file))
     })
     .bind(&addr)?
@@ -2353,7 +2362,10 @@ mod tests {
             "Q3_K_S/model.gguf".to_string(),
         ];
         let groups = collect_groups(files);
-        let mut scores: Vec<_> = groups.iter().map(|g| (g.preference_score(), &g.label)).collect();
+        let mut scores: Vec<_> = groups
+            .iter()
+            .map(|g| (g.preference_score(), &g.label))
+            .collect();
         scores.sort();
         // Q4_K_M should have the lowest (best) score
         assert!(scores[0].1.contains("Q4_K_M"), "got {scores:?}");
