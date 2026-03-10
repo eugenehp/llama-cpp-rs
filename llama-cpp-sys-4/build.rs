@@ -216,6 +216,36 @@ fn cmake_system_name(target: &str) -> &'static str {
     }
 }
 
+/// Derive a MinGW cross-compiler binary name from a Rust `windows-gnu` target triple.
+///
+/// Rust uses `x86_64-pc-windows-gnu` / `x86_64-pc-windows-gnullvm` while the
+/// MinGW toolchain conventionally uses `x86_64-w64-mingw32`.  The `gnullvm`
+/// variant uses Clang instead of GCC.
+///
+/// Returns `None` for `windows-msvc` targets — MSVC cannot cross-compile from
+/// a non-Windows host and users must supply `CC`/`CXX` themselves.
+fn mingw_compiler(target: &str, cxx: bool) -> Option<String> {
+    if !target.contains("windows-gnu") {
+        return None;
+    }
+    let arch = if target.contains("x86_64") {
+        "x86_64"
+    } else if target.contains("i686") || target.contains("i586") {
+        "i686"
+    } else if target.contains("aarch64") {
+        "aarch64"
+    } else {
+        target.split('-').next()?
+    };
+    // `gnullvm` targets use LLVM/Clang; plain `gnu` targets use GCC.
+    let compiler = if target.contains("gnullvm") {
+        if cxx { "clang++" } else { "clang" }
+    } else {
+        if cxx { "g++" } else { "gcc" }
+    };
+    Some(format!("{}-w64-mingw32-{}", arch, compiler))
+}
+
 /// Map a Rust target triple to the CMake `CMAKE_SYSTEM_PROCESSOR` value.
 fn cmake_system_processor(target: &str) -> String {
     let arch = target.split('-').next().unwrap_or("unknown");
@@ -506,20 +536,27 @@ fn main() {
             // ── Non-Apple cross-compilation ───────────────────────────────────────
             //
             // Honour CC / CXX set by the caller (e.g. cargo cross, zig cc, …).
-            // If they are not set, fall back to the conventional
-            // `{target-triple}-gcc` / `{target-triple}-g++` names so that
-            // CMake picks up the right cross-compiler automatically.
+            // If they are not set:
+            //  • Windows GNU targets  → derive the MinGW triple name
+            //    (e.g. x86_64-pc-windows-gnu → x86_64-w64-mingw32-gcc)
+            //  • Windows MSVC targets → no safe default; MSVC cannot
+            //    cross-compile from a non-Windows host, so the user must
+            //    supply CC/CXX (e.g. clang-cl via a sysroot).
+            //  • Everything else      → {target-triple}-gcc / g++
             if let Ok(cc) = env::var("CC") {
                 config.define("CMAKE_C_COMPILER", &cc);
-            } else {
-                let cc_guess = format!("{}-gcc", target);
-                config.define("CMAKE_C_COMPILER", &cc_guess);
+            } else if let Some(cc) = mingw_compiler(&target, false) {
+                config.define("CMAKE_C_COMPILER", &cc);
+            } else if !target.contains("windows-msvc") {
+                config.define("CMAKE_C_COMPILER", format!("{}-gcc", target));
             }
+
             if let Ok(cxx) = env::var("CXX") {
                 config.define("CMAKE_CXX_COMPILER", &cxx);
-            } else {
-                let cxx_guess = format!("{}-g++", target);
-                config.define("CMAKE_CXX_COMPILER", &cxx_guess);
+            } else if let Some(cxx) = mingw_compiler(&target, true) {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            } else if !target.contains("windows-msvc") {
+                config.define("CMAKE_CXX_COMPILER", format!("{}-g++", target));
             }
 
             // Propagate a sysroot when provided (e.g. via --sysroot or
@@ -564,7 +601,9 @@ fn main() {
         config.define("GGML_OPENMP", "OFF");
     }
 
-    if target.contains("windows") {
+    // static_crt (MSVC /MT vs /MD) is meaningless for MinGW; only set it for
+    // MSVC targets to avoid confusing CMake on windows-gnu cross builds.
+    if target.contains("windows-msvc") {
         config.static_crt(static_crt);
     }
 
@@ -689,8 +728,8 @@ fn main() {
         }
     }
 
-    // Windows debug runtime
-    if cfg!(debug_assertions) && target.contains("windows") {
+    // msvcrtd is the MSVC debug CRT — it does not exist in MinGW toolchains.
+    if cfg!(debug_assertions) && target.contains("windows-msvc") {
         println!("cargo:rustc-link-lib=dylib=msvcrtd");
     }
 
