@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
@@ -60,9 +60,28 @@ include = [
 
     "/llama.cpp/pocs",
 
-    # mtmd (multimodal) support
+    # tools/ — tools/CMakeLists.txt unconditionally add_subdirectory()s all
+    # of these, so every subdirectory must be present even when only mtmd is
+    # needed; otherwise cmake exits 1 with "not an existing directory" errors.
     "/llama.cpp/tools/CMakeLists.txt",
     "/llama.cpp/tools/mtmd/**/*",
+    "/llama.cpp/tools/batched-bench/**/*",
+    "/llama.cpp/tools/cli/**/*",
+    "/llama.cpp/tools/completion/**/*",
+    "/llama.cpp/tools/cvector-generator/**/*",
+    "/llama.cpp/tools/export-lora/**/*",
+    "/llama.cpp/tools/fit-params/**/*",
+    "/llama.cpp/tools/gguf-split/**/*",
+    "/llama.cpp/tools/imatrix/**/*",
+    "/llama.cpp/tools/llama-bench/**/*",
+    "/llama.cpp/tools/parser/**/*",
+    "/llama.cpp/tools/perplexity/**/*",
+    "/llama.cpp/tools/quantize/**/*",
+    "/llama.cpp/tools/results/**/*",
+    "/llama.cpp/tools/rpc/**/*",
+    "/llama.cpp/tools/server/**/*",
+    "/llama.cpp/tools/tokenize/**/*",
+    "/llama.cpp/tools/tts/**/*",
     "/llama.cpp/vendor/stb/**/*",
     "/llama.cpp/vendor/miniaudio/**/*",
     "/llama.cpp/vendor/sheredom/**/*",
