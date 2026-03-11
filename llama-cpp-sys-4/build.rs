@@ -302,6 +302,41 @@ fn main() {
         .map(|v| v == "1")
         .unwrap_or(false);
 
+    // ── Windows MAX_PATH workaround ──────────────────────────────────────────
+    // Cargo's OUT_DIR already contains a long hashed path segment.  The Vulkan
+    // backend adds a deeply-nested ExternalProject sub-build
+    // (ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+    //  CMakeFiles/3.x.x/VCTargetsPath/x64/Debug/VCTargetsPath.tlog/…)
+    // that pushes the total path well beyond Windows' MAX_PATH of 260 chars,
+    // causing MSBuild error MSB3491.
+    //
+    // Fix: on Windows, redirect cmake's build+install tree to a short path
+    // under %LOCALAPPDATA% that is derived from a stable hash of OUT_DIR so
+    // different crate versions / OUT_DIRs get their own isolated build trees.
+    let cmake_out_dir: PathBuf = if target.contains("windows") {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        out_dir.to_string_lossy().as_ref().hash(&mut hasher);
+        // Use 8 hex digits (32-bit) — enough collision-resistance for local builds.
+        let hash = hasher.finish() as u32;
+        // Prefer %LOCALAPPDATA% (~26 chars on a default Windows install) over
+        // %TEMP% because TEMP sometimes points to a longer UNC path.
+        let base = std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("TEMP"))
+            .or_else(|_| std::env::var("TMP"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\Temp"));
+        // Final cmake_out_dir ≈ base(~26) + \llcb\(6) + 8hex(8) = ~40 chars.
+        // The deepest vulkan sub-path adds ~167 chars → total ~207 < 260. ✓
+        let short_dir = base.join("llcb").join(format!("{:08x}", hash));
+        std::fs::create_dir_all(&short_dir)
+            .expect("Failed to create short cmake output dir (Windows MAX_PATH workaround)");
+        short_dir
+    } else {
+        out_dir.clone()
+    };
+
     debug_log!("HOST: {}", host);
     debug_log!("TARGET: {}", target);
     debug_log!("CROSS_COMPILING: {}", is_cross);
@@ -704,6 +739,7 @@ fn main() {
 
     // General
     config
+        .out_dir(&cmake_out_dir)
         .profile(&profile)
         .very_verbose(std::env::var("CMAKE_VERBOSE").is_ok()) // Not verbose by default
         .always_configure(false);
@@ -724,7 +760,7 @@ fn main() {
     //     crashes with SIGILL on any chip that lacks the build host's ISA
     //     extensions.
     {
-        let cmake_build_dir = out_dir.join("build");
+        let cmake_build_dir = cmake_out_dir.join("build");
         let cache = cmake_build_dir.join("CMakeCache.txt");
         if cache.exists() {
             let has_makefile = cmake_build_dir.join("Makefile").exists();
@@ -805,16 +841,16 @@ fn main() {
     let build_dir = config.build();
 
     // ── Link search paths ────────────────────────────────────────────────────
-    println!("cargo:rustc-link-search={}", out_dir.join("lib").display());
+    println!("cargo:rustc-link-search={}", cmake_out_dir.join("lib").display());
     println!(
         "cargo:rustc-link-search={}",
-        out_dir.join("lib64").display()
+        cmake_out_dir.join("lib64").display()
     );
     println!("cargo:rustc-link-search={}", build_dir.display());
 
     // ── Link libraries ───────────────────────────────────────────────────────
     let llama_libs_kind = if build_shared_libs { "dylib" } else { "static" };
-    let llama_libs = extract_lib_names(&out_dir, build_shared_libs, &target);
+    let llama_libs = extract_lib_names(&cmake_out_dir, build_shared_libs, &target);
     assert_ne!(llama_libs.len(), 0);
 
     for lib in llama_libs {
@@ -832,7 +868,7 @@ fn main() {
     // This can happen even without the "openmp" feature because cmake's FindOpenMP
     // is invoked unconditionally on some platforms (e.g. ARM) when the
     // ggml-cpu CMakeLists includes OpenMP support at the variant level.
-    let cmake_cache_path = out_dir.join("build").join("CMakeCache.txt");
+    let cmake_cache_path = cmake_out_dir.join("build").join("CMakeCache.txt");
     let openmp_enabled_in_cmake = std::fs::read_to_string(&cmake_cache_path)
         .map(|contents| contents.contains("GGML_OPENMP_ENABLED:INTERNAL=ON"))
         .unwrap_or(false);
@@ -892,7 +928,7 @@ fn main() {
 
     // ── Copy shared-library assets to the Cargo target directory ─────────────
     if build_shared_libs {
-        let libs_assets = extract_lib_assets(&out_dir, &target);
+        let libs_assets = extract_lib_assets(&cmake_out_dir, &target);
         for asset in libs_assets {
             let asset_clone = asset.clone();
             let filename = asset_clone.file_name().unwrap();
