@@ -47,12 +47,8 @@ fn llama_src_version(src: &Path) -> String {
                     let head = head.trim();
                     if head.starts_with("ref:") {
                         // Resolve the ref to the actual commit hash.
-                        let ref_path = head
-                            .strip_prefix("ref:")
-                            .map(str::trim)
-                            .unwrap_or(head);
-                        let commit_path =
-                            git_file.parent().unwrap().join(rel).join(ref_path);
+                        let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
+                        let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
                         if let Ok(hash) = std::fs::read_to_string(commit_path) {
                             return hash.trim().to_owned();
                         }
@@ -169,7 +165,11 @@ fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
         "*.so"
     };
 
-    let shared_libs_dir = if target.contains("windows") { "bin" } else { "lib" };
+    let shared_libs_dir = if target.contains("windows") {
+        "bin"
+    } else {
+        "lib"
+    };
     let libs_dir = out_dir.join(shared_libs_dir);
     let pattern = libs_dir.join(shared_lib_pattern);
     debug_log!("Extract lib assets {}", pattern.display());
@@ -257,9 +257,17 @@ fn mingw_compiler(target: &str, cxx: bool) -> Option<String> {
     };
     // `gnullvm` targets use LLVM/Clang; plain `gnu` targets use GCC.
     let compiler = if target.contains("gnullvm") {
-        if cxx { "clang++" } else { "clang" }
+        if cxx {
+            "clang++"
+        } else {
+            "clang"
+        }
     } else {
-        if cxx { "g++" } else { "gcc" }
+        if cxx {
+            "g++"
+        } else {
+            "gcc"
+        }
     };
     Some(format!("{}-w64-mingw32-{}", arch, compiler))
 }
@@ -279,6 +287,16 @@ fn cmake_system_processor(target: &str) -> String {
         "s390x" => "s390x".to_owned(),
         "wasm32" => "wasm32".to_owned(),
         other => other.to_owned(),
+    }
+}
+
+fn get_vulkan_sdk_path() -> Option<String> {
+    let path = env::var("VULKAN_SDK").ok()?;
+
+    if Path::new(&path).exists() {
+        Some(path)
+    } else {
+        None
     }
 }
 
@@ -663,8 +681,7 @@ fn main() {
     // higher-arch macros from being defined.  Users who want native
     // performance on their own machine should add --features native, which
     // takes the GGML_NATIVE=ON path above and skips this block entirely.
-    let is_arm_target =
-        target.starts_with("aarch64") || target.starts_with("arm");
+    let is_arm_target = target.starts_with("aarch64") || target.starts_with("arm");
     if is_arm_target && !want_native && !target.contains("android") {
         // Don't override if the caller already set a custom arch via env var
         // (e.g. GGML_CPU_ARM_ARCH=armv8.2-a+dotprod for a specific fleet).
@@ -706,16 +723,45 @@ fn main() {
 
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
-        if target.contains("windows") {
-            let vulkan_path = env::var("VULKAN_SDK")
-                .expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
-            let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
-            println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
-            println!("cargo:rustc-link-lib=vulkan-1");
-        }
+        let vulkan_path = match get_vulkan_sdk_path() {
+            Some(path) => path,
+            None => {
+                println!(
+                    "cargo:warning=Vulkan SDK is required for this feature but was not found."
+                );
+                println!("cargo:warning=\nPlease install the Vulkan SDK from https://vulkan.lunarg.com/sdk/home");
+                println!("cargo:warning=Alternatively, consider using --features metal instead.");
+                return; // Don't build without Vulkan SDK
+            }
+        };
 
         if target.contains("linux") {
+            let vulkan_lib_path = Path::new(&vulkan_path).join("lib64");
+            println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
             println!("cargo:rustc-link-lib=vulkan");
+        } else if target.contains("windows") {
+            // Windows uses Lib directory directly from VULKAN_SDK
+            let lib_dir = PathBuf::from(format!("{}/Lib", vulkan_path));
+            println!("cargo:rustc-link-search={}", lib_dir.display());
+            println!("cargo:rustc-link-lib=vulkan-1");
+        } else if target.contains("apple") {
+            // macOS - link to Vulkan SDK libraries
+            match &vulkan_path[..] {
+                path_str if path_str.contains("/VulkanSDK/") => {
+                    let lib_dir = PathBuf::from(format!("{}/lib", vulkan_path));
+                    println!("cargo:rustc-link-search={}", lib_dir.display());
+                    println!("cargo:rustc-link-lib=vulkan");
+
+                    // Link Apple-specific frameworks required for Vulkan on macOS
+                    println!("cargo:rustc-link-lib=framework=Metal");
+                    println!("cargo:rustc-link-lib=framework=MetalKit");
+                }
+                _ => {
+                    let lib_dir = PathBuf::from(format!("{}/Lib", vulkan_path));
+                    println!("cargo:rustc-link-search={}", lib_dir.display());
+                    println!("cargo:rustc-link-lib=vulkan");
+                }
+            }
         }
     }
 
@@ -770,8 +816,7 @@ fn main() {
                     "CMakeCache.txt exists but no Makefile/build.ninja found — \
                      removing cache to force reconfiguration"
                 );
-                std::fs::remove_file(&cache)
-                    .expect("failed to remove stale CMakeCache.txt");
+                std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
             } else {
                 // Check whether the cached GGML_NATIVE value matches what we
                 // are about to configure.  A mismatch means a previous build
@@ -779,16 +824,13 @@ fn main() {
                 // state) and the cmake crate's cache-skip path will silently
                 // use the wrong value.
                 let desired_native_str = if want_native { "ON" } else { "OFF" };
-                let cache_contents =
-                    std::fs::read_to_string(&cache).unwrap_or_default();
+                let cache_contents = std::fs::read_to_string(&cache).unwrap_or_default();
 
                 // 2a. GGML_NATIVE mismatch.
-                let cached_native_on =
-                    cache_contents.contains("GGML_NATIVE:BOOL=ON");
-                let cached_native_off =
-                    cache_contents.contains("GGML_NATIVE:BOOL=OFF");
-                let native_mismatch = (want_native && cached_native_off)
-                    || (!want_native && cached_native_on);
+                let cached_native_on = cache_contents.contains("GGML_NATIVE:BOOL=ON");
+                let cached_native_off = cache_contents.contains("GGML_NATIVE:BOOL=OFF");
+                let native_mismatch =
+                    (want_native && cached_native_off) || (!want_native && cached_native_on);
 
                 // 2b. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
                 //     to set (ARM non-native non-android builds).  Without an
@@ -811,8 +853,7 @@ fn main() {
                     .find(|l| l.starts_with("GGML_CPU_ARM_ARCH:"))
                     .and_then(|l| l.splitn(2, '=').nth(1))
                     .unwrap_or("");
-                let arm_arch_mismatch =
-                    we_set_arm_arch && cached_arm_arch != "armv8-a";
+                let arm_arch_mismatch = we_set_arm_arch && cached_arm_arch != "armv8-a";
 
                 let mismatch = native_mismatch || arm_arch_mismatch;
                 if mismatch {
@@ -829,10 +870,13 @@ fn main() {
                         },
                         desired_native_str,
                         cached_arm_arch,
-                        if we_set_arm_arch { "armv8-a" } else { "(not set)" },
+                        if we_set_arm_arch {
+                            "armv8-a"
+                        } else {
+                            "(not set)"
+                        },
                     );
-                    std::fs::remove_file(&cache)
-                        .expect("failed to remove stale CMakeCache.txt");
+                    std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
                 }
             }
         }
@@ -841,7 +885,10 @@ fn main() {
     let build_dir = config.build();
 
     // ── Link search paths ────────────────────────────────────────────────────
-    println!("cargo:rustc-link-search={}", cmake_out_dir.join("lib").display());
+    println!(
+        "cargo:rustc-link-search={}",
+        cmake_out_dir.join("lib").display()
+    );
     println!(
         "cargo:rustc-link-search={}",
         cmake_out_dir.join("lib64").display()
