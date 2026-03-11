@@ -280,6 +280,22 @@ impl MtmdContext {
         Ok(Self { ptr })
     }
 
+    // ── Logging ──────────────────────────────────────────────────────────
+
+    /// Silence all clip/mtmd log output by installing a no-op callback.
+    ///
+    /// Call this right after [`init_from_file`](Self::init_from_file) to
+    /// suppress the verbose `clip_model_loader: tensor[N]…` lines that
+    /// clip.cpp emits to its own private logger (separate from `llama_log_set`).
+    pub fn void_logs() {
+        unsafe extern "C" fn noop(
+            _level: sys::ggml_log_level,
+            _text:  *const ::std::os::raw::c_char,
+            _ud:    *mut   ::std::os::raw::c_void,
+        ) {}
+        unsafe { sys::mtmd_log_set(Some(noop), std::ptr::null_mut()) };
+    }
+
     // ── Capability queries ────────────────────────────────────────────────
 
     /// Returns `true` if the model supports vision (image) input.
