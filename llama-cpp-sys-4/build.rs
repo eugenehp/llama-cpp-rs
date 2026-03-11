@@ -264,6 +264,34 @@ fn mingw_compiler(target: &str, cxx: bool) -> Option<String> {
     Some(format!("{}-w64-mingw32-{}", arch, compiler))
 }
 
+fn command_exists(cmd: &str) -> bool {
+    Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn apple_vulkan_available() -> bool {
+    let has_glslc = command_exists("glslc");
+
+    let sdk = match env::var("VULKAN_SDK") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => return false,
+    };
+
+    // LunarG macOS SDK layout:
+    //   $VULKAN_SDK/include/vulkan/vulkan.h
+    //   $VULKAN_SDK/lib/libvulkan*.dylib
+    let header_ok = sdk.join("include").join("vulkan").join("vulkan.h").exists();
+    let lib_dir = sdk.join("lib");
+    let lib_ok = lib_dir.join("libvulkan.dylib").exists()
+        || lib_dir.join("libvulkan.1.dylib").exists()
+        || lib_dir.join("libMoltenVK.dylib").exists();
+
+    has_glslc && header_ok && lib_ok
+}
+
 /// Map a Rust target triple to the CMake `CMAKE_SYSTEM_PROCESSOR` value.
 fn cmake_system_processor(target: &str) -> String {
     let arch = target.split('-').next().unwrap_or("unknown");
@@ -704,8 +732,21 @@ fn main() {
         config.define("GGML_LLAMAFILE", "OFF");
     }
 
+    let mut enable_metal = cfg!(feature = "metal");
+
     if cfg!(feature = "vulkan") {
-        config.define("GGML_VULKAN", "ON");
+        // On macOS, allow `--features vulkan` to gracefully fall back to
+        // Metal when Vulkan SDK tooling is not available.
+        if target.contains("apple") && !apple_vulkan_available() {
+            println!(
+                "cargo:warning=Vulkan SDK not found or incomplete on macOS (need VULKAN_SDK, Vulkan headers/library, and glslc). Falling back to Metal backend."
+            );
+            config.define("GGML_VULKAN", "OFF");
+            enable_metal = true;
+        } else {
+            config.define("GGML_VULKAN", "ON");
+        }
+
         if target.contains("windows") {
             let vulkan_path = env::var("VULKAN_SDK")
                 .expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
@@ -717,6 +758,10 @@ fn main() {
         if target.contains("linux") {
             println!("cargo:rustc-link-lib=vulkan");
         }
+    }
+
+    if enable_metal {
+        config.define("GGML_METAL", "ON");
     }
 
     if cfg!(feature = "cuda") {
