@@ -2,7 +2,7 @@ name: Update llama cpp nightly
 on:
   schedule:
     - cron: '0 0 * * *'
-  workflow_dispatch: { }
+  workflow_dispatch:
 
 permissions:
   pull-requests: write
@@ -14,32 +14,46 @@ jobs:
     name: Update llama cpp
     steps:
       - name: Set date
-        run: echo "DATE=$(date -I)" >> $GITHUB_ENV
+        id: date
+        run: echo "value=$(date -I)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         name: Checkout latest
         with:
           submodules: recursive
       - name: Create branch
-        run: git checkout -b update-llama-cpp-${{ env.DATE }}
+        run: git checkout -b update-llama-cpp-${{ steps.date.outputs.value }}
       - name: Update submodules
-        run: git submodule update --remote
+        run: git submodule update --init --recursive --remote
       - name: Config git
         run: |
           git config --global user.email "update@llama.cpp"
           git config --global user.name "LLAMA CPP"
+      - name: Detect changes
+        id: changes
+        run: |
+          git add llama-cpp-sys-4/llama.cpp
+          if git diff --cached --quiet; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Commit
+        if: steps.changes.outputs.has_changes == 'true'
         run: git commit -am "updated llama.cpp"
       - name: Push
-        run: git push --set-upstream origin update-llama-cpp-${{ env.DATE }} --force
+        if: steps.changes.outputs.has_changes == 'true'
+        run: git push --set-upstream origin update-llama-cpp-${{ steps.date.outputs.value }} --force
       - name: Close any outdated PRs
+        if: steps.changes.outputs.has_changes == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr list --json number,title --jq '.[] | select(.title | contains("Updated llama-cpp (bot)")) | .number' | xargs -I {} gh pr close {}
       - name: Create open PR
+        if: steps.changes.outputs.has_changes == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.LLAMA_CPP_RS_UPDATE_LLAMA_CPP_ACTION}}
         run: |
           unset GITHUB_TOKEN
           echo ${{ secrets.LLAMA_CPP_RS_UPDATE_LLAMA_CPP_ACTION }} | gh auth login --with-token
-          gh pr create --fill --head update-llama-cpp-${{ env.DATE }} --title "Updated llama-cpp (bot)"
+          gh pr create --fill --head update-llama-cpp-${{ steps.date.outputs.value }} --title "Updated llama-cpp (bot)"

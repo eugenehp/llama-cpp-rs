@@ -14,7 +14,7 @@ permissions: read-all
 
 jobs:
   check:
-    name: Run Tests on LLama Cpp Rs
+    name: Run tests on llama-cpp-rs
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
