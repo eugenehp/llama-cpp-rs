@@ -902,6 +902,47 @@ fn main() {
         }
     }
 
+    // ── x86 portable baseline ─────────────────────────────────────────────
+    // When GGML_NATIVE=OFF on a *native* (non-cross) build, cmake computes
+    // GGML_NATIVE_DEFAULT=ON (because CMAKE_CROSSCOMPILING is FALSE).  The
+    // INS_ENB variable then becomes ON:
+    //
+    //   if (GGML_NATIVE OR NOT GGML_NATIVE_DEFAULT)
+    //       set(INS_ENB OFF)
+    //   else()
+    //       set(INS_ENB ON)          # ← this path
+    //   endif()
+    //
+    // This causes GGML_AVX, GGML_AVX2, GGML_FMA, GGML_F16C, GGML_BMI2,
+    // and GGML_SSE42 to all default to ON.  The resulting library is compiled
+    // with -mavx2 -mfma etc. and crashes with SIGILL ("illegal hardware
+    // instruction") on any CPU that lacks those extensions — e.g. older
+    // Pentium/Celeron, Atom, first-gen Xeon, or VMs that mask AVX.
+    //
+    // For a distributable Rust crate the default must be portable: only
+    // assume SSE4.2 (baseline for all x86_64 CPUs since Nehalem, 2008).
+    // Users who want full host-CPU optimisation should use --features native.
+    let is_x86_target =
+        target.starts_with("x86_64") || target.starts_with("i686") || target.starts_with("i586");
+    if is_x86_target && !want_native {
+        // SSE4.2 is the effective baseline for x86_64; leave it ON.
+        config.define("GGML_SSE42", "ON");
+        // Everything above SSE4.2 is not universally available — disable.
+        config.define("GGML_AVX", "OFF");
+        config.define("GGML_AVX2", "OFF");
+        config.define("GGML_AVX_VNNI", "OFF");
+        config.define("GGML_FMA", "OFF");
+        config.define("GGML_F16C", "OFF");
+        config.define("GGML_BMI2", "OFF");
+        config.define("GGML_AVX512", "OFF");
+        config.define("GGML_AVX512_VBMI", "OFF");
+        config.define("GGML_AVX512_VNNI", "OFF");
+        config.define("GGML_AVX512_BF16", "OFF");
+        config.define("GGML_AMX_TILE", "OFF");
+        config.define("GGML_AMX_INT8", "OFF");
+        config.define("GGML_AMX_BF16", "OFF");
+    }
+
     // Disable OpenMP on 32-bit ARM Windows (compiler support is absent).
     // Use the TARGET env var, not cfg!(), so the check works when
     // cross-compiling from a non-Windows host.
@@ -1085,7 +1126,26 @@ fn main() {
                 let arm_arch_mismatch =
                     we_set_arm_arch && cached_arm_arch != "armv8-a";
 
-                let mismatch = native_mismatch || arm_arch_mismatch;
+                // 2c. x86 ISA options: when !want_native on x86, we now
+                //     force AVX/AVX2/FMA/F16C/BMI2 to OFF.  A stale cache
+                //     from a previous build (or from before this fix) may
+                //     still have them ON, causing SIGILL on older CPUs.
+                let is_x86_target_local =
+                    target.starts_with("x86_64") || target.starts_with("i686") || target.starts_with("i586");
+                let x86_isa_mismatch = is_x86_target_local && !want_native && {
+                    // Check if any of the ISA options we now force OFF are
+                    // still cached as ON.
+                    let stale_options = [
+                        "GGML_AVX:BOOL=ON",
+                        "GGML_AVX2:BOOL=ON",
+                        "GGML_FMA:BOOL=ON",
+                        "GGML_F16C:BOOL=ON",
+                        "GGML_BMI2:BOOL=ON",
+                    ];
+                    stale_options.iter().any(|opt| cache_contents.contains(opt))
+                };
+
+                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch;
                 if mismatch {
                     debug_log!(
                         "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \

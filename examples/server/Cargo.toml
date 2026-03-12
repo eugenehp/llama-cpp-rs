@@ -1,6 +1,6 @@
 [package]
 name = "openai-server"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 publish = false
 description = "Minimal OpenAI-compatible chat completion server"

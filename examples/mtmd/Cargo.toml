@@ -1,11 +1,11 @@
 [package]
 name = "mtmd"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2021"
 description = "Multimodal (image/audio) example using llama-cpp-4 with the mtmd feature"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.9", features = ["mtmd"] }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.10", features = ["mtmd"] }
 anyhow     = { workspace = true }
 clap       = { workspace = true, features = ["derive"] }
 
