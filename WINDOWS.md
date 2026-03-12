@@ -41,7 +41,13 @@ Install Vulkan SDK (includes headers, loader, and `glslc`):
 choco install vulkan-sdk -y
 ```
 
-Set SDK environment variables for the current session (PowerShell):
+The build script **automatically detects** the Vulkan SDK by checking:
+
+1. The `VULKAN_SDK` environment variable (if set).
+2. The Windows registry (`HKLM\SOFTWARE\LunarG\VulkanSDK`).
+3. The default install directory `C:\VulkanSDK\<latest version>`.
+
+If automatic detection fails, set the SDK path manually for the current session (PowerShell):
 
 ```powershell
 $latest = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
@@ -69,7 +75,7 @@ If you see:
 
 - `Could NOT find Vulkan (missing: Vulkan_LIBRARY Vulkan_INCLUDE_DIR glslc)`
 
-then the Vulkan SDK is not installed correctly, or `VULKAN_SDK`/`PATH` are not set in your current shell.
+then the Vulkan SDK is not installed correctly. The build script tries to find it automatically, but if that fails, ensure `VULKAN_SDK` is set and `glslc` is on your `PATH`.
 
 ## CI check
 

@@ -310,6 +310,85 @@ fn cmake_system_processor(target: &str) -> String {
     }
 }
 
+/// Try to locate the Vulkan SDK on Windows automatically.
+///
+/// Search order:
+/// 1. `VULKAN_SDK` environment variable (explicit user override).
+/// 2. Windows registry (`HKLM\SOFTWARE\LunarG\VulkanSDK` → latest version key).
+/// 3. Default install directory `C:\VulkanSDK\<latest version>`.
+///
+/// A candidate directory is accepted only when it contains `Lib\vulkan-1.lib`.
+fn find_vulkan_sdk_windows() -> Option<PathBuf> {
+    // Helper: validate that the directory actually contains the Vulkan library.
+    let is_valid = |p: &Path| -> bool { p.join("Lib").join("vulkan-1.lib").exists() };
+
+    // 1. Explicit environment variable.
+    if let Ok(sdk) = env::var("VULKAN_SDK") {
+        let p = PathBuf::from(&sdk);
+        if is_valid(&p) {
+            return Some(p);
+        }
+        // The env var is set but doesn't look right — keep trying the
+        // automatic paths so a stale/wrong VULKAN_SDK doesn't block the
+        // build when the SDK is actually installed elsewhere.
+        debug_log!(
+            "VULKAN_SDK env var is set to '{}' but Lib/vulkan-1.lib was not found there; \
+             trying automatic detection",
+            sdk
+        );
+    }
+
+    // 2. Windows registry (LunarG installer writes version keys here).
+    #[cfg(windows)]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        // The LunarG installer writes per-version keys under:
+        //   HKLM\SOFTWARE\LunarG\VulkanSDK\<version>  (InstallDir = …)
+        if let Ok(hklm) = RegKey::predef(HKEY_LOCAL_MACHINE)
+            .open_subkey("SOFTWARE\\LunarG\\VulkanSDK")
+        {
+            // Enumerate version sub-keys and pick the latest valid one.
+            let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+            for name in hklm.enum_keys().filter_map(Result::ok) {
+                if let Ok(ver_key) = hklm.open_subkey(&name) {
+                    if let Ok(install_dir) = ver_key.get_value::<String, _>("InstallDir") {
+                        let p = PathBuf::from(&install_dir);
+                        if is_valid(&p) {
+                            candidates.push((name, p));
+                        }
+                    }
+                }
+            }
+            // Sort descending by version string so the latest wins.
+            candidates.sort_by(|a, b| b.0.cmp(&a.0));
+            if let Some((_, p)) = candidates.into_iter().next() {
+                return Some(p);
+            }
+        }
+    }
+
+    // 3. Scan the default install directory C:\VulkanSDK\<version>.
+    let vulkan_base = PathBuf::from("C:\\VulkanSDK");
+    if vulkan_base.is_dir() {
+        let mut versions: Vec<PathBuf> = std::fs::read_dir(&vulkan_base)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && is_valid(p))
+            .collect();
+        // Sort descending by directory name so the latest version wins.
+        versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        if let Some(p) = versions.into_iter().next() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
 fn main() {
     let target = env::var("TARGET").unwrap();
     let host = env::var("HOST").unwrap();
@@ -748,11 +827,14 @@ fn main() {
         }
 
         if target.contains("windows") {
-            let vulkan_path = env::var("VULKAN_SDK")
-                .expect("Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set");
-            let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
+            let vulkan_path = find_vulkan_sdk_windows()
+                .expect("Could not find Vulkan SDK. Please install it from https://vulkan.lunarg.com/sdk/home and either set the VULKAN_SDK environment variable or install to the default C:\\VulkanSDK\\ location.");
+            debug_log!("Vulkan SDK: {}", vulkan_path.display());
+            let vulkan_lib_path = vulkan_path.join("Lib");
             println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
             println!("cargo:rustc-link-lib=vulkan-1");
+            // Ensure CMake can also find the SDK.
+            config.define("VULKAN_SDK", vulkan_path.to_str().unwrap());
         }
 
         if target.contains("linux") {

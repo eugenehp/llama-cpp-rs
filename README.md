@@ -38,7 +38,7 @@ cd llama-cpp-rs
 ### Interactive chat
 
 ```bash
-cargo run -p llama-cpp-chat -- \
+cargo run -p chat -- \
     hf-model bartowski/Llama-3.2-3B-Instruct-GGUF Llama-3.2-3B-Instruct-Q4_K_M.gguf
 ```
 
@@ -249,13 +249,13 @@ If you use gpu-fft in academic work, please cite it as:
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.5},
+  version   = {0.2.8},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
 
 **Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.5).
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.8).
 > https://github.com/eugenehp/llama-cpp-rs
 
 ## License

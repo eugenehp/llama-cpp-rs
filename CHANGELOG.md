@@ -5,6 +5,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-03-12
+
+### Added
+
+- **Automatic Vulkan SDK detection on Windows** — the build script now
+  automatically locates the Vulkan SDK by checking (in order):
+  1. The `VULKAN_SDK` environment variable.
+  2. The Windows registry (`HKLM\SOFTWARE\LunarG\VulkanSDK`).
+  3. The default install directory `C:\VulkanSDK\<latest version>`.
+
+  Previously a missing `VULKAN_SDK` env var caused an immediate panic; now
+  the SDK is found automatically when installed to the default location.
+  Added `winreg` as a Windows-only build dependency for registry access.
+- The discovered Vulkan SDK path is now forwarded to CMake via
+  `VULKAN_SDK` define, ensuring CMake's `FindVulkan` also picks it up.
+
+### Fixed
+
+- **README `cargo run` command** — the interactive chat example referenced
+  `-p llama-cpp-chat` which does not exist; corrected to `-p chat` matching
+  the actual package name in `examples/chat/Cargo.toml`.
+
+### Changed
+
+- All crate versions bumped to `0.2.8`.
+- Updated `WINDOWS.md` to document automatic Vulkan SDK detection and
+  demote the manual `VULKAN_SDK` env var setup to a fallback.
+
+## [0.2.7] - 2026-03-11
+
+### Added
+
+- **macOS Vulkan graceful fallback** — `--features vulkan` on macOS now
+  auto-detects whether the Vulkan SDK is installed (checks `VULKAN_SDK`,
+  headers, library, and `glslc`). When the SDK is missing or incomplete,
+  the build automatically falls back to the Metal backend instead of
+  failing.
+- **Platform setup guides** — added `LINUX.md`, `MAC.md`, and `WINDOWS.md`
+  with step-by-step build instructions and Vulkan prerequisites for each OS.
+- CI workflow updated with a Windows Vulkan build check.
+
+### Changed
+
+- `llama-cpp-sys-4` and `llama-cpp-4` bumped to `0.2.7`.
+
+## [0.2.6] - 2026-03-10
+
+### Added
+
+- **Windows `MAX_PATH` workaround** — on Windows, the cmake build/install
+  tree is redirected to a short path under `%LOCALAPPDATA%` (derived from a
+  stable hash of `OUT_DIR`) to avoid exceeding the 260-character `MAX_PATH`
+  limit.  The Vulkan backend's deeply-nested `ExternalProject` sub-build was
+  pushing total path lengths beyond 260 chars, causing MSBuild error MSB3491.
+
+### Changed
+
+- `llama-cpp-sys-4` and `llama-cpp-4` bumped to `0.2.6`.
+- All cmake output paths (`lib`, `lib64`, `build`, shared-library assets)
+  updated to use the shortened `cmake_out_dir` on Windows.
+
 ## [0.2.5] - 2026-03-10
 
 ### Fixed
@@ -141,6 +202,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Features: `cuda`, `metal`, `vulkan`, `openmp`, `rpc`, `mpi`, `dynamic-link`.
 - Examples: `simple`, `chat`, `embeddings`, `split_model`, `server`, `rpc`.
 
+[0.2.8]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.2...v0.2.3
