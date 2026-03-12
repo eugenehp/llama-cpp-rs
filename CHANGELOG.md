@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-03-12
+
+### Added
+
+- **Case-insensitive Vulkan SDK directory lookup on Windows** — the build
+  script now uses case-insensitive matching when locating `Lib`, `Include`,
+  and `Bin` directories inside the Vulkan SDK, accommodating SDK layouts
+  that use varying capitalisation (e.g. `Lib` vs `lib`).
+- **Explicit CMake Vulkan component hints** — `Vulkan_INCLUDE_DIR`,
+  `Vulkan_LIBRARY`, and `Vulkan_GLSLC_EXECUTABLE` are now passed directly
+  to CMake so `FindVulkan.cmake` succeeds even when the SDK's `Bin`
+  directory is not on `PATH`.
+- **Recursive `glslc` search** — `find_glslc()` searches up to 3 directory
+  levels inside the SDK, then falls back to `where`/`which` on `PATH`,
+  covering non-standard SDK layouts.
+- **`VULKAN_SDK` environment variable forwarding** — the discovered SDK path
+  is now also set as a process environment variable (in addition to the CMake
+  define) so that `FindVulkan.cmake` picks it up correctly.
+
+### Fixed
+
+- **`simple` example sampler** — removed the `LlamaSampler::dist(seed)`
+  call that was stacked before `LlamaSampler::greedy()`, which had no
+  effect on greedy decoding and caused an unused-variable warning for
+  `seed`.
+
+### Changed
+
+- All crate versions bumped to `0.2.9`.
+- **README examples table** — added a "Package name" column and the `mtmd`
+  multimodal example; added Vulkan GPU acceleration example; improved
+  multimodal section formatting with sub-headings and the standalone `mtmd`
+  CLI example.
+
 ## [0.2.8] - 2026-03-12
 
 ### Added
@@ -202,6 +236,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Features: `cuda`, `metal`, `vulkan`, `openmp`, `rpc`, `mpi`, `dynamic-link`.
 - Examples: `simple`, `chat`, `embeddings`, `split_model`, `server`, `rpc`.
 
+[0.2.9]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.5...v0.2.6
