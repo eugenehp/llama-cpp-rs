@@ -247,7 +247,6 @@ either reduce n_len or increase n_ctx"
 
     let mut sampler = LlamaSampler::chain_simple([
         LlamaSampler::dist(seed.unwrap_or(1234)),
-        LlamaSampler::greedy(),
     ]);
 
     while n_cur <= n_len {
