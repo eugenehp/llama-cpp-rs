@@ -1029,6 +1029,8 @@ fn main() {
 
     if enable_metal {
         config.define("GGML_METAL", "ON");
+    } else {
+        config.define("GGML_METAL", "OFF");
     }
 
     if cfg!(feature = "cuda") {
@@ -1145,7 +1147,20 @@ fn main() {
                     stale_options.iter().any(|opt| cache_contents.contains(opt))
                 };
 
-                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch;
+                // 2d. GGML_METAL mismatch: on macOS, llama.cpp defaults
+                //     GGML_METAL to ON, so a stale cache from a previous
+                //     `--features metal` build (or from the cmake default)
+                //     would keep Metal enabled even when the feature is off.
+                let metal_mismatch = {
+                    let cached_metal_on =
+                        cache_contents.contains("GGML_METAL:BOOL=ON");
+                    let cached_metal_off =
+                        cache_contents.contains("GGML_METAL:BOOL=OFF");
+                    (enable_metal && cached_metal_off)
+                        || (!enable_metal && cached_metal_on)
+                };
+
+                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch || metal_mismatch;
                 if mismatch {
                     debug_log!(
                         "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
@@ -1218,8 +1233,10 @@ fn main() {
     // macOS frameworks and libc++
     if target.contains("apple") {
         println!("cargo:rustc-link-lib=framework=Foundation");
-        println!("cargo:rustc-link-lib=framework=Metal");
-        println!("cargo:rustc-link-lib=framework=MetalKit");
+        if enable_metal {
+            println!("cargo:rustc-link-lib=framework=Metal");
+            println!("cargo:rustc-link-lib=framework=MetalKit");
+        }
         println!("cargo:rustc-link-lib=framework=Accelerate");
         println!("cargo:rustc-link-lib=c++");
     }
