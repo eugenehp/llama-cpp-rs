@@ -128,7 +128,7 @@ fn main() -> Result<()> {
         #[cfg(any(feature = "cuda", feature = "vulkan", feature = "metal"))]
         disable_gpu,
         key_value_overrides,
-        seed,
+        seed: _seed,
         threads,
         threads_batch,
         ctx_size,
@@ -246,7 +246,7 @@ either reduce n_len or increase n_ctx"
     let mut decoder = encoding_rs::UTF_8.new_decoder();
 
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::dist(seed.unwrap_or(1234)),
+        LlamaSampler::greedy(),
     ]);
 
     while n_cur <= n_len {
