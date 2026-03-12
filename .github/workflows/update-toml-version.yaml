@@ -31,7 +31,7 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" llama-cpp-sys-4/Cargo.toml
           # Update version in llama-cpp-4 Cargo.toml
           sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" llama-cpp-4/Cargo.toml
-          sed -i "s/^\(llama-cpp-sys-4 = { path = \"\.\.\/llama-cpp-sys-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/" llama-cpp-4/Cargo.toml       
+          sed -i "s/\(llama-cpp-sys-4 = { path = \"\.\.\/llama-cpp-sys-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/g" llama-cpp-4/Cargo.toml
           # Update the version in the simple Cargo.toml
           sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" examples/simple/Cargo.toml
           sed -i "s/^\(llama-cpp-4 = { path = \"\.\.\/llama-cpp-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/" examples/simple/Cargo.toml       
