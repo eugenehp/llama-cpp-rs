@@ -52,8 +52,6 @@ jobs:
       - name: Create open PR
         if: steps.changes.outputs.has_changes == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.LLAMA_CPP_RS_UPDATE_LLAMA_CPP_ACTION}}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          unset GITHUB_TOKEN
-          echo ${{ secrets.LLAMA_CPP_RS_UPDATE_LLAMA_CPP_ACTION }} | gh auth login --with-token
           gh pr create --fill --head update-llama-cpp-${{ steps.date.outputs.value }} --title "Updated llama-cpp (bot)"
