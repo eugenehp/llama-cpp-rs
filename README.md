@@ -17,14 +17,15 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggerganov/llama.cpp), track
 
 ## Examples
 
-| Example | Description |
-|---|---|
-| [`simple`](examples/simple/) | Single-turn text completion from CLI or Hugging Face |
-| [`chat`](examples/chat/) | Interactive multi-turn chat REPL |
-| [`embeddings`](examples/embeddings/) | Batch embedding with cosine similarity |
-| [`split_model`](examples/split_model/) | Load sharded / split GGUF files |
-| [`server`](examples/server/) | OpenAI-compatible HTTP server with streaming and tool calling |
-| [`rpc`](examples/rpc/) | Remote procedure call backend |
+| Package name | Directory | Description |
+|---|---|---|
+| `simple` | [`examples/simple/`](examples/simple/) | Single-turn text completion from CLI or Hugging Face |
+| `chat` | [`examples/chat/`](examples/chat/) | Interactive multi-turn chat REPL |
+| `embeddings` | [`examples/embeddings/`](examples/embeddings/) | Batch embedding with cosine similarity |
+| `split-model-example` | [`examples/split_model/`](examples/split_model/) | Load sharded / split GGUF files |
+| `openai-server` | [`examples/server/`](examples/server/) | OpenAI-compatible HTTP server with streaming and tool calling |
+| `rpc-example` | [`examples/rpc/`](examples/rpc/) | Remote procedure call backend |
+| `mtmd` | [`examples/mtmd/`](examples/mtmd/) | Multimodal (vision / audio) inference (requires `--features mtmd`) |
 
 ---
 
@@ -109,10 +110,16 @@ let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
 
 ```bash
 # Metal (macOS)
-cargo run -p openai-server --features metal -- --n-gpu-layers 99 local model.gguf
+cargo run -p openai-server --features metal -- --n-gpu-layers 99 \
+    local model.gguf
 
 # CUDA (Linux/Windows)
-cargo run -p openai-server --features cuda -- --n-gpu-layers 99 local model.gguf
+cargo run -p openai-server --features cuda -- --n-gpu-layers 99 \
+    local model.gguf
+
+# Vulkan (cross-platform)
+cargo run -p openai-server --features vulkan -- --n-gpu-layers 99 \
+    hf-model bartowski/Llama-3.2-3B-Instruct-GGUF Llama-3.2-3B-Instruct-Q4_K_M.gguf
 ```
 
 ---
@@ -183,18 +190,31 @@ curl http://localhost:8080/v1/chat/completions \
 -d '{"model":"default","messages":[{"role":"user","content":"What is 2+2?"}],"stream":false,"max_tokens":500}'
 ```
 
-## Multimodal Images:
+## Multimodal Images
+
+### Via the OpenAI-compatible server
 
 ```shell
-cargo run -p openai-server --features mtmd --release -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+cargo run -p openai-server --features mtmd --release -- \
+    hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
 ```
 
-OR
+Or with an explicit mmproj path:
 
 ```shell
 cargo run -p openai-server --features mtmd -- \
---mmproj mmproj-BF16.gguf \
-hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+    --mmproj mmproj-BF16.gguf \
+    hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
+```
+
+### Standalone multimodal example
+
+```shell
+cargo run --features mtmd -p mtmd -- \
+    --model /path/to/model.gguf \
+    --mmproj /path/to/mmproj.gguf \
+    --image /path/to/image.jpg \
+    --prompt "Describe this image."
 ```
 
 ```shell
