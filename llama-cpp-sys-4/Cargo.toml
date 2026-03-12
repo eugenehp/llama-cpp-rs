@@ -1,31 +1,55 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.2.11"
+version = "0.2.12"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
 links = "llama"
 
 include = [
-    "wrapper.h",
+    # Crate sources
     "build.rs",
+    "wrapper.h",
     "/src",
 
+    # llama.cpp top-level
+    "/llama.cpp/CMakeLists.txt",
+    "/llama.cpp/convert_hf_to_gguf.py",
+    "/llama.cpp/pocs",
+
+    # llama.cpp cmake
+    "/llama.cpp/cmake",
+
+    # llama.cpp headers & sources
+    "/llama.cpp/include/llama.h",
+    "/llama.cpp/include/llama-cpp.h",
+    "/llama.cpp/src/**/*",
     "/llama.cpp/common/**/*",
+
+    # ggml cmake
+    "/llama.cpp/ggml/CMakeLists.txt",
+    "/llama.cpp/ggml/cmake",
+    "/llama.cpp/ggml/src/CMakeLists.txt",
+
+    # ggml headers & sources
     "/llama.cpp/ggml/include/*.h",
     "/llama.cpp/ggml/src/*.h",
     "/llama.cpp/ggml/src/*.c",
     "/llama.cpp/ggml/src/*.cpp",
-    # Enumerate each ggml backend directory explicitly.
-    # ggml-kompute is intentionally omitted: its only content is an
-    # uninitialised nested submodule (`kompute/`) that has no git-tracked
-    # files.  The broad `**` globs that used to be here matched those
-    # untracked files and caused `cargo publish` to abort with "uncommitted
-    # changes".
+
+    # ggml legacy top-level backend files
+    "/llama.cpp/ggml/src/ggml-cuda.cu",
+    "/llama.cpp/ggml/src/ggml-metal.m",
+    "/llama.cpp/ggml/src/ggml-metal.metal",
+
+    # ggml backends (ggml-kompute intentionally omitted — its only content is
+    # an uninitialised nested submodule with no git-tracked files, which causes
+    # `cargo publish` to abort with "uncommitted changes")
     "/llama.cpp/ggml/src/ggml-blas/**/*",
     "/llama.cpp/ggml/src/ggml-cann/**/*",
     "/llama.cpp/ggml/src/ggml-cpu/**/*",
+    "/llama.cpp/ggml/src/ggml-cuda/**/*",
     "/llama.cpp/ggml/src/ggml-hexagon/**/*",
     "/llama.cpp/ggml/src/ggml-hip/**/*",
     "/llama.cpp/ggml/src/ggml-metal/**/*",
@@ -38,33 +62,16 @@ include = [
     "/llama.cpp/ggml/src/ggml-webgpu/**/*",
     "/llama.cpp/ggml/src/ggml-zdnn/**/*",
     "/llama.cpp/ggml/src/ggml-zendnn/**/*",
-    "/llama.cpp/src/**/*",
 
-    "/llama.cpp/convert_hf_to_gguf.py", # Yes, it's required
-
-    "/llama.cpp/ggml/src/ggml-cuda.cu",
-    "/llama.cpp/ggml/src/ggml-metal.m",
-    "/llama.cpp/ggml/src/ggml-metal.metal",
-
-    "/llama.cpp/include/llama.h",
-    "/llama.cpp/include/llama-cpp.h",
-
-    "/llama.cpp/ggml/src/ggml-cuda/**/*",
-
-    "/llama.cpp/ggml/src/vulkan-shaders/**/*",
-
+    # ggml misc
     "/llama.cpp/ggml/src/llamafile/sgemm.h",
     "/llama.cpp/ggml/src/llamafile/sgemm.cpp",
+    "/llama.cpp/ggml/src/vulkan-shaders/**/*",
 
-    "/llama.cpp/vendor/**/*",
-
-    "/llama.cpp/pocs",
-
-    # tools/ — tools/CMakeLists.txt unconditionally add_subdirectory()s all
-    # of these, so every subdirectory must be present even when only mtmd is
-    # needed; otherwise cmake exits 1 with "not an existing directory" errors.
+    # tools (tools/CMakeLists.txt unconditionally add_subdirectory()s all of
+    # these, so every subdirectory must be present even when only mtmd is
+    # needed; otherwise cmake exits 1 with "not an existing directory" errors)
     "/llama.cpp/tools/CMakeLists.txt",
-    "/llama.cpp/tools/mtmd/**/*",
     "/llama.cpp/tools/batched-bench/**/*",
     "/llama.cpp/tools/cli/**/*",
     "/llama.cpp/tools/completion/**/*",
@@ -74,6 +81,7 @@ include = [
     "/llama.cpp/tools/gguf-split/**/*",
     "/llama.cpp/tools/imatrix/**/*",
     "/llama.cpp/tools/llama-bench/**/*",
+    "/llama.cpp/tools/mtmd/**/*",
     "/llama.cpp/tools/parser/**/*",
     "/llama.cpp/tools/perplexity/**/*",
     "/llama.cpp/tools/quantize/**/*",
@@ -82,18 +90,9 @@ include = [
     "/llama.cpp/tools/server/**/*",
     "/llama.cpp/tools/tokenize/**/*",
     "/llama.cpp/tools/tts/**/*",
-    "/llama.cpp/vendor/stb/**/*",
-    "/llama.cpp/vendor/miniaudio/**/*",
-    "/llama.cpp/vendor/sheredom/**/*",
-    "/llama.cpp/common/**/*",
 
-    "/llama.cpp/CMakeLists.txt",
-    "/llama.cpp/ggml/CMakeLists.txt",
-    "/llama.cpp/ggml/src/CMakeLists.txt",
-    "/llama.cpp/ggml/src/vulkan-shaders/CMakeLists.txt",
-
-    "/llama.cpp/cmake",
-    "/llama.cpp/ggml/cmake",
+    # vendor
+    "/llama.cpp/vendor/**/*",
 ]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

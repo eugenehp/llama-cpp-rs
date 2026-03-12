@@ -848,6 +848,32 @@ fn main() {
         }
     }
 
+    // ── Apple: always pin CMAKE_OSX_ARCHITECTURES ─────────────────────────
+    // When a build orchestrator (e.g. Tauri / Electron) spawns cargo with an
+    // explicit `--target aarch64-apple-darwin` on an Apple-Silicon Mac, the
+    // host and target triples are identical so `is_cross` is false.  However,
+    // the orchestrator's own process may run under Rosetta (x86_64 Node.js)
+    // or inject environment variables (ARCHFLAGS, CFLAGS with `-arch x86_64`,
+    // etc.) that leak into the cmake build.  Without an explicit architecture
+    // pin, cmake would honour those leaked flags and silently produce x86_64
+    // object code.  Rust then links that x86_64 code into the arm64 binary,
+    // and the first x86 instruction executed at runtime triggers SIGILL.
+    //
+    // Setting CMAKE_OSX_ARCHITECTURES unconditionally for all Apple targets
+    // — even non-cross builds — ensures cmake always produces code for the
+    // correct architecture regardless of inherited environment pollution.
+    if target.contains("apple") && !is_cross {
+        let osx_arch = if target.contains("aarch64") || target.contains("arm64") {
+            "arm64"
+        } else if target.contains("x86_64") {
+            "x86_64"
+        } else {
+            target.split('-').next().unwrap_or("arm64")
+        };
+        config.define("CMAKE_OSX_ARCHITECTURES", osx_arch);
+        debug_log!("Apple native: CMAKE_OSX_ARCHITECTURES={osx_arch}");
+    }
+
     // ── GGML_NATIVE ──────────────────────────────────────────────────────────
     // GGML_NATIVE=ON tells ggml to detect and use the *build host's* CPU
     // features (e.g. -march=native, check_cxx_source_runs for ARM NEON/SVE,
@@ -1160,7 +1186,31 @@ fn main() {
                         || (!enable_metal && cached_metal_on)
                 };
 
-                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch || metal_mismatch;
+                // 2e. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
+                //     a previous build (or from an environment-polluted cmake
+                //     run) may have the wrong architecture, producing x86_64
+                //     object code in an arm64 binary (or vice versa).
+                let osx_arch_mismatch = target.contains("apple") && {
+                    let want_arch = if target.contains("aarch64") || target.contains("arm64") {
+                        "arm64"
+                    } else if target.contains("x86_64") {
+                        "x86_64"
+                    } else {
+                        ""
+                    };
+                    if !want_arch.is_empty() {
+                        cache_contents
+                            .lines()
+                            .find(|l| l.starts_with("CMAKE_OSX_ARCHITECTURES:"))
+                            .and_then(|l| l.splitn(2, '=').nth(1))
+                            .map(|cached| cached != want_arch)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                };
+
+                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch || metal_mismatch || osx_arch_mismatch;
                 if mismatch {
                     debug_log!(
                         "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
