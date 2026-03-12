@@ -310,6 +310,128 @@ fn cmake_system_processor(target: &str) -> String {
     }
 }
 
+/// Find a direct child directory of `parent` whose name matches `name`
+/// case-insensitively.  Returns the actual path on disk.
+fn find_child_dir_ci(parent: &Path, name: &str) -> Option<PathBuf> {
+    let lower = name.to_ascii_lowercase();
+    std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                    .unwrap_or(false)
+        })
+}
+
+/// Find a file inside `dir` whose name matches `name` case-insensitively.
+fn find_file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+    let lower = name.to_ascii_lowercase();
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_file()
+                && p.file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                    .unwrap_or(false)
+        })
+}
+
+/// Search for `glslc` (or `glslc.exe`) inside the Vulkan SDK.
+///
+/// Search order:
+/// 1. `<sdk>/Bin/glslc.exe` or `<sdk>/bin/glslc` (case-insensitive dir match).
+/// 2. Recursively walk `<sdk>` looking for the binary (covers non-standard
+///    layouts where `glslc` lives under e.g. `x86_64-windows-msvc/bin/`).
+/// 3. Check if `glslc` is already on `PATH`.
+fn find_glslc(sdk: &Path) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) { "glslc.exe" } else { "glslc" };
+
+    // 1. Standard location: <sdk>/Bin/ or <sdk>/bin/
+    if let Some(bin_dir) = find_child_dir_ci(sdk, "bin") {
+        if let Some(found) = find_file_ci(&bin_dir, exe_name) {
+            return Some(found);
+        }
+    }
+
+    // 2. Recursive search (bounded to 3 levels to avoid slow scans).
+    if let Some(found) = find_file_recursive(sdk, exe_name, 3) {
+        return Some(found);
+    }
+
+    // 3. Fall back to PATH.
+    if let Ok(output) = std::process::Command::new("where")
+        .arg(exe_name)
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // Also try Unix-style `which` (e.g. Git-for-Windows, MSYS2).
+    if let Ok(output) = std::process::Command::new("which")
+        .arg(exe_name)
+        .output()
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Recursively search for a file by name (case-insensitive) up to `max_depth`
+/// directory levels.
+fn find_file_recursive(dir: &Path, name: &str, max_depth: u32) -> Option<PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    let entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+
+    // Check files first at this level.
+    for p in &entries {
+        if p.is_file()
+            && p.file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                .unwrap_or(false)
+        {
+            return Some(p.clone());
+        }
+    }
+    // Then recurse into subdirectories.
+    for p in &entries {
+        if p.is_dir() {
+            if let Some(found) = find_file_recursive(p, name, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
 /// Try to locate the Vulkan SDK on Windows automatically.
 ///
 /// Search order:
@@ -830,11 +952,33 @@ fn main() {
             let vulkan_path = find_vulkan_sdk_windows()
                 .expect("Could not find Vulkan SDK. Please install it from https://vulkan.lunarg.com/sdk/home and either set the VULKAN_SDK environment variable or install to the default C:\\VulkanSDK\\ location.");
             debug_log!("Vulkan SDK: {}", vulkan_path.display());
-            let vulkan_lib_path = vulkan_path.join("Lib");
+            let vulkan_lib_path = find_child_dir_ci(&vulkan_path, "lib")
+                .unwrap_or_else(|| vulkan_path.join("Lib"));
             println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
             println!("cargo:rustc-link-lib=vulkan-1");
             // Ensure CMake can also find the SDK.
+            // Set both the CMake variable and the environment variable –
+            // FindVulkan.cmake reads the *environment* variable VULKAN_SDK,
+            // not the CMake cache variable.
             config.define("VULKAN_SDK", vulkan_path.to_str().unwrap());
+            unsafe { env::set_var("VULKAN_SDK", &vulkan_path) };
+
+            // Explicitly point CMake at the Vulkan components so that
+            // FindVulkan.cmake succeeds even when the SDK's Bin directory
+            // (containing glslc) is not on PATH.
+            //
+            // We search for each component with case-insensitive directory
+            // matching so the build works regardless of the SDK layout
+            // (e.g. "Include" vs "include", "Lib" vs "lib").
+            if let Some(inc) = find_child_dir_ci(&vulkan_path, "include") {
+                config.define("Vulkan_INCLUDE_DIR", inc.to_str().unwrap());
+            }
+            if let Some(lib) = find_file_ci(&vulkan_lib_path, "vulkan-1.lib") {
+                config.define("Vulkan_LIBRARY", lib.to_str().unwrap());
+            }
+            if let Some(glslc) = find_glslc(&vulkan_path) {
+                config.define("Vulkan_GLSLC_EXECUTABLE", glslc.to_str().unwrap());
+            }
         }
 
         if target.contains("linux") {
