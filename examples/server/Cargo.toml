@@ -21,10 +21,10 @@ tokio = { version = "1", features = ["sync", "rt"] }
 futures-util = "0.3"
 # Optional dependencies pulled in by the `mtmd` feature.
 base64  = { version = "0.22", optional = true }
-reqwest = { version = "0.12", features = ["json"], optional = true }
+reqwest = { version = "0.13", features = ["json"], optional = true }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+reqwest = { version = "0.13", features = ["blocking", "json"] }
 
 [features]
 cuda   = ["llama-cpp-4/cuda"]
