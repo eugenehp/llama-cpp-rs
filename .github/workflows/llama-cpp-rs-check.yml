@@ -39,6 +39,7 @@ jobs:
     name: Check that it builds on various targets
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [ linux/arm64, linux/amd64 ]
     steps:
