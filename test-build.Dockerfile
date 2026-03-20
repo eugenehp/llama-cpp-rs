@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7-labs
 ARG CUDA_VERSION=12.3.1
 ARG UBUNTU_VERSION=22.04
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION} as base-cuda
@@ -9,7 +10,12 @@ ENV PATH=/root/.cargo/bin:$PATH
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
 COPY . .
-RUN cargo build --bin simple --features cuda
+# Persist cargo caches between CI runs and force static llama libs in this
+# container build to avoid runtime libcuda symbol resolution at link time.
+RUN --mount=type=cache,target=/root/.cargo/registry \
+	--mount=type=cache,target=/root/.cargo/git \
+	--mount=type=cache,target=/target \
+	LLAMA_BUILD_SHARED_LIBS=0 cargo build --bin simple --features cuda
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} as base-cuda-runtime
 
