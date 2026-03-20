@@ -436,7 +436,7 @@ impl MtmdContext {
     /// * `n_batch`     – maximum batch size (must be ≥ 1)
     /// * `logits_last` – if `true`, compute logits only for the final token
     /// * `new_n_past`  – updated KV-cache position after the call
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
     pub fn eval_chunks(
         &self,
         lctx: *mut sys::llama_context,
@@ -469,7 +469,7 @@ impl MtmdContext {
     ///
     /// Works identically to [`eval_chunks`](Self::eval_chunks) but operates on
     /// one chunk at a time.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
     pub fn eval_chunk_single(
         &self,
         lctx: *mut sys::llama_context,
