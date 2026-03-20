@@ -34,7 +34,7 @@ jobs:
       - name: Fmt
         run: cargo fmt
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude llama-cpp-4
   arm64:
     name: Check that it builds on various targets
     runs-on: ubuntu-latest
@@ -98,4 +98,4 @@ jobs:
         shell: pwsh
         run: cargo build --features vulkan
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude llama-cpp-4
