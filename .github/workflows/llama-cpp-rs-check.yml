@@ -34,7 +34,7 @@ jobs:
       - name: Fmt
         run: cargo fmt
       - name: Test
-        run: cargo test --features sampler
+        run: cargo test --workspace
   arm64:
     name: Check that it builds on various targets
     runs-on: ubuntu-latest
@@ -69,7 +69,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --features sampler
+        run: cargo build --workspace
   windows:
     name: Check that it builds on windows
     runs-on: windows-latest
@@ -81,7 +81,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --features sampler
+        run: cargo build --workspace
       - name: Install Vulkan SDK
         shell: pwsh
         run: |
@@ -98,4 +98,4 @@ jobs:
         shell: pwsh
         run: cargo build --features vulkan
       - name: Test
-        run: cargo test --features sampler
+        run: cargo test --workspace
