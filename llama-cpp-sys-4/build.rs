@@ -1275,10 +1275,11 @@ fn main() {
         }
     }
 
-    // msvcrtd is the MSVC debug CRT — it does not exist in MinGW toolchains.
-    if cfg!(debug_assertions) && target.contains("windows-msvc") {
-        println!("cargo:rustc-link-lib=dylib=msvcrtd");
-    }
+    // Removed: Rust already links the appropriate CRT. Explicitly linking
+    // msvcrtd causes CRT mismatch when another crate (e.g. whisper-rs) links
+    // the release CRT — both msvcrt and msvcrtd get loaded into the same
+    // process, corrupting the file descriptor table and causing
+    // `_osfile(fh) & FOPEN` assertion failures in read.cpp.
 
     // macOS frameworks and libc++
     if target.contains("apple") {
