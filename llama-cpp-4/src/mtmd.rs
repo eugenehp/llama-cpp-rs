@@ -269,11 +269,7 @@ impl MtmdContext {
         let c_path = CString::new(path)?;
 
         let ptr = unsafe {
-            sys::mtmd_init_from_file(
-                c_path.as_ptr(),
-                text_model.model.as_ptr(),
-                params.params,
-            )
+            sys::mtmd_init_from_file(c_path.as_ptr(), text_model.model.as_ptr(), params.params)
         };
 
         let ptr = NonNull::new(ptr).ok_or(MtmdError::ContextCreateFailed)?;
@@ -290,9 +286,10 @@ impl MtmdContext {
     pub fn void_logs() {
         unsafe extern "C" fn noop(
             _level: sys::ggml_log_level,
-            _text:  *const ::std::os::raw::c_char,
-            _ud:    *mut   ::std::os::raw::c_void,
-        ) {}
+            _text: *const ::std::os::raw::c_char,
+            _ud: *mut ::std::os::raw::c_void,
+        ) {
+        }
         unsafe { sys::mtmd_log_set(Some(noop), std::ptr::null_mut()) };
     }
 
@@ -313,8 +310,15 @@ impl MtmdContext {
     /// Returns the audio sample rate in Hz (e.g. 16 000 for Whisper), or
     /// `-1` if audio is not supported.
     #[must_use]
+    pub fn audio_sample_rate(&self) -> i32 {
+        unsafe { sys::mtmd_get_audio_sample_rate(self.ptr.as_ptr()) }
+    }
+
+    /// Returns the audio sample rate in Hz.
+    #[deprecated(note = "use audio_sample_rate() instead")]
+    #[must_use]
     pub fn audio_bitrate(&self) -> i32 {
-        unsafe { sys::mtmd_get_audio_bitrate(self.ptr.as_ptr()) }
+        self.audio_sample_rate()
     }
 
     /// Whether `llama_decode` must use a non-causal attention mask when
@@ -643,15 +647,11 @@ impl MtmdBitmap {
     ///
     /// Returns [`MtmdError::BitmapCreateFailed`] if the file cannot be loaded.
     pub fn from_file(ctx: &MtmdContext, path: impl AsRef<Path>) -> Result<Self> {
-        let path = path
-            .as_ref()
-            .to_str()
-            .ok_or(MtmdError::PathNotUtf8)?;
+        let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
         let c_path = CString::new(path)?;
 
-        let ptr = unsafe {
-            sys::mtmd_helper_bitmap_init_from_file(ctx.ptr.as_ptr(), c_path.as_ptr())
-        };
+        let ptr =
+            unsafe { sys::mtmd_helper_bitmap_init_from_file(ctx.ptr.as_ptr(), c_path.as_ptr()) };
         let ptr = NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?;
         Ok(Self { ptr })
     }
