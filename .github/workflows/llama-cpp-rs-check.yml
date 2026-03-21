@@ -43,34 +43,31 @@ jobs:
         run: cargo test --workspace --exclude llama-cpp-4
       - name: sccache stats
         run: sccache --show-stats || true
-  arm64:
-    name: Check that it builds on various targets
+  linux:
+    name: Check that it builds on linux (native)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [ linux/arm64, linux/amd64 ]
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
     steps:
       - name: checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           submodules: recursive
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a
-        with:
-          platforms: arm64,amd64
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd
-      - name: Build
-        uses: docker/build-push-action@v7
+      - name: Install Compile Deps
         env:
-          BUILDKIT_PROGRESS: plain
-        with:
-          file: test-build.Dockerfile
-          target: base-cuda
-          platforms: ${{ matrix.target }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --workspace --all-targets
+      - name: sccache stats
+        run: sccache --show-stats || true
   mac:
     name: Check that it builds on mac
     runs-on: macos-latest
