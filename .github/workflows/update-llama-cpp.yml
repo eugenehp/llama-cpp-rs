@@ -51,7 +51,10 @@ jobs:
           gh pr list --json number,title --jq '.[] | select(.title | contains("Updated llama-cpp (bot)")) | .number' | xargs -I {} gh pr close {}
       - name: Create open PR
         if: steps.changes.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh pr create --fill --head update-llama-cpp-${{ steps.date.outputs.value }} --title "Updated llama-cpp (bot)"
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Updated llama-cpp (bot)"
+          title: "Updated llama-cpp (bot)"
+          body: "Automated update of llama.cpp submodule"
+          branch: update-llama-cpp-${{ steps.date.outputs.value }}
