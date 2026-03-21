@@ -23,7 +23,7 @@ pprof = "0.15.0"
 bindgen = "0.72.1"
 cc = "1.2.56"
 anyhow = "1.0.102"
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.0", features = ["derive"] }
 encoding_rs = "0.8.35"
 
 [workspace.lints.rust]
