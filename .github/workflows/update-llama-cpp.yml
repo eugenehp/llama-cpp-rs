@@ -57,4 +57,5 @@ jobs:
           commit-message: "Updated llama-cpp (bot)"
           title: "Updated llama-cpp (bot)"
           body: "Automated update of llama.cpp submodule"
+          base: main
           branch: update-llama-cpp-${{ steps.date.outputs.value }}
