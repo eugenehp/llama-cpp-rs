@@ -15,7 +15,7 @@ COPY . .
 RUN --mount=type=cache,target=/root/.cargo/registry \
 	--mount=type=cache,target=/root/.cargo/git \
 	--mount=type=cache,target=/target \
-	LLAMA_BUILD_SHARED_LIBS=0 cargo build --bin simple --features cuda
+	LLAMA_BUILD_SHARED_LIBS=0 cargo build -vv --bin simple --features cuda
 
 FROM nvcr.io/nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu${UBUNTU_VERSION} as base-cuda-runtime
 
