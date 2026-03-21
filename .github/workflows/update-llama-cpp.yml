@@ -50,7 +50,7 @@ jobs:
         run: |
           gh pr list --json number,title --jq '.[] | select(.title | contains("Updated llama-cpp (bot)")) | .number' | xargs -I {} gh pr close {}
       - name: Create open PR
-        if: steps.changes.outputs.has_changes == 'true'
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'workflow_dispatch'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -58,24 +58,17 @@ jobs:
             const { owner, repo } = context.repo;
             const head = "update-llama-cpp-${{ steps.date.outputs.value }}";
             
-            // Check if PR already exists
-            const existingPRs = await github.rest.pulls.list({
+            const pr = await github.rest.pulls.create({
               owner,
               repo,
-              state: 'open',
-              head: `${owner}:${head}`
+              title: "Updated llama-cpp (bot)",
+              body: "Automated update of llama.cpp submodule",
+              head: head,
+              base: "main"
             });
-            
-            if (existingPRs.data.length === 0) {
-              const pr = await github.rest.pulls.create({
-                owner,
-                repo,
-                title: "Updated llama-cpp (bot)",
-                body: "Automated update of llama.cpp submodule",
-                head: head,
-                base: "main"
-              });
-              console.log(`Created PR #${pr.data.number}`);
-            } else {
-              console.log(`PR already exists: #${existingPRs.data[0].number}`);
-            }
+            console.log(`Created PR #${pr.data.number}`);
+      - name: Display branch for scheduled runs
+        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'schedule'
+        run: |
+          echo "Branch created: update-llama-cpp-${{ steps.date.outputs.value }}"
+          echo "Please create a PR manually or configure a PAT token in secrets for automated PR creation."
