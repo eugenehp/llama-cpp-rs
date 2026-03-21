@@ -50,25 +50,30 @@ jobs:
         run: |
           gh pr list --json number,title --jq '.[] | select(.title | contains("Updated llama-cpp (bot)")) | .number' | xargs -I {} gh pr close {}
       - name: Create open PR
-        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'workflow_dispatch'
+        if: steps.changes.outputs.has_changes == 'true'
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GH_TOKEN_WORKFLOW || secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo;
             const head = "update-llama-cpp-${{ steps.date.outputs.value }}";
             
-            const pr = await github.rest.pulls.create({
-              owner,
-              repo,
-              title: "Updated llama-cpp (bot)",
-              body: "Automated update of llama.cpp submodule",
-              head: head,
-              base: "main"
-            });
-            console.log(`Created PR #${pr.data.number}`);
-      - name: Display branch for scheduled runs
-        if: steps.changes.outputs.has_changes == 'true' && github.event_name == 'schedule'
-        run: |
-          echo "Branch created: update-llama-cpp-${{ steps.date.outputs.value }}"
-          echo "Please create a PR manually or configure a PAT token in secrets for automated PR creation."
+            try {
+              const pr = await github.rest.pulls.create({
+                owner,
+                repo,
+                title: "Updated llama-cpp (bot)",
+                body: "Automated update of llama.cpp submodule",
+                head: head,
+                base: "main"
+              });
+              console.log(`Created PR #${pr.data.number}`);
+            } catch (error) {
+              if (error.message.includes('not permitted')) {
+                console.log(`⚠️ PR creation not permitted - branch pushed but PR creation failed`);
+                console.log(`📝 Please create a PR manually or configure a PAT in repo secrets:`);
+                console.log(`   gh secret set GH_TOKEN_WORKFLOW --body "$(pbpaste)"`);
+              } else {
+                throw error;
+              }
+            }
