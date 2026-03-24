@@ -106,7 +106,7 @@ cmake = "0.1"
 glob = "0.3.3"
 
 [target.'cfg(windows)'.build-dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 [features]
 cuda = []
