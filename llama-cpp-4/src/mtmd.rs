@@ -307,18 +307,18 @@ impl MtmdContext {
         unsafe { sys::mtmd_support_audio(self.ptr.as_ptr()) }
     }
 
-    /// Returns the audio bitrate (e.g. 16 000 for Whisper), or
+    /// Returns the audio sample rate in Hz (e.g. 16 000 for Whisper), or
     /// `-1` if audio is not supported.
     #[must_use]
+    #[deprecated(note = "use audio_sample_rate() instead")]
     pub fn audio_bitrate(&self) -> i32 {
-        unsafe { sys::mtmd_get_audio_bitrate(self.ptr.as_ptr()) }
+        self.audio_sample_rate()
     }
 
-    /// Returns the audio bitrate.
-    #[deprecated(note = "use audio_bitrate() instead")]
+    /// Returns the audio sample rate in Hz.
     #[must_use]
     pub fn audio_sample_rate(&self) -> i32 {
-        self.audio_bitrate()
+        unsafe { sys::mtmd_get_audio_sample_rate(self.ptr.as_ptr()) }
     }
 
     /// Whether `llama_decode` must use a non-causal attention mask when

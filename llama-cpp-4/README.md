@@ -4,10 +4,10 @@
 [![docs.rs](https://img.shields.io/docsrs/llama-cpp-4.svg)](https://docs.rs/llama-cpp-4)
 [![License](https://img.shields.io/crates/l/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4)
 
-Safe Rust bindings to [llama.cpp](https://github.com/ggerganov/llama.cpp).  
+Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).  
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** b8249 · **Crate version:** 0.2.5
+**llama.cpp version:** b8533 · **Crate version:** 0.2.13
 
 ---
 
@@ -15,12 +15,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.2.5"
+llama-cpp-4 = "0.2.13"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.2.5", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.2.5", features = ["metal"] }
-# llama-cpp-4 = { version = "0.2.5", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.2.13", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.2.13", features = ["metal"] }
+# llama-cpp-4 = { version = "0.2.13", features = ["vulkan"] }
 ```
 
 ---
