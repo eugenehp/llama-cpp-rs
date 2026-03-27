@@ -4,14 +4,14 @@
 [![docs.rs](https://img.shields.io/docsrs/llama-cpp-4.svg)](https://docs.rs/llama-cpp-4)
 [![License](https://img.shields.io/crates/l/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4)
 
-Safe Rust bindings to [llama.cpp](https://github.com/ggerganov/llama.cpp), tracking upstream closely.
+Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracking upstream closely.
 
 | Crate | Description | crates.io |
 |---|---|---|
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** b8249 (March 2026)
+**llama.cpp version:** b8533 (March 2026)
 
 ---
 
@@ -169,7 +169,7 @@ cargo test -p openai-server
 ```bash
 cd llama-cpp-sys-4/llama.cpp
 git fetch --tags
-git checkout b8249   # or latest tag
+git checkout b8533   # or latest tag
 cd ../..
 cargo build          # build.rs regenerates bindings automatically
 ```
@@ -285,4 +285,3 @@ This project is licensed under the [MIT License](/LICENSE).
 ## Copyright
 
 © 2025-2026, Eugene Hauptmann
-
