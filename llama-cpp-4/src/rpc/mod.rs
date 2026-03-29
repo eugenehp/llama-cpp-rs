@@ -1,5 +1,5 @@
 //! RPC backend support for distributed inference
-//! 
+//!
 //! This module provides support for running inference across multiple machines
 //! using the RPC (Remote Procedure Call) backend.
 

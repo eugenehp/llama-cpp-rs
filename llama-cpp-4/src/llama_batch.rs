@@ -5,12 +5,13 @@ use llama_cpp_sys_4::{llama_batch, llama_batch_free, llama_batch_init, llama_pos
 
 /// A safe wrapper around `llama_batch`.
 #[derive(Debug)]
+#[allow(clippy::struct_field_names)]
 pub struct LlamaBatch {
     /// The number of tokens the batch was allocated with. they are safe to write to - but not necessarily read from as they are not necessarily initialized
     allocated: usize,
     /// The logits that are initialized. Used by [`LlamaContext`] to ensure that only initialized logits are accessed.
     pub(crate) initialized_logits: Vec<i32>,
-    /// The llama_cpp batch. always initialize by `llama_cpp_sys_4::llama_batch_init(allocated, <unknown>, <unknown>)`
+    /// The `llama_cpp` batch. always initialize by `llama_cpp_sys_4::llama_batch_init(allocated, <unknown>, <unknown>)`
     pub(crate) llama_batch: llama_batch,
 }
 
@@ -35,8 +36,8 @@ impl LlamaBatch {
     ///
     /// # Panics
     ///
-    /// - [`self.llama_batch.n_tokens`] does not fit into a usize
-    /// - [`seq_ids.len()`] does not fit into a [`llama_seq_id`]
+    /// - `self.llama_batch.n_tokens` does not fit into a usize
+    /// - `seq_ids.len()` does not fit into a [`llama_seq_id`]
     ///
     /// # Errors
     ///
@@ -102,7 +103,7 @@ impl LlamaBatch {
     ///
     /// # Panics
     ///
-    /// - [`self.llama_batch.n_tokens`] does not fit into a [`usize`]
+    /// - `self.llama_batch.n_tokens` does not fit into a [`usize`]
     /// - [`n_tokens - 1`] does not fit into a [`llama_pos`]
     pub fn add_sequence(
         &mut self,

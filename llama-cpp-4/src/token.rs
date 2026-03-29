@@ -68,8 +68,9 @@ impl LlamaToken {
 ///
 /// This operation is safe because `LlamaToken` has a `repr(transparent)` attribute, ensuring that
 /// the memory layout of `LlamaToken` is the same as that of the underlying `llama_token` type.
+#[must_use]
 pub fn from_vec_token_sys(mut vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec<LlamaToken> {
-    let ptr = vec_sys.as_mut_ptr() as *mut LlamaToken;
+    let ptr = vec_sys.as_mut_ptr().cast::<LlamaToken>();
     unsafe { Vec::from_raw_parts(ptr, vec_sys.len(), vec_sys.capacity()) }
 }
 
@@ -81,8 +82,11 @@ pub fn from_vec_token_sys(mut vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec
 ///
 /// This operation is safe because `LlamaToken` has a `repr(transparent)` attribute, ensuring that
 /// the memory layout of `LlamaToken` is the same as that of the underlying `llama_token` type.
+#[must_use]
 pub fn to_vec_token_sys(mut vec_llama: Vec<LlamaToken>) -> Vec<llama_cpp_sys_4::llama_token> {
-    let ptr = vec_llama.as_mut_ptr() as *mut llama_cpp_sys_4::llama_token;
+    let ptr = vec_llama
+        .as_mut_ptr()
+        .cast::<llama_cpp_sys_4::llama_token>();
     unsafe { Vec::from_raw_parts(ptr, vec_llama.len(), vec_llama.capacity()) }
 }
 

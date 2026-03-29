@@ -6,7 +6,15 @@ use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::ptr::NonNull;
 
-use llama_cpp_sys_4::{llama_model_load_from_splits, llama_split_path, llama_split_prefix, *};
+use llama_cpp_sys_4::{
+    llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template, llama_chat_message,
+    llama_free_model, llama_load_model_from_file, llama_model, llama_model_decoder_start_token,
+    llama_model_get_vocab, llama_model_load_from_splits, llama_model_meta_val_str,
+    llama_n_ctx_train, llama_n_embd, llama_n_vocab, llama_new_context_with_model, llama_split_path,
+    llama_split_prefix, llama_token_bos, llama_token_eos, llama_token_get_attr, llama_token_is_eog,
+    llama_token_nl, llama_token_to_piece, llama_tokenize, llama_vocab, llama_vocab_type,
+    LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
+};
 
 use crate::context::params::LlamaContextParams;
 use crate::context::LlamaContext;
@@ -53,7 +61,11 @@ pub struct LlamaChatMessage {
 }
 
 impl LlamaChatMessage {
-    /// Create a new `LlamaChatMessage`
+    /// Create a new `LlamaChatMessage`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NewLlamaChatMessageError`] if the role or content contains a null byte.
     pub fn new(role: String, content: String) -> Result<Self, NewLlamaChatMessageError> {
         Ok(Self {
             role: CString::new(role)?,
@@ -100,12 +112,17 @@ impl LlamaModel {
     /// # Returns
     /// A `LlamaVocab` struct containing the vocabulary of the model.
     ///
+    /// # Panics
+    ///
+    /// Panics if the underlying C function returns a null pointer.
+    ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// let vocab = model.get_vocab();
-    /// `
+    /// ```
+    #[must_use]
     pub fn get_vocab(&self) -> LlamaVocab {
-        let llama_vocab = unsafe { llama_model_get_vocab(self.model.as_ptr()) } as *mut llama_vocab;
+        let llama_vocab = unsafe { llama_model_get_vocab(self.model.as_ptr()) }.cast_mut();
 
         LlamaVocab {
             vocab: NonNull::new(llama_vocab).unwrap(),
@@ -458,11 +475,9 @@ impl LlamaModel {
 
         // unsure what to do with this in the face of the 'special' arg + attr changes
         let attrs = self.token_attr(token);
-        if attrs.contains(LlamaTokenAttr::Control)
-            && (token == self.token_bos() || token == self.token_eos())
-        {
-            return Ok(Vec::new());
-        } else if attrs.is_empty()
+        if (attrs.contains(LlamaTokenAttr::Control)
+            && (token == self.token_bos() || token == self.token_eos()))
+            || attrs.is_empty()
             || attrs
                 .intersects(LlamaTokenAttr::Unknown | LlamaTokenAttr::Byte | LlamaTokenAttr::Unused)
         {
@@ -645,7 +660,11 @@ impl LlamaModel {
         params: &LlamaModelParams,
     ) -> Result<Self, LlamaModelLoadError> {
         let path = path.as_ref();
-        debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
+        debug_assert!(
+            Path::new(path).exists(),
+            "{} does not exist",
+            path.display()
+        );
         let path = path
             .to_str()
             .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
@@ -686,13 +705,13 @@ impl LlamaModel {
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let backend = LlamaBackend::init()?;
     /// let params = LlamaModelParams::default();
-    /// 
+    ///
     /// let paths = vec![
     ///     "model-00001-of-00003.gguf",
     ///     "model-00002-of-00003.gguf",
     ///     "model-00003-of-00003.gguf",
     /// ];
-    /// 
+    ///
     /// let model = LlamaModel::load_from_splits(&backend, &paths, &params)?;
     /// # Ok(())
     /// # }
@@ -708,7 +727,7 @@ impl LlamaModel {
             .iter()
             .map(|p| {
                 let path = p.as_ref();
-                debug_assert!(path.exists(), "{path:?} does not exist");
+                debug_assert!(path.exists(), "{} does not exist", path.display());
                 let path_str = path
                     .to_str()
                     .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
@@ -721,11 +740,7 @@ impl LlamaModel {
 
         // Load the model from splits
         let llama_model = unsafe {
-            llama_model_load_from_splits(
-                c_ptrs.as_ptr() as *mut *const c_char,
-                c_ptrs.len(),
-                params.params,
-            )
+            llama_model_load_from_splits(c_ptrs.as_ptr().cast_mut(), c_ptrs.len(), params.params)
         };
 
         let model = NonNull::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
@@ -761,7 +776,11 @@ impl LlamaModel {
         path: impl AsRef<Path>,
     ) -> Result<LlamaLoraAdapter, LlamaLoraAdapterInitError> {
         let path = path.as_ref();
-        debug_assert!(Path::new(path).exists(), "{path:?} does not exist");
+        debug_assert!(
+            Path::new(path).exists(),
+            "{} does not exist",
+            path.display()
+        );
 
         let path = path
             .to_str()
@@ -824,7 +843,7 @@ impl LlamaModel {
     /// is provided, the default template used by `llama.cpp` will be applied.
     ///
     /// For more information on supported templates, visit:
-    /// https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+    /// <https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template>
     ///
     /// # Arguments
     ///
@@ -857,11 +876,14 @@ impl LlamaModel {
     /// # Notes
     ///
     /// The provided buffer is twice the length of the messages by default, which is recommended by the `llama.cpp` documentation.
+    /// # Panics
+    ///
+    /// Panics if the buffer length exceeds `i32::MAX`.
     #[tracing::instrument(skip_all)]
     pub fn apply_chat_template(
         &self,
-        tmpl: Option<String>,
-        chat: Vec<LlamaChatMessage>,
+        tmpl: Option<&str>,
+        chat: &[LlamaChatMessage],
         add_ass: bool,
     ) -> Result<String, ApplyChatTemplateError> {
         // Compute raw message byte total from the original LlamaChatMessage vec
@@ -880,11 +902,10 @@ impl LlamaModel {
             .collect();
 
         // Set the tmpl pointer.
-        let tmpl = tmpl.map(CString::new);
-        let tmpl_ptr = match &tmpl {
-            Some(str) => str.as_ref().map_err(Clone::clone)?.as_ptr(),
-            None => std::ptr::null(),
-        };
+        let tmpl_cstring = tmpl.map(CString::new).transpose()?;
+        let tmpl_ptr = tmpl_cstring
+            .as_ref()
+            .map_or(std::ptr::null(), |s| s.as_ptr());
 
         // `message_length * 4` is far too small for models whose built-in chat
         // template adds a long default system prompt (e.g. Qwen3.5 prepends
@@ -906,7 +927,7 @@ impl LlamaModel {
                     chat_sys.len(),
                     add_ass,
                     buff.as_mut_ptr().cast(),
-                    buff.len() as i32,
+                    i32::try_from(buff.len()).expect("buffer length fits in i32"),
                 )
             };
 
@@ -914,6 +935,7 @@ impl LlamaModel {
                 return Err(ApplyChatTemplateError::BuffSizeError);
             }
 
+            #[allow(clippy::cast_sign_loss)]
             let needed = res as usize;
             if needed > buf_size {
                 // Buffer was too small — retry with the exact size llama.cpp reported.
@@ -957,26 +979,32 @@ impl LlamaModel {
     /// let path = LlamaModel::split_path("/models/llama", 2, 4);
     /// assert_eq!(path, "/models/llama-00002-of-00004.gguf");
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path prefix contains a null byte.
+    #[must_use]
     pub fn split_path(path_prefix: &str, split_no: i32, split_count: i32) -> String {
         let mut buffer = vec![0u8; 1024];
         let len = unsafe {
             llama_split_path(
-                buffer.as_mut_ptr() as *mut c_char,
+                buffer.as_mut_ptr().cast::<c_char>(),
                 buffer.len(),
                 CString::new(path_prefix).unwrap().as_ptr(),
                 split_no,
                 split_count,
             )
         };
-        
-        buffer.truncate(len as usize);
-        String::from_utf8(buffer).unwrap_or_else(|_| String::new())
+
+        let len = usize::try_from(len).expect("split_path length fits in usize");
+        buffer.truncate(len);
+        String::from_utf8(buffer).unwrap_or_default()
     }
 
     /// Extract the path prefix from a split filename.
     ///
     /// This function extracts the base path prefix from a split model filename,
-    /// but only if the split_no and split_count match the pattern in the filename.
+    /// but only if the `split_no` and `split_count` match the pattern in the filename.
     ///
     /// # Arguments
     ///
@@ -996,20 +1024,26 @@ impl LlamaModel {
     /// let prefix = LlamaModel::split_prefix("/models/llama-00002-of-00004.gguf", 2, 4);
     /// assert_eq!(prefix, Some("/models/llama".to_string()));
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the split path contains a null byte.
+    #[must_use]
     pub fn split_prefix(split_path: &str, split_no: i32, split_count: i32) -> Option<String> {
         let mut buffer = vec![0u8; 1024];
         let len = unsafe {
             llama_split_prefix(
-                buffer.as_mut_ptr() as *mut c_char,
+                buffer.as_mut_ptr().cast::<c_char>(),
                 buffer.len(),
                 CString::new(split_path).unwrap().as_ptr(),
                 split_no,
                 split_count,
             )
         };
-        
+
         if len > 0 {
-            buffer.truncate(len as usize);
+            let len = usize::try_from(len).expect("split_prefix length fits in usize");
+            buffer.truncate(len);
             String::from_utf8(buffer).ok()
         } else {
             None
@@ -1026,12 +1060,12 @@ impl Drop for LlamaModel {
 /// Defines the possible types of vocabulary used by the model.
 ///
 /// The model may use different types of vocabulary depending on the tokenization method chosen during training.
-/// This enum represents these types, specifically `BPE` (Byte Pair Encoding) and `SPM` (SentencePiece).
+/// This enum represents these types, specifically `BPE` (Byte Pair Encoding) and `SPM` (`SentencePiece`).
 ///
 /// # Variants
 ///
 /// - `BPE`: Byte Pair Encoding, a common tokenization method used in NLP tasks.
-/// - `SPM`: SentencePiece, another popular tokenization method for NLP models.
+/// - `SPM`: `SentencePiece`, another popular tokenization method for NLP models.
 ///
 /// # Example
 ///

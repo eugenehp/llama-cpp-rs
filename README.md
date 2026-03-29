@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** b8533 (March 2026)
+**llama.cpp version:** b8575 (March 2026)
 
 ---
 
@@ -24,7 +24,6 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `embeddings` | [`examples/embeddings/`](examples/embeddings/) | Batch embedding with cosine similarity |
 | `split-model-example` | [`examples/split_model/`](examples/split_model/) | Load sharded / split GGUF files |
 | `openai-server` | [`examples/server/`](examples/server/) | OpenAI-compatible HTTP server with streaming and tool calling |
-| `rpc-example` | [`examples/rpc/`](examples/rpc/) | Remote procedure call backend |
 | `mtmd` | [`examples/mtmd/`](examples/mtmd/) | Multimodal (vision / audio) inference (requires `--features mtmd`) |
 
 ---
@@ -269,13 +268,13 @@ If you use gpu-fft in academic work, please cite it as:
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.9},
+  version   = {0.2.14},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
 
 **Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.9).
+> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.14).
 > https://github.com/eugenehp/llama-cpp-rs
 
 ## License

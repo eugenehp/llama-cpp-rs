@@ -1,9 +1,9 @@
-//! exposing common llama cpp structures like CommonParams
+//! exposing common llama cpp structures like `CommonParams`
 pub use llama_cpp_sys_4::common::*;
 
 /// Struct containing common parameters for processing.
 /// ## See more
-/// https://github.com/ggerganov/llama.cpp/blob/master/common/common.h#L109
+/// <https://github.com/ggerganov/llama.cpp/blob/master/common/common.h#L109>
 #[derive(Debug, Clone)]
 pub struct CommonParams {
     /// New tokens to predict
@@ -39,25 +39,25 @@ pub struct CommonParams {
     /// Print token count every n tokens (-1 = disabled)
     pub n_print: i32,
 
-    /// RoPE base frequency
+    /// `RoPE` base frequency
     pub rope_freq_base: f32,
 
-    /// RoPE frequency scaling factor
+    /// `RoPE` frequency scaling factor
     pub rope_freq_scale: f32,
 
-    /// YaRN extrapolation mix factor
+    /// `YaRN` extrapolation mix factor
     pub yarn_ext_factor: f32,
 
-    /// YaRN magnitude scaling factor
+    /// `YaRN` magnitude scaling factor
     pub yarn_attn_factor: f32,
 
-    /// YaRN low correction dim
+    /// `YaRN` low correction dim
     pub yarn_beta_fast: f32,
 
-    /// YaRN high correction dim
+    /// `YaRN` high correction dim
     pub yarn_beta_slow: f32,
 
-    /// YaRN original context length
+    /// `YaRN` original context length
     pub yarn_orig_ctx: i32,
 
     /// KV cache defragmentation threshold
@@ -89,7 +89,7 @@ impl Default for CommonParams {
             yarn_beta_slow: 1.0,
             yarn_orig_ctx: 0,
             defrag_thold: 0.1,
-            prompt: "".into(),
+            prompt: String::new(),
         }
     }
 }

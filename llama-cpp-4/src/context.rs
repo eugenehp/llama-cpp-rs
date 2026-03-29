@@ -102,13 +102,13 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
-    /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to n_ubatch.
+    /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to `n_ubatch`.
     #[must_use]
     pub fn n_batch(&self) -> u32 {
         unsafe { llama_cpp_sys_4::llama_n_batch(self.context.as_ptr()) }
     }
 
-    /// Gets the max number of physical tokens (hardware level) to decode in batch. Must be less than or equal to n_batch.
+    /// Gets the max number of physical tokens (hardware level) to decode in batch. Must be less than or equal to `n_batch`.
     #[must_use]
     pub fn n_ubatch(&self) -> u32 {
         unsafe { llama_cpp_sys_4::llama_n_ubatch(self.context.as_ptr()) }
@@ -167,6 +167,7 @@ impl<'model> LlamaContext<'model> {
     }
 
     /// Return Pooling type for Llama's Context
+    #[must_use]
     pub fn pooling_type(&self) -> LlamaPoolingType {
         let pooling_type = unsafe { llama_pooling_type(self.context.as_ptr()) };
 
@@ -290,6 +291,7 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - `n_vocab` does not fit into a usize
     /// - token data returned is null
+    #[must_use]
     pub fn get_logits(&self) -> &[f32] {
         let data = unsafe { llama_cpp_sys_4::llama_get_logits(self.context.as_ptr()) };
         assert!(!data.is_null(), "logits data for last token is null");
@@ -346,9 +348,7 @@ impl<'model> LlamaContext<'model> {
     pub fn timings(&mut self) -> PerfContextData {
         let perf_context_data =
             unsafe { llama_cpp_sys_4::llama_perf_context(self.context.as_ptr()) };
-        PerfContextData {
-            perf_context_data: perf_context_data,
-        }
+        PerfContextData { perf_context_data }
     }
 
     /// Sets a lora adapter.
@@ -368,9 +368,9 @@ impl<'model> LlamaContext<'model> {
             let mut scale_val = scale;
             llama_cpp_sys_4::llama_set_adapters_lora(
                 self.context.as_ptr(),
-                &mut adapter_ptr,
+                &raw mut adapter_ptr,
                 1,
-                &mut scale_val,
+                &raw mut scale_val,
             )
         };
         if err_code != 0 {
@@ -384,7 +384,7 @@ impl<'model> LlamaContext<'model> {
     /// Remove all lora adapters from the context.
     ///
     /// Note: as of llama.cpp b8249 the per-adapter remove API was replaced by
-    /// [`llama_set_adapters_lora`] which operates on the full adapter list at once.
+    /// `llama_set_adapters_lora` which operates on the full adapter list at once.
     /// Calling this function clears **all** adapters currently set on the context.
     ///
     /// # Errors

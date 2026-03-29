@@ -180,6 +180,9 @@ impl MtmdContextParams {
     ///
     /// **Note:** the `CString` is stored inside the params so the pointer
     /// remains valid as long as this `MtmdContextParams` lives.
+    /// # Errors
+    ///
+    /// Returns [`MtmdError`] if the marker string contains a NUL byte.
     pub fn media_marker(mut self, marker: Option<&str>) -> std::result::Result<Self, MtmdError> {
         match marker {
             None => {
@@ -257,6 +260,7 @@ impl MtmdContext {
     ///
     /// Returns [`MtmdError::ContextCreateFailed`] if the underlying C call
     /// returns a null pointer.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn init_from_file(
         mmproj_path: impl AsRef<Path>,
         text_model: &LlamaModel,
@@ -348,6 +352,10 @@ impl MtmdContext {
     /// * `text`    – text + tokenisation options
     /// * `bitmaps` – slice of [`MtmdBitmap`] references, one per media marker
     /// * `output`  – an [`MtmdInputChunks`] that will be populated with the result
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::TokenizeError`] if tokenization fails.
     pub fn tokenize(
         &self,
         text: &MtmdInputText<'_>,
@@ -358,8 +366,10 @@ impl MtmdContext {
         // where each element is a `const mtmd_bitmap *`.  We build a Vec of
         // `*const mtmd_bitmap` and pass a mutable pointer to its first element
         // (i.e. `*mut *const mtmd_bitmap`) to satisfy the C API.
-        let mut bitmap_ptrs: Vec<*const sys::mtmd_bitmap> =
-            bitmaps.iter().map(|b| b.ptr.as_ptr() as *const _).collect();
+        let mut bitmap_ptrs: Vec<*const sys::mtmd_bitmap> = bitmaps
+            .iter()
+            .map(|b| b.ptr.as_ptr().cast_const())
+            .collect();
 
         let c_text = sys::mtmd_input_text {
             text: text.c_text.as_ptr(),
@@ -371,7 +381,7 @@ impl MtmdContext {
             sys::mtmd_tokenize(
                 self.ptr.as_ptr(),
                 output.ptr.as_ptr(),
-                &c_text,
+                &raw const c_text,
                 bitmap_ptrs.as_mut_ptr(),
                 bitmap_ptrs.len(),
             )
@@ -390,6 +400,10 @@ impl MtmdContext {
     /// [`MtmdContext::output_embd`].
     ///
     /// This call is **NOT thread-safe**.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EncodeError`] if encoding fails.
     pub fn encode_chunk(&self, chunk: &MtmdInputChunk<'_>) -> Result<()> {
         let ret = unsafe { sys::mtmd_encode_chunk(self.ptr.as_ptr(), chunk.ptr) };
         if ret != 0 {
@@ -440,6 +454,10 @@ impl MtmdContext {
     /// * `n_batch`     – maximum batch size (must be ≥ 1)
     /// * `logits_last` – if `true`, compute logits only for the final token
     /// * `new_n_past`  – updated KV-cache position after the call
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] if evaluation fails.
     #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
     pub fn eval_chunks(
         &self,
@@ -473,6 +491,10 @@ impl MtmdContext {
     ///
     /// Works identically to [`eval_chunks`](Self::eval_chunks) but operates on
     /// one chunk at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] if evaluation fails.
     #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
     pub fn eval_chunk_single(
         &self,
@@ -553,6 +575,10 @@ impl<'a> MtmdInputText<'a> {
 
     /// Try to create a new `MtmdInputText`, returning an error if `text`
     /// contains an interior NUL byte.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`std::ffi::NulError`] if `text` contains a NUL byte.
     pub fn try_new(
         text: &'a str,
         add_special: bool,
@@ -900,7 +926,7 @@ impl<'chunks> MtmdInputChunk<'chunks> {
             return None;
         }
         let mut n: usize = 0;
-        let ptr = unsafe { sys::mtmd_input_chunk_get_tokens_text(self.ptr, &mut n) };
+        let ptr = unsafe { sys::mtmd_input_chunk_get_tokens_text(self.ptr, &raw mut n) };
         if ptr.is_null() || n == 0 {
             return Some(&[]);
         }
@@ -914,7 +940,7 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     pub fn image_tokens(&self) -> Option<MtmdImageTokens<'chunks>> {
         match self.chunk_type() {
             MtmdInputChunkType::Image | MtmdInputChunkType::Audio => {}
-            _ => return None,
+            MtmdInputChunkType::Text => return None,
         }
         let ptr = unsafe { sys::mtmd_input_chunk_get_tokens_image(self.ptr) };
         if ptr.is_null() {
@@ -959,7 +985,7 @@ pub struct MtmdImageTokens<'chunks> {
     _marker: std::marker::PhantomData<&'chunks MtmdInputChunks>,
 }
 
-impl<'chunks> MtmdImageTokens<'chunks> {
+impl MtmdImageTokens<'_> {
     /// Total number of embedding tokens.
     #[must_use]
     pub fn n_tokens(&self) -> usize {

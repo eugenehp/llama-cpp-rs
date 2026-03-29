@@ -5,7 +5,15 @@ use std::ffi::{c_char, CString};
 use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 
-use llama_cpp_sys_4::{common::*, *};
+use llama_cpp_sys_4::{
+    common::common_sampler_params, llama_sampler, llama_sampler_accept, llama_sampler_chain_add,
+    llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_free,
+    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_grammar,
+    llama_sampler_init_greedy, llama_sampler_init_min_p, llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
+    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p,
+    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample,
+};
 
 use crate::context::LlamaContext;
 use crate::model::LlamaModel;
@@ -80,8 +88,19 @@ impl Default for LlamaSamplerParams {
     }
 }
 
+impl Default for LlamaSampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LlamaSampler {
-    /// create new sampler with default params
+    /// Create new sampler with default params.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    #[must_use]
     pub fn new() -> Self {
         let sparams = unsafe { llama_sampler_chain_default_params() };
 
@@ -135,6 +154,10 @@ impl LlamaSampler {
     /// If you are using a chain to select a token, the chain should always end with one of
     /// [`LlamaSampler::greedy`], [`LlamaSampler::dist`], [`LlamaSampler::mirostat`], and
     /// [`LlamaSampler::mirostat_v2`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn chain(samplers: impl IntoIterator<Item = Self>, no_perf: bool) -> Self {
         unsafe {
@@ -157,6 +180,10 @@ impl LlamaSampler {
     }
 
     /// Same as [`Self::chain`] with `no_perf = false`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     ///
     /// # Example
     /// ```rust
@@ -190,8 +217,12 @@ impl LlamaSampler {
         Self::chain(samplers, false)
     }
 
-    /// Updates the logits l_i' = l_i/t. When t <= 0.0f, the maximum logit is kept at it's original
-    /// value, the rest are set to -inf
+    /// Updates the logits `l_i`' = `l_i/t`. When `t <= 0.0`, the maximum logit is kept at its original
+    /// value, the rest are set to -inf.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     ///
     /// # Example:
     /// ```rust
@@ -224,6 +255,10 @@ impl LlamaSampler {
 
     /// Dynamic temperature implementation (a.k.a. entropy) described in the paper
     /// <https://arxiv.org/abs/2309.02772>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn temp_ext(t: f32, delta: f32, exponent: f32) -> Self {
         let sampler = unsafe { llama_sampler_init_temp_ext(t, delta, exponent) };
@@ -233,7 +268,11 @@ impl LlamaSampler {
     }
 
     /// Top-K sampling described in academic paper "The Curious Case of Neural Text Degeneration"
-    /// <https://arxiv.org/abs/1904.09751>
+    /// <https://arxiv.org/abs/1904.09751>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     ///
     /// # Example:
     /// ```rust
@@ -266,6 +305,10 @@ impl LlamaSampler {
     }
 
     /// Locally Typical Sampling implementation described in the paper <https://arxiv.org/abs/2202.00666>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn typical(p: f32, min_keep: usize) -> Self {
         let sampler = unsafe { llama_sampler_init_typical(p, min_keep) };
@@ -275,7 +318,11 @@ impl LlamaSampler {
     }
 
     /// Nucleus sampling described in academic paper "The Curious Case of Neural Text Degeneration"
-    /// <https://arxiv.org/abs/1904.09751>
+    /// <https://arxiv.org/abs/1904.09751>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn top_p(p: f32, min_keep: usize) -> Self {
         let sampler = unsafe { llama_sampler_init_top_p(p, min_keep) };
@@ -284,7 +331,11 @@ impl LlamaSampler {
         }
     }
 
-    /// Minimum P sampling as described in <https://github.com/ggerganov/llama.cpp/pull/3841>
+    /// Minimum P sampling as described in <https://github.com/ggerganov/llama.cpp/pull/3841>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn min_p(p: f32, min_keep: usize) -> Self {
         let sampler = unsafe { llama_sampler_init_min_p(p, min_keep) };
@@ -293,7 +344,11 @@ impl LlamaSampler {
         }
     }
 
-    /// XTC sampler as described in <https://github.com/oobabooga/text-generation-webui/pull/6335>
+    /// XTC sampler as described in <https://github.com/oobabooga/text-generation-webui/pull/6335>.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn xtc(p: f32, t: f32, min_keep: usize, seed: u32) -> Self {
         let sampler = unsafe { llama_sampler_init_xtc(p, t, min_keep, seed) };
@@ -305,7 +360,8 @@ impl LlamaSampler {
     /// Grammar sampler
     ///
     /// # Panics
-    /// If either of ``grammar_str`` or ``grammar_root`` contain null bytes.
+    /// - If either of `grammar_str` or `grammar_root` contain null bytes.
+    /// - If llama.cpp returns a null pointer.
     #[must_use]
     pub fn grammar(model: &LlamaModel, grammar_str: &str, grammar_root: &str) -> Self {
         let grammar_str = CString::new(grammar_str).unwrap();
@@ -328,7 +384,9 @@ impl LlamaSampler {
     /// implementation authored by pi6am: <https://github.com/LostRuins/koboldcpp/pull/982>
     ///
     /// # Panics
-    /// If any string in ``seq_breakers`` contains null bytes.
+    /// - If any string in `seq_breakers` contains null bytes.
+    /// - If llama.cpp returns a null pointer.
+    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn dry(
         &self,
@@ -369,16 +427,15 @@ impl LlamaSampler {
 
     /// Penalizes tokens for being present in the context.
     ///
-    /// Parameters:  
-    /// - ``n_vocab``: [`LlamaModel::n_vocab`]
-    /// - ``special_eos)id``: [`LlamaModel::token_eos`]
-    /// - ``linefeed_id``: [`LlamaModel::token_nl`]
-    /// - ``penalty_last_n``: last n tokens to penalize (0 = disable penalty, -1 = context size)
-    ///// - ``penalty_repeat``: 1.0 = disabled
-    ///// - ``penalty_freq``: 0.0 = disabled
-    ///// - ``penalty_present``: 0.0 = disabled
-    ///// - ``penalize_nl``: consider newlines as a repeatable token
-    ///// - ``ignore_eos``: ignore the end-of-sequence token
+    /// Parameters:
+    /// - `n_vocab`: [`LlamaModel::n_vocab`]
+    /// - `special_eos_id`: [`LlamaModel::token_eos`]
+    /// - `linefeed_id`: [`LlamaModel::token_nl`]
+    /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty, -1 = context size)
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn penalties(
@@ -413,12 +470,13 @@ impl LlamaSampler {
     /// Same as [`Self::penalties`], but with `n_vocab`, `special_eos_id`, and `linefeed_id`
     /// initialized from `model`, `penalize_nl = false`, and `ignore_eos = true`.
     ///
-    /// Parameters:  
-    /// - ``model``: The model's tokenizer to use to initialize the sampler.
-    /// - ``penalty_last_n``: last n tokens to penalize (0 = disable penalty, -1 = context size)
-    ///// - ``penalty_repeat``: 1.0 = disabled
-    ///// - ``penalty_freq``: 0.0 = disabled
-    ///// - ``penalty_present``: 0.0 = disabled
+    /// Parameters:
+    /// - `model`: The model's tokenizer to use to initialize the sampler.
+    /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty, -1 = context size)
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn penalties_simple(
         model: &LlamaModel,
@@ -429,9 +487,18 @@ impl LlamaSampler {
     ) -> Self {
         Self::penalties(
             model.n_vocab(),
-            model.token_eos().0 as f32,
-            model.token_nl().0 as f32,
-            penalty_last_n as f32,
+            #[allow(clippy::cast_precision_loss)]
+            {
+                model.token_eos().0 as f32
+            },
+            #[allow(clippy::cast_precision_loss)]
+            {
+                model.token_nl().0 as f32
+            },
+            #[allow(clippy::cast_precision_loss)]
+            {
+                penalty_last_n as f32
+            },
             // penalty_repeat,
             // penalty_freq,
             // penalty_present,
@@ -442,19 +509,23 @@ impl LlamaSampler {
 
     /// Mirostat 1.0 algorithm described in the paper <https://arxiv.org/abs/2007.14966>. Uses tokens instead of words.
     ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    ///
     /// # Parameters:
-    /// - ``n_vocab``: [`LlamaModel::n_vocab`]
-    /// - ``seed``: Seed to initialize random generation with.
-    /// - ``tau``: The target cross-entropy (or surprise) value you want to achieve for the
-    ///     generated text. A higher value corresponds to more surprising or less predictable text,
-    ///     while a lower value corresponds to less surprising or more predictable text.
-    /// - ``eta``: The learning rate used to update `mu` based on the error between the target and
-    ///     observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
-    ///     updated more quickly, while a smaller learning rate will result in slower updates.
-    /// - ``m``: The number of tokens considered in the estimation of `s_hat`. This is an arbitrary
-    ///     value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`.
-    ///     In the paper, they use `m = 100`, but you can experiment with different values to see how
-    ///     it affects the performance of the algorithm.
+    /// - `n_vocab`: [`LlamaModel::n_vocab`]
+    /// - `seed`: Seed to initialize random generation with.
+    /// - `tau`: The target cross-entropy (or surprise) value you want to achieve for the
+    ///   generated text. A higher value corresponds to more surprising or less predictable text,
+    ///   while a lower value corresponds to less surprising or more predictable text.
+    /// - `eta`: The learning rate used to update `mu` based on the error between the target and
+    ///   observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
+    ///   updated more quickly, while a smaller learning rate will result in slower updates.
+    /// - `m`: The number of tokens considered in the estimation of `s_hat`. This is an arbitrary
+    ///   value that is used to calculate `s_hat`, which in turn helps to calculate the value of `k`.
+    ///   In the paper, they use `m = 100`, but you can experiment with different values to see how
+    ///   it affects the performance of the algorithm.
     #[must_use]
     pub fn mirostat(n_vocab: i32, seed: u32, tau: f32, eta: f32, m: i32) -> Self {
         let sampler = unsafe { llama_sampler_init_mirostat(n_vocab, seed, tau, eta, m) };
@@ -465,14 +536,18 @@ impl LlamaSampler {
 
     /// Mirostat 2.0 algorithm described in the paper <https://arxiv.org/abs/2007.14966>. Uses tokens instead of words.
     ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    ///
     /// # Parameters:
-    /// - ``seed``: Seed to initialize random generation with.
-    /// - ``tau``: The target cross-entropy (or surprise) value you want to achieve for the
-    ///     generated text. A higher value corresponds to more surprising or less predictable text,
-    ///     while a lower value corresponds to less surprising or more predictable text.
-    /// - ``eta``: The learning rate used to update `mu` based on the error between the target and
-    ///     observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
-    ///     updated more quickly, while a smaller learning rate will result in slower updates.
+    /// - `seed`: Seed to initialize random generation with.
+    /// - `tau`: The target cross-entropy (or surprise) value you want to achieve for the
+    ///   generated text. A higher value corresponds to more surprising or less predictable text,
+    ///   while a lower value corresponds to less surprising or more predictable text.
+    /// - `eta`: The learning rate used to update `mu` based on the error between the target and
+    ///   observed surprisal of the sampled word. A larger learning rate will cause `mu` to be
+    ///   updated more quickly, while a smaller learning rate will result in slower updates.
     #[must_use]
     pub fn mirostat_v2(seed: u32, tau: f32, eta: f32) -> Self {
         let sampler = unsafe { llama_sampler_init_mirostat_v2(seed, tau, eta) };
@@ -481,7 +556,11 @@ impl LlamaSampler {
         }
     }
 
-    /// Selects a token at random based on each token's probabilities
+    /// Selects a token at random based on each token's probabilities.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn dist(seed: u32) -> Self {
         let sampler = unsafe { llama_sampler_init_dist(seed) };
@@ -490,7 +569,11 @@ impl LlamaSampler {
         }
     }
 
-    /// Selects the most likely token
+    /// Selects the most likely token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
     ///
     /// # Example:
     /// ```rust
@@ -524,13 +607,13 @@ impl LlamaSampler {
     /// This function initializes a `LlamaSampler` using default values from `common_sampler_params`
     /// and configures it with common settings such as `top_k`, `top_p`, `temperature`, and `seed` values.
     ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    ///
     /// # Returns
     /// A `LlamaSampler` instance configured with the common sampling parameters.
-    ///
-    /// # Example
-    /// ```rust
-    /// let sampler = LlamaSampler::common();
-    /// ```
+    #[must_use]
     pub fn common() -> Self {
         let params = common_sampler_params::default();
 
@@ -543,9 +626,11 @@ impl LlamaSampler {
             llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.top_k));
             llama_sampler_chain_add(
                 smpl,
+                #[allow(clippy::cast_sign_loss)]
                 llama_sampler_init_top_p(params.top_p, params.min_keep as usize),
             );
             llama_sampler_chain_add(smpl, llama_sampler_init_temp(params.temp));
+            #[allow(clippy::cast_sign_loss)]
             llama_sampler_chain_add(smpl, llama_sampler_init_dist(params.seed));
 
             smpl

@@ -27,7 +27,16 @@
 //!     --n-gpu-layers 99 --api-key secret \
 //!     hf-model bartowski/Llama-3.2-3B-Instruct-GGUF Q4_K_M
 //! ```
-#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    clippy::needless_pass_by_value,
+    clippy::case_sensitive_file_extension_comparisons
+)]
 
 mod tools;
 
@@ -100,7 +109,7 @@ struct Args {
     ///
     /// Example:
     ///   MODEL=$(cargo run -p openai-server -- --print-path \
-    ///               hf-model bartowski/Llama-3.2-1B-Instruct-GGUF Q4_K_M)
+    ///               hf-model bartowski/Llama-3.2-1B-Instruct-GGUF `Q4_K_M`)
     #[arg(long)]
     print_path: bool,
 
@@ -222,8 +231,7 @@ fn prompt_user(groups: &[ModelGroup]) -> anyhow::Result<usize> {
             .iter()
             .enumerate()
             .min_by_key(|(_, g)| g.preference_score())
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
         eprintln!("\nNon-interactive — auto-selected: {}", groups[best].label);
         return Ok(best);
     }
@@ -483,14 +491,14 @@ struct FileEntry {
 
 /// Generate a stable file ID by FNV-1a hashing the content + timestamp.
 fn gen_file_id(data: &[u8]) -> String {
-    let mut h: u64 = 0xcbf29ce484222325u64;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325_u64;
     for &b in data {
         h ^= u64::from(b);
-        h = h.wrapping_mul(0x100000001b3);
+        h = h.wrapping_mul(0x0100_0000_01b3);
     }
     for &b in &now_secs().to_le_bytes() {
         h ^= u64::from(b);
-        h = h.wrapping_mul(0x100000001b3);
+        h = h.wrapping_mul(0x0100_0000_01b3);
     }
     format!("file-{h:016x}")
 }
@@ -570,9 +578,7 @@ fn error_response(err: HttpError) -> HttpResponse {
 // ---------------------------------------------------------------------------
 
 fn check_auth(req: &HttpRequest, state: &AppState) -> Option<HttpError> {
-    let Some(ref expected) = state.api_key else {
-        return None;
-    };
+    let expected = state.api_key.as_ref()?;
     let auth = req
         .headers()
         .get("Authorization")
@@ -1125,7 +1131,12 @@ where
     // generated (but not-yet-emitted) text.  Everything before the window has
     // already been forwarded to `on_piece`, so we never re-emit it when a stop
     // sequence is finally matched.
-    let max_stop_len = params.stop_seqs.iter().map(|s| s.len()).max().unwrap_or(0);
+    let max_stop_len = params
+        .stop_seqs
+        .iter()
+        .map(std::string::String::len)
+        .max()
+        .unwrap_or(0);
     let mut window = String::new();
     let mut cancelled = false;
 
@@ -1207,7 +1218,7 @@ where
 // ---------------------------------------------------------------------------
 
 fn sse_chunk(data: &Value) -> web::Bytes {
-    web::Bytes::from(format!("data: {}\n\n", data))
+    web::Bytes::from(format!("data: {data}\n\n"))
 }
 
 fn sse_done() -> web::Bytes {
@@ -1351,7 +1362,10 @@ async fn chat_completions(
             _ => return error_response(bad_request("'chat_template' must be a string")),
         };
         let template = template_override.or_else(|| state.chat_template.clone());
-        match state.model.apply_chat_template(template, chat_msgs, true) {
+        match state
+            .model
+            .apply_chat_template(template.as_deref(), &chat_msgs, true)
+        {
             Ok(p) => p,
             Err(e) => return error_response(internal_error(format!("chat template: {e}"))),
         }
@@ -1446,7 +1460,8 @@ async fn run_chat_blocking(
                     json!({ "role": "assistant", "content": content }),
                 )
             } else {
-                let calls_json: Vec<Value> = tool_calls.iter().map(|c| c.to_value()).collect();
+                let calls_json: Vec<Value> =
+                    tool_calls.iter().map(tools::ToolCall::to_value).collect();
                 (
                     "tool_calls",
                     json!({
@@ -1530,7 +1545,8 @@ async fn run_chat_stream(
                 })));
             } else {
                 // Emit tool_calls delta.
-                let calls_json: Vec<Value> = tool_calls.iter().map(|c| c.to_value()).collect();
+                let calls_json: Vec<Value> =
+                    tool_calls.iter().map(tools::ToolCall::to_value).collect();
                 let content_val = if content.is_empty() {
                     Value::Null
                 } else {
@@ -1548,13 +1564,11 @@ async fn run_chat_stream(
         } else {
             // Pure streaming: emit each token piece immediately.
             if let Ok((_, fr)) = run_inference(&state2, &params, |piece| {
-                let ok = tx
-                    .blocking_send(sse_chunk(&json!({
-                        "id": id2, "object": OBJ, "created": created, "model": model2,
-                        "choices": [{"index":0,"delta":{"content":piece},"finish_reason":null}]
-                    })))
-                    .is_ok();
-                ok
+                tx.blocking_send(sse_chunk(&json!({
+                    "id": id2, "object": OBJ, "created": created, "model": model2,
+                    "choices": [{"index":0,"delta":{"content":piece},"finish_reason":null}]
+                })))
+                .is_ok()
             }) {
                 finish_reason = fr;
             }
@@ -1926,13 +1940,10 @@ async fn upload_file(
         }
     }
 
-    let bytes = match file_bytes {
-        Some(b) => b,
-        None => {
-            return error_response(bad_request(
-                "'file' field is required (multipart/form-data)",
-            ))
-        }
+    let Some(bytes) = file_bytes else {
+        return error_response(bad_request(
+            "'file' field is required (multipart/form-data)",
+        ));
     };
 
     let id = gen_file_id(&bytes);
@@ -2143,8 +2154,7 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or("llama.cpp")
         .to_string();
 
-    let backend = LlamaBackend::init()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+    let backend = LlamaBackend::init().map_err(|e| std::io::Error::other(e.to_string()))?;
 
     let mut model_params = LlamaModelParams::default();
     if args.n_gpu_layers > 0 {
@@ -2152,7 +2162,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     let chat_template = model.get_chat_template(65536).ok();
     if chat_template.is_some() {

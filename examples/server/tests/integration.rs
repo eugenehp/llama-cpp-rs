@@ -200,7 +200,8 @@ fn get_json(base: &str, path: &str) -> Value {
         .send()
         .unwrap_or_else(|e| panic!("GET {url} failed: {e}"));
     assert_eq!(resp.status().as_u16(), 200, "GET {url} → unexpected status");
-    resp.json().unwrap_or_else(|e| panic!("GET {url}: bad JSON body: {e}"))
+    resp.json()
+        .unwrap_or_else(|e| panic!("GET {url}: bad JSON body: {e}"))
 }
 
 /// Convenience: POST JSON body, assert expected status, return parsed JSON.
@@ -520,7 +521,10 @@ fn embeddings_single() {
         (norm - 1.0).abs() < 0.01,
         "embedding must be L2-normalised (norm={norm})"
     );
-    eprintln!("[✓] POST /v1/embeddings (single, dim={}, norm≈{norm:.4})", vec.len());
+    eprintln!(
+        "[✓] POST /v1/embeddings (single, dim={}, norm≈{norm:.4})",
+        vec.len()
+    );
 }
 
 #[test]
@@ -538,8 +542,14 @@ fn embeddings_batch() {
     assert_eq!(data[1]["index"], 1);
 
     // Both vectors must have the same dimension.
-    let dim0 = data[0]["embedding"].as_array().map(|a| a.len()).unwrap_or(0);
-    let dim1 = data[1]["embedding"].as_array().map(|a| a.len()).unwrap_or(0);
+    let dim0 = data[0]["embedding"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let dim1 = data[1]["embedding"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0);
     assert_eq!(dim0, dim1, "all embeddings must have the same dimension");
     assert!(dim0 > 0);
     eprintln!("[✓] POST /v1/embeddings (batch, dim={dim0})");
@@ -568,10 +578,7 @@ fn embeddings_self_similarity() {
         .map(|x| x.as_f64().unwrap())
         .collect();
     let dot: f64 = v0.iter().zip(&v1).map(|(a, b)| a * b).sum();
-    assert!(
-        dot > 0.99,
-        "self-similarity must be ≈ 1.0, got {dot:.6}"
-    );
+    assert!(dot > 0.99, "self-similarity must be ≈ 1.0, got {dot:.6}");
     eprintln!("[✓] embeddings self-similarity = {dot:.6}");
 }
 
@@ -626,7 +633,9 @@ fn tool_calling_required() {
     assert!(call["id"].is_string());
     assert_eq!(call["function"]["name"], "get_weather");
     let args: Value = serde_json::from_str(
-        call["function"]["arguments"].as_str().expect("arguments string"),
+        call["function"]["arguments"]
+            .as_str()
+            .expect("arguments string"),
     )
     .expect("arguments must be valid JSON");
     assert!(
@@ -666,7 +675,9 @@ fn tool_calling_none() {
     // tool_calls field must be absent or null
     assert!(
         choice["message"]["tool_calls"].is_null()
-            || choice["message"]["tool_calls"].as_array().map_or(false, |a| a.is_empty()),
+            || choice["message"]["tool_calls"]
+                .as_array()
+                .map_or(false, |a| a.is_empty()),
         "tool_calls must be absent when tool_choice=none: {body}"
     );
     eprintln!("[✓] tool_choice=none → plain text response");
@@ -692,7 +703,10 @@ fn tool_calling_multi_turn() {
     );
     let call = &first["choices"][0]["message"]["tool_calls"][0];
     let call_id = call["id"].as_str().expect("call id").to_owned();
-    let call_name = call["function"]["name"].as_str().expect("call name").to_owned();
+    let call_name = call["function"]["name"]
+        .as_str()
+        .expect("call name")
+        .to_owned();
     let call_args = call["function"]["arguments"]
         .as_str()
         .expect("args string")
@@ -747,7 +761,9 @@ fn tool_calling_multi_turn() {
 
 #[test]
 fn auth_health_is_unprotected() {
-    let Some(base) = auth_server_url() else { return };
+    let Some(base) = auth_server_url() else {
+        return;
+    };
     // /health must return 200 even without a key.
     let resp = Client::new()
         .get(format!("{base}/health"))
@@ -759,7 +775,9 @@ fn auth_health_is_unprotected() {
 
 #[test]
 fn auth_missing_key_returns_401() {
-    let Some(base) = auth_server_url() else { return };
+    let Some(base) = auth_server_url() else {
+        return;
+    };
     let resp = Client::new()
         .get(format!("{base}/v1/models"))
         .send()
@@ -772,7 +790,9 @@ fn auth_missing_key_returns_401() {
 
 #[test]
 fn auth_wrong_key_returns_401() {
-    let Some(base) = auth_server_url() else { return };
+    let Some(base) = auth_server_url() else {
+        return;
+    };
     let resp = Client::new()
         .get(format!("{base}/v1/models"))
         .bearer_auth("totally_wrong_key")
@@ -784,7 +804,9 @@ fn auth_wrong_key_returns_401() {
 
 #[test]
 fn auth_correct_key_returns_200() {
-    let Some(base) = auth_server_url() else { return };
+    let Some(base) = auth_server_url() else {
+        return;
+    };
     let resp = Client::new()
         .get(format!("{base}/v1/models"))
         .bearer_auth(TEST_API_KEY)
@@ -796,7 +818,9 @@ fn auth_correct_key_returns_200() {
 
 #[test]
 fn auth_chat_completion_with_key() {
-    let Some(base) = auth_server_url() else { return };
+    let Some(base) = auth_server_url() else {
+        return;
+    };
     let resp = post_json_auth(
         &base,
         "/v1/chat/completions",

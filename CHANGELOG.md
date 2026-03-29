@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.14] - 2026-03-29
+
+### Changed
+
+- **Updated all dependencies** to latest compatible versions (128 packages).
+- **Updated llama.cpp submodule** from b8533 to b8575.
+- **Fixed all clippy warnings** across the entire workspace (~190 → 0).
+- **Fixed all `cargo doc` warnings** (8 → 0): broken intra-doc links, bare URLs,
+  malformed code block.
+- **Improved docs.rs metadata**: replaced non-existent `sampler` feature with
+  `mtmd`, added `keywords` and `categories` to both crates.
+- **Expanded crate-level documentation**: added feature flag docs for `metal`,
+  `vulkan`, `native`, `openmp`; added links to all examples.
+- **Added `# Errors` and `# Panics` doc sections** to public API functions.
+- **Added `Default` impl** for `LlamaSampler`.
+- **Changed `apply_chat_template` signature** to accept `Option<&str>` and
+  `&[LlamaChatMessage]` instead of owned types.
+- **Removed `rpc-example`** from README examples table (not in workspace).
+- **Formatted all code** with `cargo fmt`.
+
 ## [0.2.13] - 2026-03-21
 
 ### Changed
@@ -246,6 +266,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Features: `cuda`, `metal`, `vulkan`, `openmp`, `rpc`, `mpi`, `dynamic-link`.
 - Examples: `simple`, `chat`, `embeddings`, `split_model`, `server`, `rpc`.
 
+[0.2.14]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.13...v0.2.14
+[0.2.13]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.9...v0.2.13
 [0.2.9]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/eugenehp/llama-cpp-rs/compare/v0.2.6...v0.2.7

@@ -117,7 +117,7 @@ impl LlamaContext<'_> {
                 cstr.as_ptr(),
                 tokens_out,
                 max_tokens,
-                &mut n_out,
+                &raw mut n_out,
             )
         };
         if load_session_success {

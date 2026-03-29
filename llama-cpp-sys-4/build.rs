@@ -47,12 +47,8 @@ fn llama_src_version(src: &Path) -> String {
                     let head = head.trim();
                     if head.starts_with("ref:") {
                         // Resolve the ref to the actual commit hash.
-                        let ref_path = head
-                            .strip_prefix("ref:")
-                            .map(str::trim)
-                            .unwrap_or(head);
-                        let commit_path =
-                            git_file.parent().unwrap().join(rel).join(ref_path);
+                        let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
+                        let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
                         if let Ok(hash) = std::fs::read_to_string(commit_path) {
                             return hash.trim().to_owned();
                         }
@@ -169,7 +165,11 @@ fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
         "*.so"
     };
 
-    let shared_libs_dir = if target.contains("windows") { "bin" } else { "lib" };
+    let shared_libs_dir = if target.contains("windows") {
+        "bin"
+    } else {
+        "lib"
+    };
     let libs_dir = out_dir.join(shared_libs_dir);
     let pattern = libs_dir.join(shared_lib_pattern);
     debug_log!("Extract lib assets {}", pattern.display());
@@ -257,9 +257,17 @@ fn mingw_compiler(target: &str, cxx: bool) -> Option<String> {
     };
     // `gnullvm` targets use LLVM/Clang; plain `gnu` targets use GCC.
     let compiler = if target.contains("gnullvm") {
-        if cxx { "clang++" } else { "clang" }
+        if cxx {
+            "clang++"
+        } else {
+            "clang"
+        }
     } else {
-        if cxx { "g++" } else { "gcc" }
+        if cxx {
+            "g++"
+        } else {
+            "gcc"
+        }
     };
     Some(format!("{}-w64-mingw32-{}", arch, compiler))
 }
@@ -364,10 +372,7 @@ fn find_glslc(sdk: &Path) -> Option<PathBuf> {
     }
 
     // 3. Fall back to PATH.
-    if let Ok(output) = std::process::Command::new("where")
-        .arg(exe_name)
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("where").arg(exe_name).output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(line) = stdout.lines().next() {
@@ -380,10 +385,7 @@ fn find_glslc(sdk: &Path) -> Option<PathBuf> {
     }
 
     // Also try Unix-style `which` (e.g. Git-for-Windows, MSYS2).
-    if let Ok(output) = std::process::Command::new("which")
-        .arg(exe_name)
-        .output()
-    {
+    if let Ok(output) = std::process::Command::new("which").arg(exe_name).output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             if let Some(line) = stdout.lines().next() {
@@ -467,8 +469,8 @@ fn find_vulkan_sdk_windows() -> Option<PathBuf> {
         use winreg::RegKey;
         // The LunarG installer writes per-version keys under:
         //   HKLM\SOFTWARE\LunarG\VulkanSDK\<version>  (InstallDir = …)
-        if let Ok(hklm) = RegKey::predef(HKEY_LOCAL_MACHINE)
-            .open_subkey("SOFTWARE\\LunarG\\VulkanSDK")
+        if let Ok(hklm) =
+            RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\LunarG\\VulkanSDK")
         {
             // Enumerate version sub-keys and pick the latest valid one.
             let mut candidates: Vec<(String, PathBuf)> = Vec::new();
@@ -918,8 +920,7 @@ fn main() {
     // higher-arch macros from being defined.  Users who want native
     // performance on their own machine should add --features native, which
     // takes the GGML_NATIVE=ON path above and skips this block entirely.
-    let is_arm_target =
-        target.starts_with("aarch64") || target.starts_with("arm");
+    let is_arm_target = target.starts_with("aarch64") || target.starts_with("arm");
     if is_arm_target && !want_native && !target.contains("android") {
         // Don't override if the caller already set a custom arch via env var
         // (e.g. GGML_CPU_ARM_ARCH=armv8.2-a+dotprod for a specific fleet).
@@ -1019,8 +1020,8 @@ fn main() {
             let vulkan_path = find_vulkan_sdk_windows()
                 .expect("Could not find Vulkan SDK. Please install it from https://vulkan.lunarg.com/sdk/home and either set the VULKAN_SDK environment variable or install to the default C:\\VulkanSDK\\ location.");
             debug_log!("Vulkan SDK: {}", vulkan_path.display());
-            let vulkan_lib_path = find_child_dir_ci(&vulkan_path, "lib")
-                .unwrap_or_else(|| vulkan_path.join("Lib"));
+            let vulkan_lib_path =
+                find_child_dir_ci(&vulkan_path, "lib").unwrap_or_else(|| vulkan_path.join("Lib"));
             println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
             println!("cargo:rustc-link-lib=vulkan-1");
             // Ensure CMake can also find the SDK.
@@ -1110,8 +1111,7 @@ fn main() {
                     "CMakeCache.txt exists but no Makefile/build.ninja found — \
                      removing cache to force reconfiguration"
                 );
-                std::fs::remove_file(&cache)
-                    .expect("failed to remove stale CMakeCache.txt");
+                std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
             } else {
                 // Check whether the cached GGML_NATIVE value matches what we
                 // are about to configure.  A mismatch means a previous build
@@ -1119,16 +1119,13 @@ fn main() {
                 // state) and the cmake crate's cache-skip path will silently
                 // use the wrong value.
                 let desired_native_str = if want_native { "ON" } else { "OFF" };
-                let cache_contents =
-                    std::fs::read_to_string(&cache).unwrap_or_default();
+                let cache_contents = std::fs::read_to_string(&cache).unwrap_or_default();
 
                 // 2a. GGML_NATIVE mismatch.
-                let cached_native_on =
-                    cache_contents.contains("GGML_NATIVE:BOOL=ON");
-                let cached_native_off =
-                    cache_contents.contains("GGML_NATIVE:BOOL=OFF");
-                let native_mismatch = (want_native && cached_native_off)
-                    || (!want_native && cached_native_on);
+                let cached_native_on = cache_contents.contains("GGML_NATIVE:BOOL=ON");
+                let cached_native_off = cache_contents.contains("GGML_NATIVE:BOOL=OFF");
+                let native_mismatch =
+                    (want_native && cached_native_off) || (!want_native && cached_native_on);
 
                 // 2b. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
                 //     to set (ARM non-native non-android builds).  Without an
@@ -1149,17 +1146,17 @@ fn main() {
                 let cached_arm_arch = cache_contents
                     .lines()
                     .find(|l| l.starts_with("GGML_CPU_ARM_ARCH:"))
-                    .and_then(|l| l.splitn(2, '=').nth(1))
+                    .and_then(|l| l.split_once('=').map(|x| x.1))
                     .unwrap_or("");
-                let arm_arch_mismatch =
-                    we_set_arm_arch && cached_arm_arch != "armv8-a";
+                let arm_arch_mismatch = we_set_arm_arch && cached_arm_arch != "armv8-a";
 
                 // 2c. x86 ISA options: when !want_native on x86, we now
                 //     force AVX/AVX2/FMA/F16C/BMI2 to OFF.  A stale cache
                 //     from a previous build (or from before this fix) may
                 //     still have them ON, causing SIGILL on older CPUs.
-                let is_x86_target_local =
-                    target.starts_with("x86_64") || target.starts_with("i686") || target.starts_with("i586");
+                let is_x86_target_local = target.starts_with("x86_64")
+                    || target.starts_with("i686")
+                    || target.starts_with("i586");
                 let x86_isa_mismatch = is_x86_target_local && !want_native && {
                     // Check if any of the ISA options we now force OFF are
                     // still cached as ON.
@@ -1178,12 +1175,9 @@ fn main() {
                 //     `--features metal` build (or from the cmake default)
                 //     would keep Metal enabled even when the feature is off.
                 let metal_mismatch = {
-                    let cached_metal_on =
-                        cache_contents.contains("GGML_METAL:BOOL=ON");
-                    let cached_metal_off =
-                        cache_contents.contains("GGML_METAL:BOOL=OFF");
-                    (enable_metal && cached_metal_off)
-                        || (!enable_metal && cached_metal_on)
+                    let cached_metal_on = cache_contents.contains("GGML_METAL:BOOL=ON");
+                    let cached_metal_off = cache_contents.contains("GGML_METAL:BOOL=OFF");
+                    (enable_metal && cached_metal_off) || (!enable_metal && cached_metal_on)
                 };
 
                 // 2e. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
@@ -1202,7 +1196,7 @@ fn main() {
                         cache_contents
                             .lines()
                             .find(|l| l.starts_with("CMAKE_OSX_ARCHITECTURES:"))
-                            .and_then(|l| l.splitn(2, '=').nth(1))
+                            .and_then(|l| l.split_once('=').map(|x| x.1))
                             .map(|cached| cached != want_arch)
                             .unwrap_or(false)
                     } else {
@@ -1210,7 +1204,11 @@ fn main() {
                     }
                 };
 
-                let mismatch = native_mismatch || arm_arch_mismatch || x86_isa_mismatch || metal_mismatch || osx_arch_mismatch;
+                let mismatch = native_mismatch
+                    || arm_arch_mismatch
+                    || x86_isa_mismatch
+                    || metal_mismatch
+                    || osx_arch_mismatch;
                 if mismatch {
                     debug_log!(
                         "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
@@ -1225,10 +1223,13 @@ fn main() {
                         },
                         desired_native_str,
                         cached_arm_arch,
-                        if we_set_arm_arch { "armv8-a" } else { "(not set)" },
+                        if we_set_arm_arch {
+                            "armv8-a"
+                        } else {
+                            "(not set)"
+                        },
                     );
-                    std::fs::remove_file(&cache)
-                        .expect("failed to remove stale CMakeCache.txt");
+                    std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
                 }
             }
         }
@@ -1237,7 +1238,10 @@ fn main() {
     let build_dir = config.build();
 
     // ── Link search paths ────────────────────────────────────────────────────
-    println!("cargo:rustc-link-search={}", cmake_out_dir.join("lib").display());
+    println!(
+        "cargo:rustc-link-search={}",
+        cmake_out_dir.join("lib").display()
+    );
     println!(
         "cargo:rustc-link-search={}",
         cmake_out_dir.join("lib64").display()
@@ -1254,10 +1258,7 @@ fn main() {
             "LINK {}",
             format!("cargo:rustc-link-lib={}={}", llama_libs_kind, lib)
         );
-        println!(
-            "{}",
-            format!("cargo:rustc-link-lib={}={}", llama_libs_kind, lib)
-        );
+        println!("cargo:rustc-link-lib={llama_libs_kind}={lib}");
     }
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
@@ -1269,10 +1270,10 @@ fn main() {
         .map(|contents| contents.contains("GGML_OPENMP_ENABLED:INTERNAL=ON"))
         .unwrap_or(false);
 
-    if cfg!(feature = "openmp") || openmp_enabled_in_cmake {
-        if target.contains("gnu") || target.contains("musl") {
-            println!("cargo:rustc-link-lib=gomp");
-        }
+    if (cfg!(feature = "openmp") || openmp_enabled_in_cmake)
+        && (target.contains("gnu") || target.contains("musl"))
+    {
+        println!("cargo:rustc-link-lib=gomp");
     }
 
     // Removed: Rust already links the appropriate CRT. Explicitly linking

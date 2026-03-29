@@ -1,7 +1,7 @@
 //! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
 //!
-//! inspired by https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp
-//! TODO: add chat template https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+//! inspired by <https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp>
+//! TODO: add chat template <https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template>
 //!
 //! ```console
 //! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
@@ -84,7 +84,7 @@ struct Args {
 fn parse_key_val(s: &str) -> Result<(String, ParamOverrideValue)> {
     let pos = s
         .find('=')
-        .ok_or_else(|| anyhow!("invalid KEY=value: no `=` found in `{}`", s))?;
+        .ok_or_else(|| anyhow!("invalid KEY=value: no `=` found in `{s}`"))?;
     let key = s[..pos].parse()?;
     let value: String = s[pos + 1..].parse()?;
     let value = i64::from_str(&value)
