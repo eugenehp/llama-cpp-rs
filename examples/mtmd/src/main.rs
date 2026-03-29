@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    clippy::items_after_statements
+)]
 //! Multimodal (vision / audio) example using the `mtmd` feature.
 //!
 //! Usage:
@@ -50,7 +56,11 @@ struct Args {
 
     /// Text prompt. Use `<__media__>` (or the string printed by --show-marker)
     /// as a placeholder for each media item, in order.
-    #[arg(short, long, default_value = "Describe what you see or hear: <__media__>")]
+    #[arg(
+        short,
+        long,
+        default_value = "Describe what you see or hear: <__media__>"
+    )]
     prompt: String,
 
     /// Print the default media marker and exit.
@@ -205,7 +215,9 @@ fn main() -> Result<()> {
         }
 
         // Detokenize and print.
-        let piece = model.token_to_str(next_token, Special::Tokenize).unwrap_or_default();
+        let piece = model
+            .token_to_str(next_token, Special::Tokenize)
+            .unwrap_or_default();
         print!("{piece}");
         use std::io::Write;
         std::io::stdout().flush().ok();

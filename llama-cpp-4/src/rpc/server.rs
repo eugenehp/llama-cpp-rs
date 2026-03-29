@@ -13,17 +13,17 @@ pub struct RpcServer {
 
 impl RpcServer {
     /// Start an RPC server for the given backend
-    /// 
+    ///
     /// # Arguments
     /// * `backend` - The backend to expose via RPC
     /// * `endpoint` - The endpoint to listen on (e.g., "0.0.0.0:50052")
     /// * `free_mem` - Amount of free memory to advertise (0 for auto)
     /// * `total_mem` - Total memory to advertise (0 for auto)
-    /// 
+    ///
     /// # Example
     /// ```no_run
     /// use llama_cpp_4::rpc::RpcServer;
-    /// 
+    ///
     /// // Assuming you have a backend initialized
     /// let server = RpcServer::start(
     ///     backend,
@@ -38,9 +38,8 @@ impl RpcServer {
         free_mem: usize,
         total_mem: usize,
     ) -> Result<Self, RpcError> {
-        let c_endpoint = CString::new(endpoint)
-            .map_err(|e| RpcError::StringConversion(e))?;
-        
+        let c_endpoint = CString::new(endpoint).map_err(|e| RpcError::StringConversion(e))?;
+
         unsafe {
             sys::ggml_backend_rpc_start_server(
                 backend.as_ptr(),
@@ -49,18 +48,18 @@ impl RpcServer {
                 total_mem,
             );
         }
-        
+
         Ok(Self {
             backend,
             endpoint: endpoint.to_string(),
         })
     }
-    
+
     /// Get the endpoint this server is listening on
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
-    
+
     /// Get the backend this server is hosting
     pub fn backend(&self) -> NonNull<sys::ggml_backend> {
         self.backend
@@ -81,24 +80,20 @@ unsafe impl Send for RpcServer {}
 unsafe impl Sync for RpcServer {}
 
 /// Add a new RPC device
-/// 
+///
 /// This function registers a new RPC device that can be used for inference.
-/// 
+///
 /// # Arguments
 /// * `endpoint` - The RPC server endpoint to connect to
-/// 
+///
 /// # Returns
 /// The device handle if successful
 pub fn add_rpc_device(endpoint: &str) -> Result<NonNull<sys::ggml_backend_device>, RpcError> {
-    let c_endpoint = CString::new(endpoint)
-        .map_err(|e| RpcError::StringConversion(e))?;
-    
-    let device = unsafe {
-        sys::ggml_backend_rpc_add_device(c_endpoint.as_ptr())
-    };
-    
-    NonNull::new(device)
-        .ok_or_else(|| RpcError::InitializationFailed {
-            endpoint: endpoint.to_string(),
-        })
+    let c_endpoint = CString::new(endpoint).map_err(|e| RpcError::StringConversion(e))?;
+
+    let device = unsafe { sys::ggml_backend_rpc_add_device(c_endpoint.as_ptr()) };
+
+    NonNull::new(device).ok_or_else(|| RpcError::InitializationFailed {
+        endpoint: endpoint.to_string(),
+    })
 }

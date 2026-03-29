@@ -1,18 +1,24 @@
 //! Bindings to the llama.cpp library.
 //!
 //! As llama.cpp is a very fast moving target, this crate does not attempt to create a stable API
-//! with all the rust idioms. Instead it provided safe wrappers around nearly direct bindings to
+//! with all the rust idioms. Instead it provides safe wrappers around nearly direct bindings to
 //! llama.cpp. This makes it easier to keep up with the changes in llama.cpp, but does mean that
 //! the API is not as nice as it could be.
 //!
 //! # Examples
 //!
-//! - [simple](https://github.com/eugenehp/llama-cpp-rs/tree/main/simple)
+//! - [simple](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/simple)
+//! - [chat](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/chat)
+//! - [embeddings](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/embeddings)
+//! - [server](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/server)
 //!
 //! # Feature Flags
 //!
-//! - `cuda` enables CUDA gpu support.
-//! - `sampler` adds the [`context::sample::sampler`] struct for a more rusty way of sampling.
+//! - `cuda` enables CUDA GPU support.
+//! - `metal` enables Apple Metal GPU support.
+//! - `vulkan` enables Vulkan GPU support (AMD / Intel / cross-platform).
+//! - `native` enables host-CPU optimisations (`-march=native`).
+//! - `openmp` enables OpenMP multi-core CPU parallelism (on by default).
 //! - `rpc` enables RPC backend support for distributed inference across multiple machines.
 //! - `mtmd` enables multimodal (image + audio) support via `libmtmd`.
 use std::ffi::NulError;

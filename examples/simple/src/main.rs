@@ -73,7 +73,7 @@ struct Args {
 fn parse_key_val(s: &str) -> Result<(String, ParamOverrideValue)> {
     let pos = s
         .find('=')
-        .ok_or_else(|| anyhow!("invalid KEY=value: no `=` found in `{}`", s))?;
+        .ok_or_else(|| anyhow!("invalid KEY=value: no `=` found in `{s}`"))?;
     let key = s[..pos].parse()?;
     let value: String = s[pos + 1..].parse()?;
     let value = i64::from_str(&value)
@@ -245,9 +245,7 @@ either reduce n_len or increase n_ctx"
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::greedy(),
-    ]);
+    let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
 
     while n_cur <= n_len {
         // sample the next token

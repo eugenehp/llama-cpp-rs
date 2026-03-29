@@ -1,7 +1,7 @@
 //! an rusty equivalent of `llama_token_data_array`.
 use std::ptr;
 
-use llama_cpp_sys_4::*;
+use llama_cpp_sys_4::{llama_sampler_apply, llama_token_data, llama_token_data_array};
 
 use crate::{sampling::LlamaSampler, token::data::LlamaTokenData};
 

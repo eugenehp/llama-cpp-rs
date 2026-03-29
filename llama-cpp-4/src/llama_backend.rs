@@ -41,6 +41,9 @@ impl LlamaBackend {
     ///# Ok(())
     ///# }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`LLamaCppError::BackendAlreadyInitialized`] if the backend has already been initialized.
     #[tracing::instrument(skip_all)]
     pub fn init() -> crate::Result<LlamaBackend> {
         Self::mark_init()?;
@@ -61,6 +64,9 @@ impl LlamaBackend {
     ///# Ok(())
     ///# }
     /// ```
+    /// # Errors
+    ///
+    /// Returns [`LLamaCppError::BackendAlreadyInitialized`] if the backend has already been initialized.
     #[tracing::instrument(skip_all)]
     pub fn init_numa(strategy: NumaStrategy) -> crate::Result<LlamaBackend> {
         Self::mark_init()?;
@@ -92,7 +98,7 @@ impl LlamaBackend {
 /// in multi-core or multi-processor systems.
 ///
 /// ## See more
-/// https://github.com/ggerganov/llama.cpp/blob/master/ggml/include/ggml-cpu.h#L25-L32
+/// <https://github.com/ggerganov/llama.cpp/blob/master/ggml/include/ggml-cpu.h#L25-L32>
 #[derive(Debug, Eq, PartialEq, Copy, Clone)]
 pub enum NumaStrategy {
     /// The NUMA strategy is disabled. No NUMA-aware optimizations are applied.

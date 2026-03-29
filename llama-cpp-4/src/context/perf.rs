@@ -57,7 +57,7 @@ impl PerfContextData {
     /// prompt eval time
     /// eval time
     /// total time
-    pub fn print(ctx: LlamaContext<'_>) {
+    pub fn print(ctx: &LlamaContext<'_>) {
         unsafe {
             llama_perf_context_print(ctx.context.as_ptr());
         };
@@ -73,8 +73,11 @@ impl PerfContextData {
     #[must_use]
     pub fn t_end_ms(&self) -> f64 {
         // self.perf_context_data.t_end_ms
-        let t_end_ms = 1e-3 * unsafe { ggml_time_us() } as f64;
-        t_end_ms
+
+        #[allow(clippy::cast_precision_loss)]
+        {
+            1e-3 * (unsafe { ggml_time_us() }) as f64
+        }
     }
 
     /// Get the load time in milliseconds.

@@ -58,7 +58,7 @@ enum Model {
 }
 
 impl Model {
-    /// Convert the model into a path - may download from HuggingFace if necessary
+    /// Convert the model into a path - may download from `HuggingFace` if necessary
     fn get_or_load(self) -> Result<PathBuf> {
         match self {
             Model::Local { path } => Ok(path), // Use the local path if specified
@@ -75,6 +75,7 @@ impl Model {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() -> Result<()> {
     // Parse command line arguments
     let Args {
@@ -102,8 +103,7 @@ fn main() -> Result<()> {
     };
 
     // Batch size for context processing
-    let n_batch = 2048;
-    let n_ubatch = n_batch; // Unbatching size (likely related to multi-threading)
+    let batch_size = 2048;
 
     // Load the model (either locally or from Hugging Face)
     let model_path = model
@@ -116,8 +116,8 @@ fn main() -> Result<()> {
 
     // Initialize the context with batch parameters
     let ctx_params = LlamaContextParams::default()
-        .with_n_batch(n_batch)
-        .with_n_ubatch(n_ubatch)
+        .with_n_batch(batch_size)
+        .with_n_ubatch(batch_size)
         .with_n_threads_batch(std::thread::available_parallelism()?.get().try_into()?)
         .with_embeddings(true);
 
@@ -166,7 +166,7 @@ fn main() -> Result<()> {
     std::io::stderr().flush()?; // Flush stderr buffer
 
     // Create a batch object for token sequences
-    let mut batch = LlamaBatch::new(n_batch as usize, 1);
+    let mut batch = LlamaBatch::new(batch_size as usize, 1);
 
     let mut max_seq_id_batch = 0;
     let mut output = Vec::with_capacity(tokens_lines_list.len());
@@ -176,7 +176,7 @@ fn main() -> Result<()> {
     // Process the tokenized prompts in batches
     for tokens in &tokens_lines_list {
         // If the current batch exceeds the context size, decode the batch and reset
-        if (batch.n_tokens() as usize + tokens.len()) > n_batch as usize {
+        if (batch.n_tokens() as usize + tokens.len()) > batch_size as usize {
             let _ = batch_decode(
                 &mut ctx,
                 &mut batch,
@@ -220,7 +220,7 @@ fn main() -> Result<()> {
             })
             .for_each(drop);
 
-        println!("");
+        println!();
 
         // Compare the cosine similarity of each pair of embeddings
         for i in 0..output.len() {
@@ -231,7 +231,7 @@ fn main() -> Result<()> {
                 print!("{sim}\t");
             }
             let prompt = prompt_lines.get(i).unwrap();
-            print!("{prompt:?}\n");
+            println!("{prompt:?}");
         }
     }
 
@@ -304,16 +304,16 @@ fn normalize(input: &[f32]) -> Vec<f32> {
 }
 
 // Function to compute the cosine similarity between two embeddings
-fn common_embd_similarity_cos(embd1: &Vec<f32>, embd2: &Vec<f32>) -> f32 {
+fn common_embd_similarity_cos(embd1: &[f32], embd2: &[f32]) -> f32 {
     let mut sum = 0.0;
     let mut sum1 = 0.0;
     let mut sum2 = 0.0;
 
     // Iterate through the vectors and compute dot products and squared magnitudes
     for i in 0..embd1.len() {
-        sum += embd1[i] as f64 * embd2[i] as f64; // Dot product
-        sum1 += embd1[i] as f64 * embd1[i] as f64; // Squared magnitude of embd1
-        sum2 += embd2[i] as f64 * embd2[i] as f64; // Squared magnitude of embd2
+        sum += f64::from(embd1[i]) * f64::from(embd2[i]); // Dot product
+        sum1 += f64::from(embd1[i]) * f64::from(embd1[i]); // Squared magnitude of embd1
+        sum2 += f64::from(embd2[i]) * f64::from(embd2[i]); // Squared magnitude of embd2
     }
 
     // Handle the case where one or both vectors are zero vectors
@@ -325,5 +325,5 @@ fn common_embd_similarity_cos(embd1: &Vec<f32>, embd2: &Vec<f32>) -> f32 {
     }
 
     // Calculate the cosine similarity
-    return (sum / (f64::sqrt(sum1) * f64::sqrt(sum2))) as f32; // Return the similarity as a float
+    (sum / (f64::sqrt(sum1) * f64::sqrt(sum2))) as f32 // Return the similarity as a float
 }

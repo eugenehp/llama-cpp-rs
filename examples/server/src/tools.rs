@@ -41,7 +41,7 @@ pub struct ToolDef {
 }
 
 impl ToolDef {
-    /// Parse from the OpenAI wire format:
+    /// Parse from the `OpenAI` wire format:
     /// `{"type":"function","function":{"name":…,"description":…,"parameters":…}}`
     /// or the shorthand `{"name":…,"description":…,"parameters":…}`.
     pub fn from_value(v: &Value) -> Option<Self> {
@@ -61,7 +61,7 @@ impl ToolDef {
         })
     }
 
-    /// Serialise to the OpenAI `tools` array element format.
+    /// Serialise to the `OpenAI` `tools` array element format.
     pub fn to_value(&self) -> Value {
         json!({
             "type": "function",
@@ -96,7 +96,7 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    /// Serialise to the OpenAI wire format.
+    /// Serialise to the `OpenAI` wire format.
     pub fn to_value(&self) -> Value {
         json!({
             "id": self.id,
@@ -144,7 +144,9 @@ pub fn parse_tool_choice(req: &Value) -> Result<ToolChoice, HttpError> {
                 Err(bad_request("unsupported tool_choice type"))
             }
         }
-        _ => Err(bad_request("'tool_choice' must be \"none\"/\"auto\"/\"required\" or an object")),
+        _ => Err(bad_request(
+            "'tool_choice' must be \"none\"/\"auto\"/\"required\" or an object",
+        )),
     }
 }
 
@@ -192,11 +194,7 @@ pub fn tool_system_block(tools: &[ToolDef], choice: &ToolChoice) -> String {
 /// Inject tool definitions into the message list (as `(role, content)` pairs).
 /// If a system message already exists, the tool block is prepended to it.
 /// Otherwise a new system message is inserted at position 0.
-pub fn inject_tools(
-    messages: &mut Vec<(String, String)>,
-    tools: &[ToolDef],
-    choice: &ToolChoice,
-) {
+pub fn inject_tools(messages: &mut Vec<(String, String)>, tools: &[ToolDef], choice: &ToolChoice) {
     if tools.is_empty() || matches!(choice, ToolChoice::None) {
         return;
     }
@@ -249,9 +247,9 @@ pub fn normalise_messages(req: &Value) -> Result<Vec<(String, String)>, HttpErro
                         .pointer("/function/arguments")
                         .and_then(Value::as_str)
                         .unwrap_or("{}");
-                    let _ = write!(
+                    let _ = writeln!(
                         content,
-                        "<tool_call>{{\"name\":\"{name}\",\"arguments\":{args}}}</tool_call>\n"
+                        "<tool_call>{{\"name\":\"{name}\",\"arguments\":{args}}}</tool_call>"
                     );
                 }
                 // Optional assistant text before the tool call(s).
@@ -276,17 +274,14 @@ pub fn normalise_messages(req: &Value) -> Result<Vec<(String, String)>, HttpErro
                 Some(Value::Null) | None => String::new(),
                 _ => return Err(bad_request("tool message 'content' must be a string")),
             };
-            let tool_call_id = m
-                .get("tool_call_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let tool_call_id = m.get("tool_call_id").and_then(Value::as_str).unwrap_or("");
             // Pass as "tool" role — the Jinja template handles it.
             // Include the call id in the content so a template fallback can
             // identify which call is being answered.
             let wrapped = if tool_call_id.is_empty() {
                 content
             } else {
-                format!("{content}")
+                content.clone()
             };
             out.push((role, wrapped));
             continue;
@@ -304,8 +299,7 @@ pub fn normalise_messages(req: &Value) -> Result<Vec<(String, String)>, HttpErro
                         None
                     }
                 })
-                .collect::<Vec<_>>()
-                .join(""),
+                .collect::<String>(),
             Some(Value::Null) | None => String::new(),
             _ => {
                 return Err(bad_request(
@@ -338,20 +332,17 @@ pub fn extract_tool_calls(text: &str) -> (String, Vec<ToolCall>) {
 
     while let Some(start) = remaining.find(tag_open) {
         if !found_first {
-            pre_text = remaining[..start].trim().to_owned();
+            remaining[..start].trim().clone_into(&mut pre_text);
             found_first = true;
         }
         let after_open = &remaining[start + tag_open.len()..];
-        let end = match after_open.find(tag_close) {
-            Some(e) => e,
-            None => {
-                // Unclosed tag — try to parse what we have as JSON anyway.
-                let json_candidate = after_open.trim();
-                if let Some(tc) = parse_single_call(json_candidate) {
-                    calls.push(tc);
-                }
-                break;
+        let Some(end) = after_open.find(tag_close) else {
+            // Unclosed tag — try to parse what we have as JSON anyway.
+            let json_candidate = after_open.trim();
+            if let Some(tc) = parse_single_call(json_candidate) {
+                calls.push(tc);
             }
+            break;
         };
         let json_candidate = after_open[..end].trim();
         if let Some(tc) = parse_single_call(json_candidate) {
@@ -375,10 +366,11 @@ fn parse_single_call(json: &str) -> Option<ToolCall> {
     // Generate a stable-ish short id.
     let id = format!(
         "call_{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.subsec_nanos()) as u64
-            ^ (name.len() as u64 * 0x9e3779b9)
+        u64::from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.subsec_nanos())
+        ) ^ (name.len() as u64 * 0x9E37_79B9)
     );
     Some(ToolCall {
         id,
@@ -387,8 +379,6 @@ fn parse_single_call(json: &str) -> Option<ToolCall> {
         arguments,
     })
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Multimodal message normalisation
@@ -484,9 +474,7 @@ pub fn normalise_messages_multimodal(
                 for part in parts {
                     match part.get("type").and_then(Value::as_str) {
                         Some("text") => {
-                            text.push_str(
-                                part.get("text").and_then(Value::as_str).unwrap_or(""),
-                            );
+                            text.push_str(part.get("text").and_then(Value::as_str).unwrap_or(""));
                         }
                         Some("image_url") => {
                             let url = part
@@ -659,8 +647,8 @@ mod tests {
     #[test]
     fn tool_choice_strings() {
         for (s, expected) in [
-            ("auto",     ToolChoice::Auto),
-            ("none",     ToolChoice::None),
+            ("auto", ToolChoice::Auto),
+            ("none", ToolChoice::None),
             ("required", ToolChoice::Required),
         ] {
             let req = json!({"tool_choice": s});
@@ -698,9 +686,7 @@ mod tests {
             description: "does stuff".into(),
             parameters: json!({}),
         }];
-        let mut msgs: Vec<(String, String)> = vec![
-            ("user".into(), "hello".into()),
-        ];
+        let mut msgs: Vec<(String, String)> = vec![("user".into(), "hello".into())];
         inject_tools(&mut msgs, &tools, &ToolChoice::Auto);
         assert_eq!(msgs[0].0, "system");
         assert!(msgs[0].1.contains("<tools>"));

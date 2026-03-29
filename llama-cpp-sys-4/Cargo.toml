@@ -1,10 +1,12 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.2.13"
+version = "0.2.14"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
+keywords = ["llama", "llm", "ggml", "gguf", "inference"]
+categories = ["api-bindings", "external-ffi-bindings"]
 links = "llama"
 
 include = [

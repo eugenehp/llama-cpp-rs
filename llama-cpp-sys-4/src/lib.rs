@@ -6,7 +6,7 @@
 
 #[allow(unnecessary_transmutes)]
 mod bindings {
-	include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
 pub use bindings::*;
