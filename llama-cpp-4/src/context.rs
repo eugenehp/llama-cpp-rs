@@ -23,6 +23,7 @@ pub mod kv_cache;
 pub mod params;
 pub mod perf;
 pub mod session;
+pub mod tensor_capture;
 
 /// A safe wrapper around the `llama_context` C++ context.
 ///

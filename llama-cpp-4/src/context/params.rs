@@ -488,6 +488,35 @@ impl LlamaContextParams {
         self
     }
 
+    /// Attach a [`TensorCapture`](super::tensor_capture::TensorCapture) to
+    /// intercept intermediate tensor outputs during `decode()`.
+    ///
+    /// This sets up the `cb_eval` callback to capture tensors matching the
+    /// capture's filter (e.g. specific layer outputs). After `decode()` the
+    /// captured data can be read from the `TensorCapture`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::context::tensor_capture::TensorCapture;
+    ///
+    /// let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
+    /// let ctx_params = LlamaContextParams::default()
+    ///     .with_embeddings(true)
+    ///     .with_tensor_capture(&mut capture);
+    /// ```
+    #[must_use]
+    pub fn with_tensor_capture(
+        self,
+        capture: &mut super::tensor_capture::TensorCapture,
+    ) -> Self {
+        self.with_cb_eval(Some(super::tensor_capture::tensor_capture_callback))
+            .with_cb_eval_user_data(
+                capture as *mut super::tensor_capture::TensorCapture as *mut std::ffi::c_void,
+            )
+    }
+
     /// Set the type of pooling.
     ///
     /// # Examples

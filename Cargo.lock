@@ -1694,7 +1694,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.2.18"
+version = "0.2.19"
 dependencies = [
  "encoding_rs",
  "enumflags2",
