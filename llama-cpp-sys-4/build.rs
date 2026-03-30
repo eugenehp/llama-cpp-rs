@@ -1060,7 +1060,7 @@ fn main() {
         config.define("GGML_METAL", "OFF");
     }
 
-    if cfg!(feature = "cuda") {
+    if cfg!(feature = "cuda") && !cfg!(target_os = "macos") {
         config.define("GGML_CUDA", "ON");
     }
 
