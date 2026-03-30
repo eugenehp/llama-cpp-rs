@@ -68,7 +68,7 @@ impl LlamaVocab {
     /// Get the vocabulary type.
     #[must_use]
     pub fn vocab_type(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()) }
+        unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()).try_into().unwrap() }
     }
 
     /// Get the BOS token.
@@ -190,7 +190,7 @@ impl LlamaVocab {
     /// Get the attributes of a token.
     #[must_use]
     pub fn get_attr(&self, token: LlamaToken) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0) }
+        unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0).try_into().unwrap() }
     }
 
     /// Check if a token is a control token.
