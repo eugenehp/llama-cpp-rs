@@ -9,6 +9,16 @@ members = [
     "examples/split_model",
     "examples/server",
     "examples/mtmd",
+    "examples/structured",
+    "examples/tokenize",
+    "examples/batched-bench",
+    "examples/perplexity",
+    "examples/quantize",
+    "examples/fit-params",
+    "examples/export-lora",
+    "examples/imatrix",
+    "examples/cvector-generator",
+    "examples/tts",
 ]
 
 [workspace.dependencies]

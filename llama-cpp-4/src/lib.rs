@@ -32,6 +32,8 @@ use std::string::FromUtf8Error;
 
 pub mod common;
 pub mod context;
+#[cfg(feature = "ggml")]
+pub mod ggml;
 pub mod llama_backend;
 pub mod llama_batch;
 pub mod model;
@@ -88,6 +90,17 @@ pub enum ChatTemplateError {
     #[error("the model has no meta val - returned code {0}")]
     MissingTemplate(i32),
     /// The chat template was not valid utf8.
+    #[error(transparent)]
+    Utf8Error(#[from] std::str::Utf8Error),
+}
+
+/// Error retrieving a string from the model (e.g. description, metadata key/value).
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum StringFromModelError {
+    /// The C function returned a negative error code.
+    #[error("llama.cpp returned error code {0}")]
+    ReturnedError(i32),
+    /// The returned bytes were not valid UTF-8.
     #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
 }
@@ -324,7 +337,7 @@ pub fn ggml_time_us() -> i64 {
     unsafe { llama_cpp_sys_4::ggml_time_us() }
 }
 
-/// checks if mlock is supported
+/// Checks if mlock is supported.
 ///
 /// ```
 /// # use llama_cpp_4::llama_supports_mlock;
@@ -338,4 +351,208 @@ pub fn ggml_time_us() -> i64 {
 #[must_use]
 pub fn llama_supports_mlock() -> bool {
     unsafe { llama_cpp_sys_4::llama_supports_mlock() }
+}
+
+/// Checks if GPU offload is supported.
+///
+/// Returns `true` if the library was compiled with GPU support (CUDA, Metal, Vulkan, etc.).
+#[must_use]
+pub fn supports_gpu_offload() -> bool {
+    unsafe { llama_cpp_sys_4::llama_supports_gpu_offload() }
+}
+
+/// Checks if RPC backend is supported.
+///
+/// Returns `true` if the library was compiled with RPC support.
+#[must_use]
+pub fn supports_rpc() -> bool {
+    unsafe { llama_cpp_sys_4::llama_supports_rpc() }
+}
+
+/// Get system information string.
+///
+/// Returns a string containing CPU features, build info, and other system details.
+///
+/// # Panics
+///
+/// Panics if the returned string is not valid UTF-8.
+#[must_use]
+pub fn print_system_info() -> String {
+    let c_str = unsafe { llama_cpp_sys_4::llama_print_system_info() };
+    let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
+    c_str.to_str().expect("system info is not valid UTF-8").to_owned()
+}
+
+/// Get the maximum number of parallel sequences supported.
+#[must_use]
+pub fn max_parallel_sequences() -> usize {
+    unsafe { llama_cpp_sys_4::llama_max_parallel_sequences() }
+}
+
+/// Get the maximum number of tensor buffer type overrides.
+#[must_use]
+pub fn max_tensor_buft_overrides() -> usize {
+    unsafe { llama_cpp_sys_4::llama_max_tensor_buft_overrides() }
+}
+
+/// Get the name of a flash attention type.
+///
+/// # Panics
+///
+/// Panics if the returned string is not valid UTF-8.
+#[must_use]
+pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
+    let c_str = unsafe { llama_cpp_sys_4::llama_flash_attn_type_name(flash_attn_type) };
+    let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
+    c_str.to_str().expect("flash_attn_type_name is not valid UTF-8").to_owned()
+}
+
+/// Get the string representation of a model metadata key.
+///
+/// # Panics
+///
+/// Panics if the returned string is not valid UTF-8.
+#[must_use]
+pub fn model_meta_key_str(key: u32) -> String {
+    let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key) };
+    let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
+    c_str.to_str().expect("meta_key_str is not valid UTF-8").to_owned()
+}
+
+/// Quantize a model file.
+///
+/// # Parameters
+///
+/// - `fname_inp`: Path to the input model file.
+/// - `fname_out`: Path to the output quantized model file.
+/// - `params`: Quantization parameters. Use `None` for defaults.
+///
+/// # Returns
+///
+/// Returns 0 on success, non-zero on failure.
+///
+/// # Panics
+///
+/// Panics if the paths contain null bytes.
+#[must_use]
+pub fn model_quantize(
+    fname_inp: &str,
+    fname_out: &str,
+    params: Option<&llama_cpp_sys_4::llama_model_quantize_params>,
+) -> u32 {
+    let c_inp = std::ffi::CString::new(fname_inp).expect("input path contains null bytes");
+    let c_out = std::ffi::CString::new(fname_out).expect("output path contains null bytes");
+    let default_params = unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() };
+    let params = params.unwrap_or(&default_params);
+    unsafe { llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), params) }
+}
+
+/// Get default quantization parameters.
+#[must_use]
+pub fn model_quantize_default_params() -> llama_cpp_sys_4::llama_model_quantize_params {
+    unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() }
+}
+
+/// Set the log callback.
+///
+/// # Safety
+///
+/// The callback and user data must remain valid for the lifetime of the application
+/// or until the callback is replaced.
+pub unsafe fn log_set(
+    callback: llama_cpp_sys_4::ggml_log_callback,
+    user_data: *mut std::ffi::c_void,
+) {
+    llama_cpp_sys_4::llama_log_set(callback, user_data);
+}
+
+/// Get the current log callback and user data.
+///
+/// # Safety
+///
+/// The caller must ensure the pointers are valid.
+pub unsafe fn log_get(
+    log_callback: *mut llama_cpp_sys_4::ggml_log_callback,
+    user_data: *mut *mut std::ffi::c_void,
+) {
+    llama_cpp_sys_4::llama_log_get(log_callback, user_data);
+}
+
+/// Initialize optimizer state for fine-tuning.
+///
+/// # Safety
+///
+/// The context and model must be valid and compatible.
+pub unsafe fn opt_init(
+    ctx: *mut llama_cpp_sys_4::llama_context,
+    model: *mut llama_cpp_sys_4::llama_model,
+    params: llama_cpp_sys_4::llama_opt_params,
+) {
+    llama_cpp_sys_4::llama_opt_init(ctx, model, params);
+}
+
+/// Run one training epoch.
+///
+/// # Safety
+///
+/// All pointers and handles must be valid.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn opt_epoch(
+    ctx: *mut llama_cpp_sys_4::llama_context,
+    dataset: llama_cpp_sys_4::ggml_opt_dataset_t,
+    result_train: llama_cpp_sys_4::ggml_opt_result_t,
+    result_eval: llama_cpp_sys_4::ggml_opt_result_t,
+    idata_split: i64,
+    callback_train: llama_cpp_sys_4::ggml_opt_epoch_callback,
+    callback_eval: llama_cpp_sys_4::ggml_opt_epoch_callback,
+) {
+    llama_cpp_sys_4::llama_opt_epoch(
+        ctx,
+        dataset,
+        result_train,
+        result_eval,
+        idata_split,
+        callback_train,
+        callback_eval,
+    );
+}
+
+/// Parameter filter that accepts all tensors (for use with [`opt_init`]).
+///
+/// # Safety
+///
+/// The tensor pointer must be valid.
+pub unsafe fn opt_param_filter_all(
+    tensor: *const llama_cpp_sys_4::ggml_tensor,
+    userdata: *mut std::ffi::c_void,
+) -> bool {
+    llama_cpp_sys_4::llama_opt_param_filter_all(tensor, userdata)
+}
+
+/// Auto-fit model and context parameters for available memory.
+///
+/// # Safety
+///
+/// All pointers must be valid.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn params_fit(
+    path_model: *const std::ffi::c_char,
+    mparams: *mut llama_cpp_sys_4::llama_model_params,
+    cparams: *mut llama_cpp_sys_4::llama_context_params,
+    tensor_split: *mut f32,
+    tensor_buft_overrides: *mut llama_cpp_sys_4::llama_model_tensor_buft_override,
+    margins: *mut usize,
+    n_ctx_min: u32,
+    log_level: llama_cpp_sys_4::ggml_log_level,
+) -> llama_cpp_sys_4::llama_params_fit_status {
+    llama_cpp_sys_4::llama_params_fit(
+        path_model,
+        mparams,
+        cparams,
+        tensor_split,
+        tensor_buft_overrides,
+        margins,
+        n_ctx_min,
+        log_level,
+    )
 }

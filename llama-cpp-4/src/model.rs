@@ -1,19 +1,31 @@
 //! A safe wrapper around `llama_model`.
 use std::ffi::CStr;
 use std::ffi::CString;
+use std::fmt;
 use std::num::NonZeroU16;
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::ptr::NonNull;
 
 use llama_cpp_sys_4::{
-    llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template, llama_chat_message,
-    llama_free_model, llama_load_model_from_file, llama_model, llama_model_decoder_start_token,
-    llama_model_get_vocab, llama_model_load_from_splits, llama_model_meta_val_str,
-    llama_n_ctx_train, llama_n_embd, llama_n_vocab, llama_new_context_with_model, llama_split_path,
-    llama_split_prefix, llama_token_bos, llama_token_eos, llama_token_get_attr, llama_token_is_eog,
-    llama_token_nl, llama_token_to_piece, llama_tokenize, llama_vocab, llama_vocab_type,
-    LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
+    llama_adapter_lora, llama_adapter_lora_init, llama_add_bos_token, llama_add_eos_token,
+    llama_chat_apply_template, llama_chat_builtin_templates, llama_chat_message,
+    llama_detokenize, llama_free_model, llama_load_model_from_file, llama_model,
+    llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
+    llama_model_get_vocab, llama_model_has_decoder, llama_model_has_encoder,
+    llama_model_is_diffusion, llama_model_is_hybrid, llama_model_is_recurrent,
+    llama_model_load_from_splits, llama_model_meta_count, llama_model_meta_key_by_index,
+    llama_model_meta_val_str, llama_model_meta_val_str_by_index, llama_model_n_cls_out,
+    llama_model_n_embd_inp, llama_model_n_embd_out, llama_model_n_head_kv, llama_model_n_params,
+    llama_model_n_swa, llama_model_rope_freq_scale_train, llama_model_rope_type,
+    llama_model_save_to_file, llama_model_size, llama_n_ctx_train, llama_n_embd, llama_n_head,
+    llama_n_layer, llama_n_vocab, llama_new_context_with_model, llama_split_path,
+    llama_split_prefix, llama_token_bos, llama_token_cls, llama_token_eos, llama_token_eot,
+    llama_token_fim_mid, llama_token_fim_pad, llama_token_fim_pre, llama_token_fim_rep,
+    llama_token_fim_sep, llama_token_fim_suf, llama_token_get_attr, llama_token_get_score,
+    llama_token_get_text, llama_token_is_control, llama_token_is_eog, llama_token_nl,
+    llama_token_pad, llama_token_sep, llama_token_to_piece, llama_tokenize, llama_vocab,
+    llama_vocab_type, LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
 };
 
 use crate::context::params::LlamaContextParams;
@@ -24,7 +36,8 @@ use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
     ApplyChatTemplateError, ChatTemplateError, LlamaContextLoadError, LlamaLoraAdapterInitError,
-    LlamaModelLoadError, NewLlamaChatMessageError, StringToTokenError, TokenToStringError,
+    LlamaModelLoadError, NewLlamaChatMessageError, StringFromModelError, StringToTokenError,
+    TokenToStringError,
 };
 
 pub mod params;
@@ -45,12 +58,317 @@ pub struct LlamaVocab {
     pub(crate) vocab: NonNull<llama_vocab>,
 }
 
+impl LlamaVocab {
+    /// Get the number of tokens in the vocabulary.
+    #[must_use]
+    pub fn n_tokens(&self) -> i32 {
+        unsafe { llama_cpp_sys_4::llama_vocab_n_tokens(self.vocab.as_ref()) }
+    }
+
+    /// Get the vocabulary type.
+    #[must_use]
+    pub fn vocab_type(&self) -> u32 {
+        unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()) }
+    }
+
+    /// Get the BOS token.
+    #[must_use]
+    pub fn bos(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_bos(self.vocab.as_ref()) })
+    }
+
+    /// Get the EOS token.
+    #[must_use]
+    pub fn eos(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_eos(self.vocab.as_ref()) })
+    }
+
+    /// Get the EOT (end of turn) token.
+    #[must_use]
+    pub fn eot(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_eot(self.vocab.as_ref()) })
+    }
+
+    /// Get the CLS (classification) token.
+    #[must_use]
+    pub fn cls(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_cls(self.vocab.as_ref()) })
+    }
+
+    /// Get the SEP (separator) token.
+    #[must_use]
+    pub fn sep(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_sep(self.vocab.as_ref()) })
+    }
+
+    /// Get the NL (newline) token.
+    #[must_use]
+    pub fn nl(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_nl(self.vocab.as_ref()) })
+    }
+
+    /// Get the PAD (padding) token.
+    #[must_use]
+    pub fn pad(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_pad(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM prefix token.
+    #[must_use]
+    pub fn fim_pre(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_pre(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM suffix token.
+    #[must_use]
+    pub fn fim_suf(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_suf(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM middle token.
+    #[must_use]
+    pub fn fim_mid(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_mid(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM padding token.
+    #[must_use]
+    pub fn fim_pad(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_pad(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM repository token.
+    #[must_use]
+    pub fn fim_rep(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_rep(self.vocab.as_ref()) })
+    }
+
+    /// Get the FIM separator token.
+    #[must_use]
+    pub fn fim_sep(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_sep(self.vocab.as_ref()) })
+    }
+
+    /// Check whether BOS should be added.
+    #[must_use]
+    pub fn get_add_bos(&self) -> bool {
+        unsafe { llama_cpp_sys_4::llama_vocab_get_add_bos(self.vocab.as_ref()) }
+    }
+
+    /// Check whether EOS should be added.
+    #[must_use]
+    pub fn get_add_eos(&self) -> bool {
+        unsafe { llama_cpp_sys_4::llama_vocab_get_add_eos(self.vocab.as_ref()) }
+    }
+
+    /// Check whether SEP should be added.
+    #[must_use]
+    pub fn get_add_sep(&self) -> bool {
+        unsafe { llama_cpp_sys_4::llama_vocab_get_add_sep(self.vocab.as_ref()) }
+    }
+
+    /// Get the text representation of a token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the text pointer is null or not valid UTF-8.
+    pub fn get_text(&self, token: LlamaToken) -> Result<&str, StringFromModelError> {
+        let ptr = unsafe { llama_cpp_sys_4::llama_vocab_get_text(self.vocab.as_ref(), token.0) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Get the score of a token.
+    #[must_use]
+    pub fn get_score(&self, token: LlamaToken) -> f32 {
+        unsafe { llama_cpp_sys_4::llama_vocab_get_score(self.vocab.as_ref(), token.0) }
+    }
+
+    /// Get the attributes of a token.
+    #[must_use]
+    pub fn get_attr(&self, token: LlamaToken) -> u32 {
+        unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0) }
+    }
+
+    /// Check if a token is a control token.
+    #[must_use]
+    pub fn is_control(&self, token: LlamaToken) -> bool {
+        unsafe { llama_cpp_sys_4::llama_vocab_is_control(self.vocab.as_ref(), token.0) }
+    }
+
+    /// Check if a token is an end-of-generation token.
+    #[must_use]
+    pub fn is_eog(&self, token: LlamaToken) -> bool {
+        unsafe { llama_cpp_sys_4::llama_vocab_is_eog(self.vocab.as_ref(), token.0) }
+    }
+
+    /// Get the token mask value for the vocabulary.
+    #[must_use]
+    pub fn mask(&self) -> LlamaToken {
+        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_mask(self.vocab.as_ref()) })
+    }
+}
+
 /// A safe wrapper around `llama_adapter_lora`.
 #[derive(Debug)]
 #[repr(transparent)]
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaLoraAdapter {
     pub(crate) lora_adapter: NonNull<llama_adapter_lora>,
+}
+
+impl LlamaLoraAdapter {
+    /// Get the number of metadata key-value pairs in the adapter.
+    #[must_use]
+    pub fn meta_count(&self) -> i32 {
+        unsafe { llama_cpp_sys_4::llama_adapter_meta_count(self.lora_adapter.as_ptr()) }
+    }
+
+    /// Get a metadata key by index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of range or the key is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_key_by_index(
+        &self,
+        index: i32,
+        buf_size: usize,
+    ) -> Result<String, StringFromModelError> {
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_cpp_sys_4::llama_adapter_meta_key_by_index(
+                self.lora_adapter.as_ptr(),
+                index,
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get a metadata value by key name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is not found or the value is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_val_str(
+        &self,
+        key: &str,
+        buf_size: usize,
+    ) -> Result<String, StringFromModelError> {
+        let c_key =
+            CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_cpp_sys_4::llama_adapter_meta_val_str(
+                self.lora_adapter.as_ptr(),
+                c_key.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get a metadata value by index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of range or the value is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_val_str_by_index(
+        &self,
+        index: i32,
+        buf_size: usize,
+    ) -> Result<String, StringFromModelError> {
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_cpp_sys_4::llama_adapter_meta_val_str_by_index(
+                self.lora_adapter.as_ptr(),
+                index,
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get all metadata as a list of `(key, value)` pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any key or value cannot be read or is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn metadata(&self) -> Result<Vec<(String, String)>, StringFromModelError> {
+        let count = self.meta_count();
+        let mut result = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let key = self.meta_key_by_index(i, 256)?;
+            let val = self.meta_val_str_by_index(i, 4096)?;
+            result.push((key, val));
+        }
+        Ok(result)
+    }
+
+    /// Get the number of invocation tokens for this adapter.
+    #[must_use]
+    pub fn n_invocation_tokens(&self) -> u64 {
+        unsafe {
+            llama_cpp_sys_4::llama_adapter_get_alora_n_invocation_tokens(
+                self.lora_adapter.as_ptr(),
+            )
+        }
+    }
+
+    /// Get the invocation tokens for this adapter.
+    ///
+    /// Returns an empty slice if there are no invocation tokens.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn invocation_tokens(&self) -> &[LlamaToken] {
+        let n = self.n_invocation_tokens() as usize;
+        if n == 0 {
+            return &[];
+        }
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_adapter_get_alora_invocation_tokens(
+                self.lora_adapter.as_ptr(),
+            )
+        };
+        if ptr.is_null() {
+            return &[];
+        }
+        // LlamaToken is repr(transparent) over llama_token (i32), so this cast is safe
+        unsafe { std::slice::from_raw_parts(ptr.cast::<LlamaToken>(), n) }
+    }
+}
+
+impl Drop for LlamaLoraAdapter {
+    fn drop(&mut self) {
+        unsafe {
+            llama_cpp_sys_4::llama_adapter_lora_free(self.lora_adapter.as_ptr());
+        }
+    }
 }
 
 /// A Safe wrapper around `llama_chat_message`
@@ -202,6 +520,116 @@ impl LlamaModel {
     #[must_use]
     pub fn is_eog_token(&self, token: LlamaToken) -> bool {
         unsafe { llama_token_is_eog(self.get_vocab().vocab.as_ref(), token.0) }
+    }
+
+    /// Get the classification token.
+    #[must_use]
+    pub fn token_cls(&self) -> LlamaToken {
+        let token = unsafe { llama_token_cls(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the end-of-turn token.
+    #[must_use]
+    pub fn token_eot(&self) -> LlamaToken {
+        let token = unsafe { llama_token_eot(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the padding token.
+    #[must_use]
+    pub fn token_pad(&self) -> LlamaToken {
+        let token = unsafe { llama_token_pad(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the separator token.
+    #[must_use]
+    pub fn token_sep(&self) -> LlamaToken {
+        let token = unsafe { llama_token_sep(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle prefix token.
+    #[must_use]
+    pub fn token_fim_pre(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_pre(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle suffix token.
+    #[must_use]
+    pub fn token_fim_suf(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_suf(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle middle token.
+    #[must_use]
+    pub fn token_fim_mid(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_mid(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle padding token.
+    #[must_use]
+    pub fn token_fim_pad(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_pad(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle repository token.
+    #[must_use]
+    pub fn token_fim_rep(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_rep(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Get the fill-in-the-middle separator token.
+    #[must_use]
+    pub fn token_fim_sep(&self) -> LlamaToken {
+        let token = unsafe { llama_token_fim_sep(self.get_vocab().vocab.as_ref()) };
+        LlamaToken(token)
+    }
+
+    /// Check if a token is a control token.
+    #[must_use]
+    pub fn token_is_control(&self, token: LlamaToken) -> bool {
+        unsafe { llama_token_is_control(self.get_vocab().vocab.as_ref(), token.0) }
+    }
+
+    /// Get the score of a token.
+    #[must_use]
+    pub fn token_get_score(&self, token: LlamaToken) -> f32 {
+        unsafe { llama_token_get_score(self.get_vocab().vocab.as_ref(), token.0) }
+    }
+
+    /// Get the raw text of a token.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the token text is null or not valid UTF-8.
+    pub fn token_get_text(&self, token: LlamaToken) -> Result<&str, StringFromModelError> {
+        let ptr =
+            unsafe { llama_token_get_text(self.get_vocab().vocab.as_ref(), token.0) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str()
+            .map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Check if a BOS token should be added when tokenizing.
+    #[must_use]
+    pub fn add_bos_token(&self) -> bool {
+        unsafe { llama_add_bos_token(self.get_vocab().vocab.as_ref()) }
+    }
+
+    /// Check if an EOS token should be added when tokenizing.
+    #[must_use]
+    pub fn add_eos_token(&self) -> bool {
+        unsafe { llama_add_eos_token(self.get_vocab().vocab.as_ref()) }
     }
 
     /// Get the decoder start token.
@@ -394,6 +822,62 @@ impl LlamaModel {
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
         let token_type = unsafe { llama_token_get_attr(self.get_vocab().vocab.as_ref(), id) };
         LlamaTokenAttrs::try_from(token_type).expect("token type is valid")
+    }
+
+    /// Detokenize a slice of tokens into a string.
+    ///
+    /// This is the inverse of [`str_to_token`](Self::str_to_token).
+    ///
+    /// # Parameters
+    ///
+    /// - `tokens`: The tokens to detokenize.
+    /// - `remove_special`: If `true`, special tokens are removed from the output.
+    /// - `unparse_special`: If `true`, special tokens are rendered as their text representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the detokenized text is not valid UTF-8.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    pub fn detokenize(
+        &self,
+        tokens: &[LlamaToken],
+        remove_special: bool,
+        unparse_special: bool,
+    ) -> Result<String, StringFromModelError> {
+        // First call with empty buffer to get required size
+        let n_tokens = tokens.len() as i32;
+        let token_ptr = tokens.as_ptr().cast::<llama_cpp_sys_4::llama_token>();
+        let needed = unsafe {
+            llama_detokenize(
+                self.get_vocab().vocab.as_ref(),
+                token_ptr,
+                n_tokens,
+                std::ptr::null_mut(),
+                0,
+                remove_special,
+                unparse_special,
+            )
+        };
+        // llama_detokenize returns negative required size when buffer is too small
+        let buf_size = if needed < 0 { (-needed) as usize } else { needed as usize };
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_detokenize(
+                self.get_vocab().vocab.as_ref(),
+                token_ptr,
+                n_tokens,
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size as i32,
+                remove_special,
+                unparse_special,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
     }
 
     /// Convert a token to a string with a specified buffer size.
@@ -589,6 +1073,258 @@ impl LlamaModel {
         unsafe { llama_n_embd(self.model.as_ptr()) }
     }
 
+    /// Get the number of transformer layers in the model.
+    #[must_use]
+    pub fn n_layer(&self) -> c_int {
+        unsafe { llama_n_layer(self.model.as_ptr()) }
+    }
+
+    /// Get the number of attention heads in the model.
+    #[must_use]
+    pub fn n_head(&self) -> c_int {
+        unsafe { llama_n_head(self.model.as_ptr()) }
+    }
+
+    /// Get the number of key-value attention heads in the model.
+    #[must_use]
+    pub fn n_head_kv(&self) -> c_int {
+        unsafe { llama_model_n_head_kv(self.model.as_ptr()) }
+    }
+
+    /// Get the input embedding size of the model.
+    #[must_use]
+    pub fn n_embd_inp(&self) -> c_int {
+        unsafe { llama_model_n_embd_inp(self.model.as_ptr()) }
+    }
+
+    /// Get the output embedding size of the model.
+    #[must_use]
+    pub fn n_embd_out(&self) -> c_int {
+        unsafe { llama_model_n_embd_out(self.model.as_ptr()) }
+    }
+
+    /// Get the sliding window attention size of the model.
+    /// Returns 0 if the model does not use sliding window attention.
+    #[must_use]
+    pub fn n_swa(&self) -> c_int {
+        unsafe { llama_model_n_swa(self.model.as_ptr()) }
+    }
+
+    /// Get the `RoPE` type used by the model.
+    #[must_use]
+    pub fn rope_type(&self) -> i32 {
+        unsafe { llama_model_rope_type(self.model.as_ptr()) }
+    }
+
+    /// Get the `RoPE` frequency scale used during training.
+    #[must_use]
+    pub fn rope_freq_scale_train(&self) -> f32 {
+        unsafe { llama_model_rope_freq_scale_train(self.model.as_ptr()) }
+    }
+
+    /// Get the model size in bytes.
+    #[must_use]
+    pub fn model_size(&self) -> u64 {
+        unsafe { llama_model_size(self.model.as_ptr()) }
+    }
+
+    /// Get the number of parameters in the model.
+    #[must_use]
+    pub fn n_params(&self) -> u64 {
+        unsafe { llama_model_n_params(self.model.as_ptr()) }
+    }
+
+    /// Get the number of classification outputs.
+    #[must_use]
+    pub fn n_cls_out(&self) -> u32 {
+        unsafe { llama_model_n_cls_out(self.model.as_ptr()) }
+    }
+
+    /// Get the classification label for the given index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the label is null or not valid UTF-8.
+    pub fn cls_label(&self, index: u32) -> Result<&str, StringFromModelError> {
+        let ptr = unsafe { llama_model_cls_label(self.model.as_ptr(), index) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Get the number of metadata key-value pairs.
+    #[must_use]
+    pub fn meta_count(&self) -> c_int {
+        unsafe { llama_model_meta_count(self.model.as_ptr()) }
+    }
+
+    /// Get a model description string.
+    ///
+    /// The `buf_size` parameter specifies the maximum buffer size for the description.
+    /// A default of 256 bytes is usually sufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the description could not be retrieved or is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn desc(&self, buf_size: usize) -> Result<String, StringFromModelError> {
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_model_desc(
+                self.model.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len])
+            .map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get a metadata key by index.
+    ///
+    /// The `buf_size` parameter specifies the maximum buffer size for the key.
+    /// A default of 256 bytes is usually sufficient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of range or the key is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_key_by_index(&self, index: i32, buf_size: usize) -> Result<String, StringFromModelError> {
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_model_meta_key_by_index(
+                self.model.as_ptr(),
+                index,
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len])
+            .map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get a metadata value string by index.
+    ///
+    /// The `buf_size` parameter specifies the maximum buffer size for the value.
+    /// Values can be large (e.g. chat templates, token lists), so 4096+ may be needed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the index is out of range or the value is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_val_str_by_index(&self, index: i32, buf_size: usize) -> Result<String, StringFromModelError> {
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_model_meta_val_str_by_index(
+                self.model.as_ptr(),
+                index,
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len])
+            .map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get a metadata value by key name.
+    ///
+    /// This is more convenient than iterating metadata by index when you know the key.
+    /// The `buf_size` parameter specifies the maximum buffer size for the value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the key is not found, contains a null byte, or the value is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn meta_val_str(&self, key: &str, buf_size: usize) -> Result<String, StringFromModelError> {
+        let c_key = CString::new(key)
+            .map_err(|_| StringFromModelError::ReturnedError(-1))?;
+        let mut buf = vec![0u8; buf_size];
+        let ret = unsafe {
+            llama_model_meta_val_str(
+                self.model.as_ptr(),
+                c_key.as_ptr(),
+                buf.as_mut_ptr().cast::<c_char>(),
+                buf_size,
+            )
+        };
+        if ret < 0 {
+            return Err(StringFromModelError::ReturnedError(ret));
+        }
+        let len = ret as usize;
+        let s = std::str::from_utf8(&buf[..len])
+            .map_err(StringFromModelError::Utf8Error)?;
+        Ok(s.to_owned())
+    }
+
+    /// Get all metadata as a list of `(key, value)` pairs.
+    ///
+    /// This is a convenience method that iterates over all metadata entries.
+    /// Keys use a buffer of 256 bytes and values use 4096 bytes.
+    /// For values that may be larger (e.g. token lists), use
+    /// [`meta_val_str_by_index`](Self::meta_val_str_by_index) directly with a larger buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any key or value cannot be read or is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    pub fn metadata(&self) -> Result<Vec<(String, String)>, StringFromModelError> {
+        let count = self.meta_count();
+        let mut result = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            let key = self.meta_key_by_index(i, 256)?;
+            let val = self.meta_val_str_by_index(i, 4096)?;
+            result.push((key, val));
+        }
+        Ok(result)
+    }
+
+    /// Check if the model has an encoder.
+    #[must_use]
+    pub fn has_encoder(&self) -> bool {
+        unsafe { llama_model_has_encoder(self.model.as_ptr()) }
+    }
+
+    /// Check if the model has a decoder.
+    #[must_use]
+    pub fn has_decoder(&self) -> bool {
+        unsafe { llama_model_has_decoder(self.model.as_ptr()) }
+    }
+
+    /// Check if the model is recurrent (e.g. Mamba, RWKV).
+    #[must_use]
+    pub fn is_recurrent(&self) -> bool {
+        unsafe { llama_model_is_recurrent(self.model.as_ptr()) }
+    }
+
+    /// Check if the model is a hybrid model.
+    #[must_use]
+    pub fn is_hybrid(&self) -> bool {
+        unsafe { llama_model_is_hybrid(self.model.as_ptr()) }
+    }
+
+    /// Check if the model is a diffusion model.
+    #[must_use]
+    pub fn is_diffusion(&self) -> bool {
+        unsafe { llama_model_is_diffusion(self.model.as_ptr()) }
+    }
+
     /// Get chat template from model.
     ///
     /// # Errors
@@ -747,6 +1483,93 @@ impl LlamaModel {
 
         tracing::debug!("Loaded model from {} splits", paths.len());
         Ok(LlamaModel { model })
+    }
+
+    /// Load a model from a `FILE` pointer.
+    ///
+    /// # Safety
+    ///
+    /// The `file` pointer must be a valid, open `FILE*`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model cannot be loaded.
+    pub unsafe fn load_from_file_ptr(
+        file: *mut llama_cpp_sys_4::FILE,
+        params: &LlamaModelParams,
+    ) -> Result<Self, LlamaModelLoadError> {
+        let model = llama_cpp_sys_4::llama_model_load_from_file_ptr(file, params.params);
+        let model = NonNull::new(model).ok_or(LlamaModelLoadError::NullResult)?;
+        Ok(LlamaModel { model })
+    }
+
+    /// Initialize a model from user-provided data.
+    ///
+    /// # Safety
+    ///
+    /// The metadata, callback, and user data must be valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the model cannot be initialized.
+    pub unsafe fn init_from_user(
+        metadata: *mut llama_cpp_sys_4::gguf_context,
+        set_tensor_data: llama_cpp_sys_4::llama_model_set_tensor_data_t,
+        set_tensor_data_ud: *mut std::ffi::c_void,
+        params: &LlamaModelParams,
+    ) -> Result<Self, LlamaModelLoadError> {
+        let model = llama_cpp_sys_4::llama_model_init_from_user(
+            metadata,
+            set_tensor_data,
+            set_tensor_data_ud,
+            params.params,
+        );
+        let model = NonNull::new(model).ok_or(LlamaModelLoadError::NullResult)?;
+        Ok(LlamaModel { model })
+    }
+
+    /// Save the model to a file.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path contains null bytes.
+    pub fn save_to_file(&self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        let path_str = path.to_str().expect("path is not valid UTF-8");
+        let c_path = CString::new(path_str).expect("path contains null bytes");
+        unsafe {
+            llama_model_save_to_file(self.model.as_ptr(), c_path.as_ptr());
+        }
+    }
+
+    /// Get the list of built-in chat templates.
+    ///
+    /// Returns the names of all chat templates that are built into llama.cpp.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any template name is not valid UTF-8.
+    #[allow(clippy::cast_sign_loss)]
+    #[must_use]
+    pub fn chat_builtin_templates() -> Vec<String> {
+        // First call to get count
+        let count = unsafe { llama_chat_builtin_templates(std::ptr::null_mut(), 0) };
+        if count <= 0 {
+            return Vec::new();
+        }
+        let count = count as usize;
+        let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); count];
+        unsafe {
+            llama_chat_builtin_templates(ptrs.as_mut_ptr(), count);
+        }
+        ptrs.iter()
+            .map(|&p| {
+                let cstr = unsafe { CStr::from_ptr(p) };
+                cstr.to_str()
+                    .expect("template name is not valid UTF-8")
+                    .to_owned()
+            })
+            .collect()
     }
 
     /// Initializes a lora adapter from a file.
@@ -1048,6 +1871,22 @@ impl LlamaModel {
         } else {
             None
         }
+    }
+}
+
+#[allow(clippy::cast_precision_loss)]
+impl fmt::Display for LlamaModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let desc = self.desc(256).unwrap_or_else(|_| "unknown".to_string());
+        write!(
+            f,
+            "{desc} | {layers}L {heads}H {embd}E | {params} params | {size:.1} MiB",
+            layers = self.n_layer(),
+            heads = self.n_head(),
+            embd = self.n_embd(),
+            params = self.n_params(),
+            size = self.model_size() as f64 / (1024.0 * 1024.0),
+        )
     }
 }
 

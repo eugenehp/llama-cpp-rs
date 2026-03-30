@@ -1,0 +1,18 @@
+[package]
+name = "fit-params"
+version = "0.2.10"
+edition = "2021"
+
+[dependencies]
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.10" }
+llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.2.14" }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+
+[features]
+cuda = ["llama-cpp-4/cuda"]
+metal = ["llama-cpp-4/metal"]
+vulkan = ["llama-cpp-4/vulkan"]
+
+[lints]
+workspace = true
