@@ -414,7 +414,7 @@ pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
 /// Panics if the returned string is not valid UTF-8.
 #[must_use]
 pub fn model_meta_key_str(key: u32) -> String {
-    let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key) };
+    let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key.try_into().unwrap()) };
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
     c_str.to_str().expect("meta_key_str is not valid UTF-8").to_owned()
 }
