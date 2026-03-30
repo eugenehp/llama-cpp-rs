@@ -339,6 +339,110 @@ impl<'model> LlamaContext<'model> {
         unsafe { slice::from_raw_parts(data, len) }
     }
 
+    /// Get the number of context tokens per sequence.
+    #[must_use]
+    pub fn n_ctx_seq(&self) -> u32 {
+        unsafe { llama_cpp_sys_4::llama_n_ctx_seq(self.context.as_ptr()) }
+    }
+
+    /// Get the maximum number of sequences.
+    #[must_use]
+    pub fn n_seq_max(&self) -> u32 {
+        unsafe { llama_cpp_sys_4::llama_n_seq_max(self.context.as_ptr()) }
+    }
+
+    /// Get the number of threads used for generation.
+    #[must_use]
+    pub fn n_threads(&self) -> i32 {
+        unsafe { llama_cpp_sys_4::llama_n_threads(self.context.as_ptr()) }
+    }
+
+    /// Get the number of threads used for batch processing.
+    #[must_use]
+    pub fn n_threads_batch(&self) -> i32 {
+        unsafe { llama_cpp_sys_4::llama_n_threads_batch(self.context.as_ptr()) }
+    }
+
+    /// Set the number of threads used for generation and batch processing.
+    pub fn set_n_threads(&mut self, n_threads: i32, n_threads_batch: i32) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_n_threads(
+                self.context.as_ptr(),
+                n_threads,
+                n_threads_batch,
+            );
+        }
+    }
+
+    /// Set whether to use causal attention.
+    ///
+    /// If set to `false`, the model will use non-causal attention, which is
+    /// needed for embedding models.
+    pub fn set_causal_attn(&mut self, causal_attn: bool) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_causal_attn(self.context.as_ptr(), causal_attn);
+        }
+    }
+
+    /// Set whether to compute embeddings.
+    ///
+    /// This allows toggling embedding mode at runtime (as opposed to only at
+    /// context creation time).
+    pub fn set_embeddings(&mut self, embeddings: bool) {
+        self.embeddings_enabled = embeddings;
+        unsafe {
+            llama_cpp_sys_4::llama_set_embeddings(self.context.as_ptr(), embeddings);
+        }
+    }
+
+    /// Mark the next computation as a warmup run.
+    ///
+    /// Warmup runs are useful for GPU backends to compile kernels before
+    /// actual inference begins.
+    pub fn set_warmup(&mut self, warmup: bool) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_warmup(self.context.as_ptr(), warmup);
+        }
+    }
+
+    /// Wait for all pending async computations to finish.
+    pub fn synchronize(&mut self) {
+        unsafe {
+            llama_cpp_sys_4::llama_synchronize(self.context.as_ptr());
+        }
+    }
+
+    /// Get all embeddings for the current context.
+    ///
+    /// Returns a slice of all embeddings from the last decoded batch.
+    /// For pooled embeddings use [`embeddings_seq_ith`](Self::embeddings_seq_ith) instead.
+    ///
+    /// # Errors
+    ///
+    /// - When the current context was constructed without enabling embeddings.
+    /// - If the embeddings pointer is null.
+    ///
+    /// # Panics
+    ///
+    /// * `n_embd` does not fit into a usize
+    pub fn get_embeddings(&self) -> Result<&[f32], EmbeddingsError> {
+        if !self.embeddings_enabled {
+            return Err(EmbeddingsError::NotEnabled);
+        }
+
+        let n_embd =
+            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
+
+        unsafe {
+            let embedding = llama_cpp_sys_4::llama_get_embeddings(self.context.as_ptr());
+            if embedding.is_null() {
+                Err(EmbeddingsError::NonePoolType)
+            } else {
+                Ok(slice::from_raw_parts(embedding, n_embd))
+            }
+        }
+    }
+
     /// Reset the timings for the context.
     pub fn reset_timings(&mut self) {
         unsafe { llama_cpp_sys_4::ggml_time_init() }
@@ -349,6 +453,452 @@ impl<'model> LlamaContext<'model> {
         let perf_context_data =
             unsafe { llama_cpp_sys_4::llama_perf_context(self.context.as_ptr()) };
         PerfContextData { perf_context_data }
+    }
+
+    /// Reset the performance counters for the context.
+    pub fn perf_context_reset(&mut self) {
+        unsafe { llama_cpp_sys_4::llama_perf_context_reset(self.context.as_ptr()) }
+    }
+
+    /// Check if the KV cache memory supports shifting.
+    #[must_use]
+    pub fn memory_can_shift(&self) -> bool {
+        unsafe {
+            let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
+            llama_cpp_sys_4::llama_memory_can_shift(mem)
+        }
+    }
+
+    /// Get the minimum position in a sequence's KV cache.
+    #[must_use]
+    pub fn memory_seq_pos_min(&self, seq_id: i32) -> i32 {
+        unsafe {
+            let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
+            llama_cpp_sys_4::llama_memory_seq_pos_min(mem, seq_id)
+        }
+    }
+
+    /// Print a breakdown of the memory usage.
+    pub fn memory_breakdown_print(&self) {
+        unsafe {
+            llama_cpp_sys_4::llama_memory_breakdown_print(self.context.as_ptr());
+        }
+    }
+
+    /// Get the size of the full context state in bytes.
+    ///
+    /// This is the size needed for [`state_get_data`](Self::state_get_data) and
+    /// [`state_set_data`](Self::state_set_data).
+    #[must_use]
+    pub fn state_get_size(&mut self) -> usize {
+        unsafe { llama_cpp_sys_4::llama_state_get_size(self.context.as_ptr()) }
+    }
+
+    /// Copy the full context state into a byte buffer.
+    ///
+    /// The buffer must be at least [`state_get_size`](Self::state_get_size) bytes.
+    ///
+    /// Returns the number of bytes written.
+    pub fn state_get_data(&mut self, dst: &mut [u8]) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_get_data(
+                self.context.as_ptr(),
+                dst.as_mut_ptr(),
+                dst.len(),
+            )
+        }
+    }
+
+    /// Restore the full context state from a byte buffer.
+    ///
+    /// Returns the number of bytes read.
+    pub fn state_set_data(&mut self, src: &[u8]) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_set_data(
+                self.context.as_ptr(),
+                src.as_ptr(),
+                src.len(),
+            )
+        }
+    }
+
+    /// Save the context state to a file along with the given tokens.
+    ///
+    /// Returns `true` on success.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path contains null bytes.
+    pub fn state_save_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        tokens: &[LlamaToken],
+    ) -> bool {
+        let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
+        let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        unsafe {
+            llama_cpp_sys_4::llama_state_save_file(
+                self.context.as_ptr(),
+                c_path.as_ptr(),
+                tokens.as_ptr().cast(),
+                tokens.len(),
+            )
+        }
+    }
+
+    /// Load a context state from a file.
+    ///
+    /// Returns `true` on success and fills `tokens_out` with the saved tokens.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path contains null bytes.
+    pub fn state_load_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        tokens_out: &mut Vec<LlamaToken>,
+        n_token_capacity: usize,
+    ) -> bool {
+        tokens_out.resize(n_token_capacity, LlamaToken(0));
+        let mut n_token_count: usize = 0;
+        let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
+        let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        let ok = unsafe {
+            llama_cpp_sys_4::llama_state_load_file(
+                self.context.as_ptr(),
+                c_path.as_ptr(),
+                tokens_out.as_mut_ptr().cast(),
+                n_token_capacity,
+                std::ptr::addr_of_mut!(n_token_count),
+            )
+        };
+        if ok {
+            tokens_out.truncate(n_token_count);
+        }
+        ok
+    }
+
+    /// Get the size of a single sequence's state in bytes.
+    #[must_use]
+    pub fn state_seq_get_size(&mut self, seq_id: i32) -> usize {
+        unsafe { llama_cpp_sys_4::llama_state_seq_get_size(self.context.as_ptr(), seq_id) }
+    }
+
+    /// Copy a single sequence's state into a byte buffer.
+    ///
+    /// Returns the number of bytes written.
+    pub fn state_seq_get_data(&mut self, dst: &mut [u8], seq_id: i32) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_get_data(
+                self.context.as_ptr(),
+                dst.as_mut_ptr(),
+                dst.len(),
+                seq_id,
+            )
+        }
+    }
+
+    /// Restore a single sequence's state from a byte buffer.
+    ///
+    /// Returns the number of bytes read.
+    pub fn state_seq_set_data(&mut self, src: &[u8], dest_seq_id: i32) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_set_data(
+                self.context.as_ptr(),
+                src.as_ptr(),
+                src.len(),
+                dest_seq_id,
+            )
+        }
+    }
+
+    /// Save a single sequence's state to a file.
+    ///
+    /// Returns the number of bytes written (0 on failure).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path contains null bytes.
+    pub fn state_seq_save_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        seq_id: i32,
+        tokens: &[LlamaToken],
+    ) -> usize {
+        let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
+        let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_save_file(
+                self.context.as_ptr(),
+                c_path.as_ptr(),
+                seq_id,
+                tokens.as_ptr().cast(),
+                tokens.len(),
+            )
+        }
+    }
+
+    /// Load a single sequence's state from a file.
+    ///
+    /// Returns the number of bytes read (0 on failure).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the path contains null bytes.
+    pub fn state_seq_load_file(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        dest_seq_id: i32,
+        tokens_out: &mut Vec<LlamaToken>,
+        n_token_capacity: usize,
+    ) -> usize {
+        tokens_out.resize(n_token_capacity, LlamaToken(0));
+        let mut n_token_count: usize = 0;
+        let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
+        let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        let ret = unsafe {
+            llama_cpp_sys_4::llama_state_seq_load_file(
+                self.context.as_ptr(),
+                c_path.as_ptr(),
+                dest_seq_id,
+                tokens_out.as_mut_ptr().cast(),
+                n_token_capacity,
+                std::ptr::addr_of_mut!(n_token_count),
+            )
+        };
+        if ret > 0 {
+            tokens_out.truncate(n_token_count);
+        }
+        ret
+    }
+
+    /// Set a control vector on the context.
+    ///
+    /// # Parameters
+    ///
+    /// - `data`: The control vector data (embedding values). Pass an empty slice to clear.
+    /// - `n_embd`: The embedding dimension.
+    /// - `il_start`: The starting layer index (inclusive).
+    /// - `il_end`: The ending layer index (exclusive).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` with the error code if the operation fails.
+    pub fn set_adapter_cvec(
+        &mut self,
+        data: &[f32],
+        n_embd: i32,
+        il_start: i32,
+        il_end: i32,
+    ) -> Result<(), i32> {
+        let ret = unsafe {
+            llama_cpp_sys_4::llama_set_adapter_cvec(
+                self.context.as_ptr(),
+                data.as_ptr(),
+                data.len(),
+                n_embd,
+                il_start,
+                il_end,
+            )
+        };
+        if ret != 0 {
+            Err(ret)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Get sampled token debug info for the `i`th position.
+    ///
+    /// Returns the sampled token at position `i` from the last decode call.
+    #[must_use]
+    pub fn get_sampled_token_ith(&self, i: i32) -> LlamaToken {
+        let token =
+            unsafe { llama_cpp_sys_4::llama_get_sampled_token_ith(self.context.as_ptr(), i) };
+        LlamaToken(token)
+    }
+
+    /// Get sampled candidate tokens for the `i`th position.
+    ///
+    /// Returns a slice of candidate tokens from the last decode call.
+    #[must_use]
+    pub fn get_sampled_candidates_ith(&self, i: i32) -> &[LlamaToken] {
+        let count = unsafe {
+            llama_cpp_sys_4::llama_get_sampled_candidates_count_ith(self.context.as_ptr(), i)
+        } as usize;
+        if count == 0 {
+            return &[];
+        }
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_get_sampled_candidates_ith(self.context.as_ptr(), i)
+        };
+        if ptr.is_null() {
+            return &[];
+        }
+        unsafe { slice::from_raw_parts(ptr.cast::<LlamaToken>(), count) }
+    }
+
+    /// Get the number of sampled logits for the `i`th position.
+    #[must_use]
+    pub fn get_sampled_logits_count_ith(&self, i: i32) -> u32 {
+        unsafe {
+            llama_cpp_sys_4::llama_get_sampled_logits_count_ith(self.context.as_ptr(), i)
+        }
+    }
+
+    /// Get sampled logits for the `i`th position.
+    ///
+    /// Returns a slice of logit values from the last decode call.
+    #[must_use]
+    pub fn get_sampled_logits_ith(&self, i: i32) -> &[f32] {
+        let count = self.get_sampled_logits_count_ith(i) as usize;
+        if count == 0 {
+            return &[];
+        }
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_get_sampled_logits_ith(self.context.as_ptr(), i)
+        };
+        if ptr.is_null() {
+            return &[];
+        }
+        unsafe { slice::from_raw_parts(ptr, count) }
+    }
+
+    /// Get the number of sampled probabilities for the `i`th position.
+    #[must_use]
+    pub fn get_sampled_probs_count_ith(&self, i: i32) -> u32 {
+        unsafe {
+            llama_cpp_sys_4::llama_get_sampled_probs_count_ith(self.context.as_ptr(), i)
+        }
+    }
+
+    /// Get sampled probabilities for the `i`th position.
+    ///
+    /// Returns a slice of probability values from the last decode call.
+    #[must_use]
+    pub fn get_sampled_probs_ith(&self, i: i32) -> &[f32] {
+        let count = self.get_sampled_probs_count_ith(i) as usize;
+        if count == 0 {
+            return &[];
+        }
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_get_sampled_probs_ith(self.context.as_ptr(), i)
+        };
+        if ptr.is_null() {
+            return &[];
+        }
+        unsafe { slice::from_raw_parts(ptr, count) }
+    }
+
+    /// Get the size of a single sequence's state with flags.
+    #[must_use]
+    pub fn state_seq_get_size_ext(&mut self, seq_id: i32, flags: u32) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_get_size_ext(self.context.as_ptr(), seq_id, flags)
+        }
+    }
+
+    /// Copy a single sequence's state into a byte buffer with flags.
+    ///
+    /// Returns the number of bytes written.
+    pub fn state_seq_get_data_ext(&mut self, dst: &mut [u8], seq_id: i32, flags: u32) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_get_data_ext(
+                self.context.as_ptr(),
+                dst.as_mut_ptr(),
+                dst.len(),
+                seq_id,
+                flags,
+            )
+        }
+    }
+
+    /// Restore a single sequence's state from a byte buffer with flags.
+    ///
+    /// Returns the number of bytes read.
+    pub fn state_seq_set_data_ext(
+        &mut self,
+        src: &[u8],
+        dest_seq_id: i32,
+        flags: u32,
+    ) -> usize {
+        unsafe {
+            llama_cpp_sys_4::llama_state_seq_set_data_ext(
+                self.context.as_ptr(),
+                src.as_ptr(),
+                src.len(),
+                dest_seq_id,
+                flags,
+            )
+        }
+    }
+
+    /// Set an abort callback for the context.
+    ///
+    /// The callback is called periodically during computation. If it returns `true`,
+    /// the computation is aborted.
+    ///
+    /// # Safety
+    ///
+    /// The callback data must remain valid for the lifetime of the context or until
+    /// the callback is replaced.
+    pub unsafe fn set_abort_callback(
+        &mut self,
+        callback: llama_cpp_sys_4::ggml_abort_callback,
+        data: *mut std::ffi::c_void,
+    ) {
+        llama_cpp_sys_4::llama_set_abort_callback(self.context.as_ptr(), callback, data);
+    }
+
+    /// Attach a thread pool to the context.
+    ///
+    /// # Safety
+    ///
+    /// The thread pools must remain valid for the lifetime of the context or until
+    /// they are detached.
+    pub unsafe fn attach_threadpool(
+        &mut self,
+        threadpool: llama_cpp_sys_4::ggml_threadpool_t,
+        threadpool_batch: llama_cpp_sys_4::ggml_threadpool_t,
+    ) {
+        llama_cpp_sys_4::llama_attach_threadpool(
+            self.context.as_ptr(),
+            threadpool,
+            threadpool_batch,
+        );
+    }
+
+    /// Detach the thread pool from the context.
+    pub fn detach_threadpool(&mut self) {
+        unsafe {
+            llama_cpp_sys_4::llama_detach_threadpool(self.context.as_ptr());
+        }
+    }
+
+    /// Set a sampler for a specific sequence.
+    ///
+    /// Returns `true` on success.
+    pub fn set_sampler(
+        &mut self,
+        seq_id: i32,
+        sampler: &mut crate::sampling::LlamaSampler,
+    ) -> bool {
+        unsafe {
+            llama_cpp_sys_4::llama_set_sampler(
+                self.context.as_ptr(),
+                seq_id,
+                sampler.sampler.as_ptr(),
+            )
+        }
+    }
+
+    /// Get the raw model pointer from this context.
+    ///
+    /// This is mainly useful for FFI interop. In normal usage, access
+    /// the model via the `model` field instead.
+    #[must_use]
+    pub fn get_model_ptr(&self) -> *const llama_cpp_sys_4::llama_model {
+        unsafe { llama_cpp_sys_4::llama_get_model(self.context.as_ptr()) }
     }
 
     /// Sets a lora adapter.

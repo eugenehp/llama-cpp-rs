@@ -6,13 +6,17 @@ use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_sampler, llama_sampler_accept, llama_sampler_chain_add,
-    llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_free,
-    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_grammar,
-    llama_sampler_init_greedy, llama_sampler_init_min_p, llama_sampler_init_mirostat,
-    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
-    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_p,
-    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_sample,
+    common::common_sampler_params, llama_logit_bias, llama_sampler, llama_sampler_accept,
+    llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init,
+    llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_free,
+    llama_sampler_get_seed, llama_sampler_init_adaptive_p, llama_sampler_init_dist,
+    llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy,
+    llama_sampler_init_grammar_lazy_patterns, llama_sampler_init_greedy,
+    llama_sampler_init_infill, llama_sampler_init_logit_bias, llama_sampler_init_min_p,
+    llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
+    llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
+    llama_sampler_init_top_n_sigma, llama_sampler_init_top_p, llama_sampler_init_typical,
+    llama_sampler_init_xtc, llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
 };
 
 use crate::context::LlamaContext;
@@ -599,6 +603,282 @@ impl LlamaSampler {
         let sampler = unsafe { llama_sampler_init_greedy() };
         Self {
             sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Top-N sigma sampling.
+    ///
+    /// Keeps tokens within N standard deviations of the maximum logit.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn top_n_sigma(n: f32) -> Self {
+        let sampler = unsafe { llama_sampler_init_top_n_sigma(n) };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Adaptive P sampling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    ///
+    /// # Parameters
+    /// - `target`: Target probability.
+    /// - `decay`: Decay rate.
+    /// - `seed`: Random seed.
+    #[must_use]
+    pub fn adaptive_p(target: f32, decay: f32, seed: u32) -> Self {
+        let sampler = unsafe { llama_sampler_init_adaptive_p(target, decay, seed) };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Logit bias sampler.
+    ///
+    /// Applies additive bias to specific token logits before sampling.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    ///
+    /// # Parameters
+    /// - `n_vocab`: Number of tokens in the vocabulary ([`LlamaModel::n_vocab`]).
+    /// - `biases`: Slice of `(token_id, bias)` pairs.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[must_use]
+    pub fn logit_bias(n_vocab: i32, biases: &[(LlamaToken, f32)]) -> Self {
+        let logit_biases: Vec<llama_logit_bias> = biases
+            .iter()
+            .map(|(token, bias)| llama_logit_bias {
+                token: token.0,
+                bias: *bias,
+            })
+            .collect();
+
+        let sampler = unsafe {
+            llama_sampler_init_logit_bias(
+                n_vocab,
+                logit_biases.len() as i32,
+                logit_biases.as_ptr(),
+            )
+        };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Infill sampler.
+    ///
+    /// Reorders token probabilities for fill-in-the-middle tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn infill(model: &LlamaModel) -> Self {
+        let sampler =
+            unsafe { llama_sampler_init_infill(model.get_vocab().vocab.as_ref()) };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Get the seed of the sampler.
+    ///
+    /// Returns `LLAMA_DEFAULT_SEED` if the sampler is not seeded.
+    #[must_use]
+    pub fn get_seed(&self) -> u32 {
+        unsafe { llama_sampler_get_seed(self.sampler.as_ptr()) }
+    }
+
+    /// Get the name of the sampler.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the name is not valid UTF-8.
+    #[must_use]
+    pub fn name(&self) -> String {
+        let c_str = unsafe { llama_sampler_name(self.sampler.as_ptr()) };
+        let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
+        c_str.to_str().expect("sampler name is not valid UTF-8").to_owned()
+    }
+
+    /// Reset the sampler state (e.g. grammar, repetition penalties).
+    pub fn reset(&mut self) {
+        unsafe { llama_sampler_reset(self.sampler.as_ptr()) }
+    }
+
+    /// Get the number of samplers in a chain.
+    ///
+    /// Returns 0 if this sampler is not a chain.
+    #[must_use]
+    pub fn chain_n(&self) -> i32 {
+        unsafe { llama_sampler_chain_n(self.sampler.as_ptr()) }
+    }
+
+    /// Remove and return the sampler at position `i` from a chain.
+    ///
+    /// The returned sampler is owned by the caller and will be freed on drop.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i` is out of range or if llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn chain_remove(&mut self, i: i32) -> Self {
+        let sampler = unsafe { llama_sampler_chain_remove(self.sampler.as_ptr(), i) };
+        Self {
+            sampler: NonNull::new(sampler).expect("chain_remove returned null"),
+        }
+    }
+
+    /// Grammar sampler with lazy activation.
+    ///
+    /// The grammar is only activated when one of the trigger words or trigger tokens is encountered.
+    ///
+    /// # Panics
+    /// - If `grammar_str` or `grammar_root` contain null bytes.
+    /// - If any trigger word contains null bytes.
+    /// - If llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn grammar_lazy(
+        model: &LlamaModel,
+        grammar_str: &str,
+        grammar_root: &str,
+        trigger_words: &[&str],
+        trigger_tokens: &[LlamaToken],
+    ) -> Self {
+        let grammar_str = CString::new(grammar_str).unwrap();
+        let grammar_root = CString::new(grammar_root).unwrap();
+        let trigger_cstrings: Vec<CString> = trigger_words
+            .iter()
+            .map(|w| CString::new(*w).unwrap())
+            .collect();
+        let mut trigger_ptrs: Vec<*const c_char> =
+            trigger_cstrings.iter().map(|s| s.as_ptr()).collect();
+
+        let sampler = unsafe {
+            llama_sampler_init_grammar_lazy(
+                model.get_vocab().vocab.as_ref(),
+                grammar_str.as_ptr(),
+                grammar_root.as_ptr(),
+                trigger_ptrs.as_mut_ptr(),
+                trigger_ptrs.len(),
+                trigger_tokens.as_ptr().cast(),
+                trigger_tokens.len(),
+            )
+        };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Grammar sampler with lazy activation via regex patterns.
+    ///
+    /// The grammar is only activated when one of the trigger patterns or trigger tokens matches.
+    ///
+    /// # Panics
+    /// - If `grammar_str` or `grammar_root` contain null bytes.
+    /// - If any trigger pattern contains null bytes.
+    /// - If llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn grammar_lazy_patterns(
+        model: &LlamaModel,
+        grammar_str: &str,
+        grammar_root: &str,
+        trigger_patterns: &[&str],
+        trigger_tokens: &[LlamaToken],
+    ) -> Self {
+        let grammar_str = CString::new(grammar_str).unwrap();
+        let grammar_root = CString::new(grammar_root).unwrap();
+        let pattern_cstrings: Vec<CString> = trigger_patterns
+            .iter()
+            .map(|w| CString::new(*w).unwrap())
+            .collect();
+        let mut pattern_ptrs: Vec<*const c_char> =
+            pattern_cstrings.iter().map(|s| s.as_ptr()).collect();
+
+        let sampler = unsafe {
+            llama_sampler_init_grammar_lazy_patterns(
+                model.get_vocab().vocab.as_ref(),
+                grammar_str.as_ptr(),
+                grammar_root.as_ptr(),
+                pattern_ptrs.as_mut_ptr(),
+                pattern_ptrs.len(),
+                trigger_tokens.as_ptr().cast(),
+                trigger_tokens.len(),
+            )
+        };
+        Self {
+            sampler: NonNull::new(sampler).unwrap(),
+        }
+    }
+
+    /// Clone this sampler.
+    ///
+    /// Creates an independent copy of this sampler with the same state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    #[must_use]
+    pub fn clone_sampler(&self) -> Self {
+        let sampler = unsafe { llama_sampler_clone(self.sampler.as_ptr()) };
+        Self {
+            sampler: NonNull::new(sampler).expect("sampler_clone returned null"),
+        }
+    }
+
+    /// Print sampler performance data.
+    pub fn perf_print(&self) {
+        unsafe { llama_cpp_sys_4::llama_perf_sampler_print(self.sampler.as_ptr()) }
+    }
+
+    /// Reset sampler performance counters.
+    pub fn perf_reset(&mut self) {
+        unsafe { llama_cpp_sys_4::llama_perf_sampler_reset(self.sampler.as_ptr()) }
+    }
+
+    /// Get sampler performance data.
+    #[must_use]
+    pub fn perf_data(&self) -> llama_cpp_sys_4::llama_perf_sampler_data {
+        unsafe { llama_cpp_sys_4::llama_perf_sampler(self.sampler.as_ptr()) }
+    }
+
+    /// Get a non-owning reference to the `i`th sampler in a chain.
+    ///
+    /// # Safety
+    ///
+    /// The returned pointer is owned by the chain. Do not free it or use it
+    /// after the chain is dropped or modified.
+    #[must_use]
+    pub unsafe fn chain_get_ptr(&self, i: i32) -> *mut llama_sampler {
+        llama_cpp_sys_4::llama_sampler_chain_get(self.sampler.as_ptr(), i)
+    }
+
+    /// Create a sampler from a raw interface and context.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `iface` and `ctx` are valid and that the
+    /// interface functions properly manage the context lifetime.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a null pointer.
+    #[must_use]
+    pub unsafe fn from_raw(
+        iface: *mut llama_cpp_sys_4::llama_sampler_i,
+        ctx: llama_cpp_sys_4::llama_sampler_context_t,
+    ) -> Self {
+        let sampler = llama_cpp_sys_4::llama_sampler_init(iface, ctx);
+        Self {
+            sampler: NonNull::new(sampler).expect("sampler_init returned null"),
         }
     }
 

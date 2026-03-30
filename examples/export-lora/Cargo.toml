@@ -1,0 +1,17 @@
+[package]
+name = "export-lora"
+version = "0.2.10"
+edition = "2021"
+
+[dependencies]
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.10" }
+encoding_rs = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+
+[features]
+cuda = ["llama-cpp-4/cuda"]
+metal = ["llama-cpp-4/metal"]
+
+[lints]
+workspace = true

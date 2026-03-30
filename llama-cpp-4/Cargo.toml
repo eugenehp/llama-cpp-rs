@@ -28,6 +28,7 @@ native = ["llama-cpp-sys-4/native"]
 openmp = ["llama-cpp-sys-4/openmp"]
 rpc = ["llama-cpp-sys-4/rpc"]
 mtmd = ["llama-cpp-sys-4/mtmd"]
+ggml = []
 
 
 
@@ -36,11 +37,15 @@ workspace = true
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["mtmd"]
+features = ["mtmd", "ggml"]
 
 [[example]]
 name = "usage"
 path = "../examples/usage.rs"
+
+[[example]]
+name = "model_info"
+path = "../examples/model_info.rs"
 
 [[example]]
 name = "common"

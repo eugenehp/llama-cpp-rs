@@ -155,6 +155,28 @@ impl LlamaBatch {
     pub fn n_tokens(&self) -> i32 {
         self.llama_batch.n_tokens
     }
+
+    /// Create a batch from a slice of tokens for simple one-shot decoding.
+    ///
+    /// The returned batch uses the provided token buffer directly and does not own the memory.
+    /// All tokens are assigned to sequence 0 and logits are enabled for the last token only.
+    ///
+    /// **Note:** The returned batch does NOT free memory on drop — it borrows from the input
+    /// slice. The caller must ensure `tokens` outlives the returned batch.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `tokens.len()` does not fit into an `i32`.
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+    #[must_use]
+    pub fn get_one(tokens: &mut [LlamaToken]) -> llama_batch {
+        unsafe {
+            llama_cpp_sys_4::llama_batch_get_one(
+                tokens.as_mut_ptr().cast(),
+                tokens.len() as i32,
+            )
+        }
+    }
 }
 
 impl Drop for LlamaBatch {
