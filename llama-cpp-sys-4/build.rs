@@ -1307,6 +1307,13 @@ fn main() {
         println!("cargo:rustc-link-lib=static=winpthread");
     }
 
+    // ggml-cpu.cpp uses Windows Registry APIs (RegOpenKeyExA, RegQueryValueExA,
+    // RegCloseKey) to detect CPU features. These live in advapi32.lib which is
+    // not linked by default by Rust's linker driver on Windows.
+    if target.contains("windows") {
+        println!("cargo:rustc-link-lib=advapi32");
+    }
+
     // On (older) macOS / Apple targets we may need to link against the clang
     // runtime, which is hidden in a non-default path.
     // More details at https://github.com/alexcrichton/curl-rust/issues/279.
