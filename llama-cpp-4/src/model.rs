@@ -1651,10 +1651,34 @@ impl LlamaModel {
         _: &LlamaBackend,
         params: LlamaContextParams,
     ) -> Result<LlamaContext<'_>, LlamaContextLoadError> {
+        // Apply TurboQuant attn-rotation preference before the KV cache is
+        // initialised inside llama_new_context_with_model.
+        let prev_rot_var = std::env::var("LLAMA_ATTN_ROT_DISABLE").ok();
+        if params.attn_rot_disabled {
+            // SAFETY: we restore the value right after the call.
+            #[allow(unused_unsafe)]
+            unsafe {
+                std::env::set_var("LLAMA_ATTN_ROT_DISABLE", "1");
+            }
+        } else if std::env::var("LLAMA_ATTN_ROT_DISABLE").is_ok() {
+            // params say "enabled" – only clear if it was previously unset
+            // (respect explicit user env var).
+        }
+
         let context_params = params.context_params;
         let context = unsafe { llama_new_context_with_model(self.model.as_ptr(), context_params) };
-        let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
 
+        // Restore the env-var to its previous state.
+        #[allow(unused_unsafe)]
+        match prev_rot_var {
+            Some(v) => unsafe { std::env::set_var("LLAMA_ATTN_ROT_DISABLE", v) },
+            None if params.attn_rot_disabled => unsafe {
+                std::env::remove_var("LLAMA_ATTN_ROT_DISABLE");
+            },
+            None => {}
+        }
+
+        let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
         Ok(LlamaContext::new(self, context, params.embeddings()))
     }
 

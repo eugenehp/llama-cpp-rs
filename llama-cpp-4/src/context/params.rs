@@ -109,6 +109,9 @@ impl From<LlamaPoolingType> for i32 {
 )]
 pub struct LlamaContextParams {
     pub(crate) context_params: llama_cpp_sys_4::llama_context_params,
+    /// When `true`, the TurboQuant attention rotation (PR #21038) will be
+    /// disabled for any context created from these params.
+    pub(crate) attn_rot_disabled: bool,
 }
 
 /// SAFETY: we do not currently allow setting or reading the pointers that cause this to not be automatically send or sync.
@@ -517,6 +520,92 @@ impl LlamaContextParams {
             )
     }
 
+    /// Set the storage type for the **K** (key) KV cache tensors.
+    ///
+    /// The default is `GgmlType::F16`.  Quantized types like `GgmlType::Q5_0`
+    /// or `GgmlType::Q4_0` reduce VRAM usage significantly; combining them with
+    /// TurboQuant attention rotation (the default) keeps quality high.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::quantize::GgmlType;
+    /// let params = LlamaContextParams::default()
+    ///     .with_cache_type_k(GgmlType::Q5_0);
+    /// ```
+    #[must_use]
+    pub fn with_cache_type_k(mut self, ty: crate::quantize::GgmlType) -> Self {
+        self.context_params.type_k = ty as llama_cpp_sys_4::ggml_type;
+        self
+    }
+
+    /// Get the K-cache storage type.
+    #[must_use]
+    pub fn cache_type_k(&self) -> llama_cpp_sys_4::ggml_type {
+        self.context_params.type_k
+    }
+
+    /// Set the storage type for the **V** (value) KV cache tensors.
+    ///
+    /// See [`with_cache_type_k`](Self::with_cache_type_k) for details.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::quantize::GgmlType;
+    /// let params = LlamaContextParams::default()
+    ///     .with_cache_type_v(GgmlType::Q5_0);
+    /// ```
+    #[must_use]
+    pub fn with_cache_type_v(mut self, ty: crate::quantize::GgmlType) -> Self {
+        self.context_params.type_v = ty as llama_cpp_sys_4::ggml_type;
+        self
+    }
+
+    /// Get the V-cache storage type.
+    #[must_use]
+    pub fn cache_type_v(&self) -> llama_cpp_sys_4::ggml_type {
+        self.context_params.type_v
+    }
+
+    /// Control the TurboQuant attention-rotation feature (llama.cpp PR #21038).
+    ///
+    /// By default, llama.cpp applies a Hadamard rotation to Q/K/V tensors
+    /// before writing them into the KV cache.  This significantly improves
+    /// quantized KV-cache quality at near-zero overhead, and is enabled
+    /// automatically for models whose head dimension is a power of two.
+    ///
+    /// Set `disabled = true` to opt out (equivalent to `LLAMA_ATTN_ROT_DISABLE=1`).
+    /// The env-var is applied just before the context is created and restored
+    /// afterwards, so this is safe to call from a single thread.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// // Disable rotation for this context only:
+    /// let params = LlamaContextParams::default().with_attn_rot_disabled(true);
+    /// assert!(params.attn_rot_disabled());
+    /// ```
+    #[must_use]
+    pub fn with_attn_rot_disabled(mut self, disabled: bool) -> Self {
+        self.attn_rot_disabled = disabled;
+        self
+    }
+
+    /// Returns `true` if TurboQuant attention rotation is disabled for this context.
+    ///
+    /// ```rust
+    /// let params = llama_cpp_4::context::params::LlamaContextParams::default();
+    /// assert!(!params.attn_rot_disabled());
+    /// ```
+    #[must_use]
+    pub fn attn_rot_disabled(&self) -> bool {
+        self.attn_rot_disabled
+    }
+
     /// Set the type of pooling.
     ///
     /// # Examples
@@ -558,6 +647,9 @@ impl LlamaContextParams {
 impl Default for LlamaContextParams {
     fn default() -> Self {
         let context_params = unsafe { llama_cpp_sys_4::llama_context_default_params() };
-        Self { context_params }
+        Self {
+            context_params,
+            attn_rot_disabled: false,
+        }
     }
 }
