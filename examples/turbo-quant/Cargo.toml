@@ -1,0 +1,19 @@
+[package]
+name = "turbo-quant"
+version = "0.2.18"
+edition = "2021"
+description = "TurboQuant demo: attention rotation for better KV-cache quantization"
+
+[dependencies]
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.18" }
+anyhow     = { workspace = true }
+clap       = { workspace = true, features = ["derive"] }
+
+[features]
+cuda   = ["llama-cpp-4/cuda"]
+metal  = ["llama-cpp-4/metal"]
+native = ["llama-cpp-4/native"]
+vulkan = ["llama-cpp-4/vulkan"]
+
+[lints]
+workspace = true

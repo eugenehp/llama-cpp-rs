@@ -19,6 +19,7 @@ members = [
     "examples/imatrix",
     "examples/cvector-generator",
     "examples/tts",
+    "examples/turbo-quant",
 ]
 
 [workspace.dependencies]

@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** b8575 (March 2026)
+**llama.cpp version:** c30e01225 (April 2026) — includes [TurboQuant (PR #21038)](#turboQuant--attention-rotation)
 
 ---
 
@@ -25,6 +25,8 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `split-model-example` | [`examples/split_model/`](examples/split_model/) | Load sharded / split GGUF files |
 | `openai-server` | [`examples/server/`](examples/server/) | OpenAI-compatible HTTP server with streaming and tool calling |
 | `mtmd` | [`examples/mtmd/`](examples/mtmd/) | Multimodal (vision / audio) inference (requires `--features mtmd`) |
+| `quantize` | [`examples/quantize/`](examples/quantize/) | Quantize a GGUF model with full typed API |
+| `turbo-quant` | [`examples/turbo-quant/`](examples/turbo-quant/) | TurboQuant demo — compare attn rotation on/off |
 
 ---
 
@@ -92,6 +94,129 @@ ctx.decode(&mut batch)?;
 
 let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
 // ... decode loop
+```
+
+---
+
+## Quantization
+
+The `llama_cpp_4::quantize` module provides a fully typed Rust API for all
+quantization options.
+
+```rust
+use llama_cpp_4::quantize::{GgmlType, LlamaFtype, QuantizeParams, TensorTypeOverride};
+
+// Basic — quantize to Q4_K_M
+let params = QuantizeParams::new(LlamaFtype::MostlyQ4KM)
+    .with_nthread(8)
+    .with_quantize_output_tensor(true);
+
+llama_cpp_4::model_quantize("model-f16.gguf", "model-q4km.gguf", &params).unwrap();
+
+// Advanced — keep output tensor in F16, prune layers 28-31
+let params = QuantizeParams::new(LlamaFtype::MostlyQ5KM)
+    .with_tensor_type_override(TensorTypeOverride::new("output", GgmlType::F16).unwrap())
+    .with_pruned_layers(28..=31);
+
+llama_cpp_4::model_quantize("model-f16.gguf", "model-q5km-pruned.gguf", &params).unwrap();
+```
+
+From the CLI:
+
+```bash
+# List all available quantization types
+cargo run -p quantize -- --list-types
+
+# Quantize with auto output name
+cargo run -p quantize -- model-f16.gguf Q4_K_M
+
+# Override a specific tensor type
+cargo run -p quantize -- --tensor-type output=F16 model-f16.gguf Q5_K_M
+
+# Dry-run: show size without writing
+cargo run -p quantize -- --dry-run model-f16.gguf Q4_K_M
+```
+
+---
+
+## TurboQuant — attention rotation
+
+**TurboQuant** (llama.cpp [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038))
+applies a [Hadamard rotation](https://en.wikipedia.org/wiki/Hadamard_matrix) to the Q, K,
+and V tensors before they are stored in the KV cache.
+
+### Why it matters
+
+Attention activations have large outlier values on some dimensions that make
+quantization hard.  The rotation spreads these outliers evenly so the KV cache
+can be stored in aggressive formats (Q4_0, Q5_0) with drastically less quality
+loss:
+
+| KV cache type | Without TurboQuant | With TurboQuant | VRAM vs F16 |
+|:---:|:---:|:---:|:---:|
+| F16 (baseline) | — | — | 100% |
+| Q8_0 | +0.003 PPL | +0.003 PPL | 50% |
+| Q5_1 | +61.70 PPL | **+0.44 PPL** | 35% |
+| Q5_0 | +17.28 PPL | **+0.55 PPL** | 31% |
+| Q4_1 | +212.5 PPL | **+8.65 PPL** | 28% |
+| Q4_0 | +62.02 PPL | **+32.6 PPL** | 25% |
+
+*PPL delta vs F16 baseline on Qwen3 0.6B BF16 — source: llama.cpp PR #21038.*
+
+### Key properties
+
+- **Enabled automatically** for any model whose head dimension is a power of two
+  (covers essentially all modern transformers).
+- **No GGUF changes required** — it is a runtime transform of the KV cache only.
+- **Reversible** — the rotation is applied before storing and reversed before
+  computing attention, so results are mathematically identical to F16.
+- **Controlled via the `LLAMA_ATTN_ROT_DISABLE` env var** — set to `1` to opt out.
+
+### Using TurboQuant from Rust
+
+```rust
+use llama_cpp_4::context::params::LlamaContextParams;
+use llama_cpp_4::quantize::GgmlType;
+
+// TurboQuant is ON by default — just set a quantized KV cache type:
+let ctx_params = LlamaContextParams::default()
+    .with_cache_type_k(GgmlType::Q5_0)   // ~31% of F16 VRAM
+    .with_cache_type_v(GgmlType::Q5_0);  // quality ≈ F16 thanks to rotation
+
+let ctx = model.new_context(&backend, ctx_params)?;
+```
+
+```rust
+// Disable rotation for a single context (e.g. benchmarking baseline):
+let ctx_params = LlamaContextParams::default()
+    .with_cache_type_k(GgmlType::Q5_0)
+    .with_attn_rot_disabled(true);   // ← TurboQuant OFF for this context
+
+let ctx = model.new_context(&backend, ctx_params)?;
+```
+
+```rust
+// Global process-level toggle (call before creating any context):
+use llama_cpp_4::quantize::{attn_rot_disabled, set_attn_rot_disabled};
+
+set_attn_rot_disabled(true);
+assert!(attn_rot_disabled());
+
+set_attn_rot_disabled(false); // restore
+```
+
+### Live demo
+
+```bash
+# API reference + PPL table (no model required)
+cargo run -p turbo-quant -- --show-api
+
+# Run both passes and compare outputs directly
+cargo run -p turbo-quant -- \
+    --model model.gguf \
+    --kv-type q5_0 \
+    --prompt "The capital of France is" \
+    --n-predict 16
 ```
 
 ---
@@ -167,27 +292,13 @@ cargo test -p openai-server
 
 ```bash
 cd llama-cpp-sys-4/llama.cpp
-git fetch --tags
-git checkout b8533   # or latest tag
+git fetch origin master
+git checkout origin/master  # or a specific commit/tag
 cd ../..
 cargo build          # build.rs regenerates bindings automatically
 ```
 
 ---
-
-### Quick test
-
-```shell
-cargo run -p openai-server -- hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
-```
-
-Send request via CURL:
-
-```shell
-curl http://localhost:8080/v1/chat/completions \
--H "Content-Type: application/json" \
--d '{"model":"default","messages":[{"role":"user","content":"What is 2+2?"}],"stream":false,"max_tokens":500}'
-```
 
 ## Multimodal Images
 
@@ -216,41 +327,6 @@ cargo run --features mtmd -p mtmd -- \
     --prompt "Describe this image."
 ```
 
-```shell
-curl http://localhost:8080/v1/chat/completions \
--H "Content-Type: application/json" \
--d '{
-"messages": [{
-"role": "user",
-"content": [
-{"type": "text", "text": "What is in this picture?"},
-{"type": "image_url", "image_url": {"url":
-"https://upload.wikimedia.org/wikipedia/commons/6/68/Orange_tabby_cat_sitting_on_fallen_leaves-Hisashi-01A.jpg"}}
-]
-}],
-"max_tokens": 256
-}'
-```
-
-Working end to end:
-
-```shell
-curl http://localhost:8080/v1/chat/completions \
--H "Content-Type: application/json" \
--d '{
-"messages": [{
-"role": "user",
-"content": [
-{"type": "text", "text": "What is in this picture?"},
-{"type": "image_url", "image_url": {"url":
-"https://upload.wikimedia.org/wikipedia/commons/6/68/Orange_tabby_cat_sitting_on_fallen_leaves-Hisashi-01A.jpg"}}
-]
-}],
-"max_tokens": 256
-}'
-{"choices":[{"finish_reason":"length","index":0,"message":{"content":"<think>\n\n</think>\n\nThis picture feature a **ginger and white cat** sitting upright outdoor on a bed of dry, brown leaves.\n\nHere’s a detaile breakdo:\n\n- **Subject**: The main focus is the cat, which has a classic “orange tabby and white” coat pattern.\n  - Its fur is mostly ginger (orange) with distinc darker orange stripes — typical of a tabby.\n  - It has a white face mask around its nose and mouth, a white chest and belly, and white paws (“socks”).\n  - Its eyes are strikin greenish-yellow, and it’s looking directl at the camera with an alert, calm express.\n  - The ears are perked up, and whiskers are clearly visible.\n\n- **Setting**: The cat is seated on the ground covered in fallen, dried leaves — suggest an autumn or early winter scene, possibl in a garden or wooded area.\n  - The backgro is softly blurred (shallow depth of field), drawing attenti to the cat while hinting at more foliage or grass behind it.\n\n- **Photography Style**: The image is well-composed, with natural lightin that highlig the texture of the cat’s fur and the rich colors. The bokeh effect","role":"assistant"}}],"created":1773097066,"id":"chatcmpl-1773097066","model":"Qwen3.5-27B-Q4_0","object":"chat.completion","usage":{"completion_tokens":256,"prompt_tokens":0,"total_tokens":256}}% 
-```
-
 ---
 
 ## Credits
@@ -260,22 +336,15 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
 
 ## Citation
 
-If you use gpu-fft in academic work, please cite it as:
-
-**BibTeX**
 ```bibtex
 @software{hauptmann2025llamacpprs,
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.14},
+  version   = {0.2.18},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
-
-**Plain text (APA)**
-> Hauptmann, E. (2025). *llama-cpp-4: llama-cpp Rust wrapper* (v0.2.14).
-> https://github.com/eugenehp/llama-cpp-rs
 
 ## License
 
