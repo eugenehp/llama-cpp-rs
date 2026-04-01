@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", features = ["rpc"] }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20", features = ["rpc"] }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hf-hub = { workspace = true }

@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.20] - 2026-04-01
+
+### Added
+
+- **`llama_cpp_4::quantize` module** — fully typed Rust API for model quantization:
+  - `LlamaFtype` enum covering all 34 quantization types (`Q4_K_M`, `Q5_K_M`, `IQ2_XXS`, …)
+    with `name()`, `description()`, `from_name()`, and `all()` helpers.
+  - `GgmlType` enum for raw tensor storage types with `From`/`TryFrom` conversions.
+  - `QuantizeParams` builder: `nthread`, `ftype`, `output_tensor_type`,
+    `token_embedding_type`, `allow_requantize`, `quantize_output_tensor`,
+    `only_copy`, `pure`, `keep_split`, `dry_run`.
+  - `Imatrix` / `ImatrixEntry` for per-tensor importance-matrix data.
+  - `TensorTypeOverride` for per-glob-pattern tensor type overrides (`output=F16`).
+  - `KvOverride` / `KvOverrideValue` for GGUF metadata injection.
+  - `with_pruned_layers()` to remove layers from the output model.
+  - `set_attn_rot_disabled()` / `attn_rot_disabled()` for process-level
+    TurboQuant control.
+- **`LlamaContextParams::with_cache_type_k(GgmlType)`** and
+  **`with_cache_type_v(GgmlType)`** — typed setters for KV cache storage type.
+- **`LlamaContextParams::with_attn_rot_disabled(bool)`** — per-context
+  TurboQuant (Hadamard attention rotation) toggle; applied safely around
+  `llama_new_context_with_model` without leaking to other threads.
+- **`examples/turbo-quant`** — new example demonstrating TurboQuant:
+  `--show-api` prints the full API reference and PPL quality table;
+  `--model`/`--kv-type`/`--n-predict` runs side-by-side rotation on/off
+  inference so the quality difference is directly visible.
+- **`examples/quantize`** rewritten with the new typed API: `--tensor-type`,
+  `--prune-layer`, `--disable-attn-rot`, `--list-types` flags.
+
+### Changed
+
+- **`model_quantize()`** now takes `&QuantizeParams` and returns
+  `Result<(), u32>` instead of the raw sys struct.
+- **`llama-cpp-sys-4` bumped to 0.2.19** — submodule updated to
+  llama.cpp `c30e01225` (April 2026), including:
+  - [PR #21038](https://github.com/ggml-org/llama.cpp/pull/21038)
+    **TurboQuant** — Hadamard rotation of Q/K/V into KV cache for
+    dramatically better quantized-cache quality (Q5_0: +0.55 PPL vs +17.28
+    PPL without rotation; 2.91× smaller KV cache than F16).
+  - [PR #20346](https://github.com/ggml-org/llama.cpp/pull/20346)
+    pure-C `llama_model_quantize_params` interface — `void *` fields
+    replaced with typed struct pointers (`llama_model_imatrix_data`,
+    `llama_model_tensor_override`, `llama_model_kv_override`);
+    `tensor_types` field renamed to `tt_overrides`.
+
+### Fixed
+
+- **Windows CI** — old `quantize` example assigned a `u32` ftype literal
+  directly to the `i32` `llama_ftype` field that MSVC bindgen emits,
+  causing a type error on Windows only. The new `LlamaFtype` enum with
+  `as`-casts fixes this on all platforms.
+
+### Deprecated
+
+- `model_quantize_default_params()` — use `QuantizeParams::new(ftype)` instead.
+
 ## [0.2.16] - 2026-03-30
 
 ### Fixed
