@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20" }
-llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.2.10" }
+llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.2.20" }
 hf-hub = { workspace = true }
 clap = { workspace = true , features = ["derive"] }
 anyhow = { workspace = true }
