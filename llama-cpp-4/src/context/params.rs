@@ -520,6 +520,56 @@ impl LlamaContextParams {
             )
     }
 
+    /// Set the storage type for the **K** (key) KV cache tensors.
+    ///
+    /// The default is `GgmlType::F16`.  Quantized types like `GgmlType::Q5_0`
+    /// or `GgmlType::Q4_0` reduce VRAM usage significantly; combining them with
+    /// TurboQuant attention rotation (the default) keeps quality high.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::quantize::GgmlType;
+    /// let params = LlamaContextParams::default()
+    ///     .with_cache_type_k(GgmlType::Q5_0);
+    /// ```
+    #[must_use]
+    pub fn with_cache_type_k(mut self, ty: crate::quantize::GgmlType) -> Self {
+        self.context_params.type_k = ty as llama_cpp_sys_4::ggml_type;
+        self
+    }
+
+    /// Get the K-cache storage type.
+    #[must_use]
+    pub fn cache_type_k(&self) -> llama_cpp_sys_4::ggml_type {
+        self.context_params.type_k
+    }
+
+    /// Set the storage type for the **V** (value) KV cache tensors.
+    ///
+    /// See [`with_cache_type_k`](Self::with_cache_type_k) for details.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::quantize::GgmlType;
+    /// let params = LlamaContextParams::default()
+    ///     .with_cache_type_v(GgmlType::Q5_0);
+    /// ```
+    #[must_use]
+    pub fn with_cache_type_v(mut self, ty: crate::quantize::GgmlType) -> Self {
+        self.context_params.type_v = ty as llama_cpp_sys_4::ggml_type;
+        self
+    }
+
+    /// Get the V-cache storage type.
+    #[must_use]
+    pub fn cache_type_v(&self) -> llama_cpp_sys_4::ggml_type {
+        self.context_params.type_v
+    }
+
     /// Control the TurboQuant attention-rotation feature (llama.cpp PR #21038).
     ///
     /// By default, llama.cpp applies a Hadamard rotation to Q/K/V tensors

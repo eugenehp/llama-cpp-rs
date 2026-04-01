@@ -3097,6 +3097,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "turbo-quant"
+version = "0.2.18"
+dependencies = [
+ "anyhow",
+ "clap",
+ "llama-cpp-4",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
