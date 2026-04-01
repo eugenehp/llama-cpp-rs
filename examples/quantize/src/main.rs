@@ -1,179 +1,252 @@
 //! # Quantize
 //!
-//! Quantize a GGUF model to a smaller precision.
+//! Quantize a GGUF model to a smaller precision using the typed Rust API.
 //! This is the Rust equivalent of llama.cpp's `llama-quantize` tool.
 //!
 //! ## Usage
 //!
 //! ```console
+//! # basic
 //! cargo run -p quantize -- model-f16.gguf model-q4_k_m.gguf Q4_K_M
 //! cargo run -p quantize -- model-f16.gguf Q4_K_M              # auto output name
-//! cargo run -p quantize -- --dry-run model.gguf Q4_K_M        # show size without quantizing
+//!
+//! # dry-run: show size without writing
+//! cargo run -p quantize -- --dry-run model.gguf Q4_K_M
+//!
+//! # re-quantize an already-quantized model
 //! cargo run -p quantize -- --allow-requantize model-q8.gguf Q4_K_M
+//!
+//! # keep output tensor in F16, everything else Q4_K_M
+//! cargo run -p quantize -- --tensor-type output=F16 model-f16.gguf Q4_K_M
+//!
+//! # prune layers 0 and 1
+//! cargo run -p quantize -- --prune-layer 0 --prune-layer 1 model-f16.gguf Q4_K_M
+//!
+//! # list all available quant types
+//! cargo run -p quantize -- --list-types
 //! ```
+
 #![allow(clippy::cast_precision_loss)]
 
 use anyhow::{bail, Result};
 use clap::Parser;
 use llama_cpp_4::llama_backend::LlamaBackend;
+use llama_cpp_4::quantize::{
+    GgmlType, LlamaFtype, QuantizeParams, TensorTypeOverride,
+    attn_rot_disabled, set_attn_rot_disabled,
+};
 
-/// Known quantization types with human-friendly descriptions.
-const QUANT_TYPES: &[(&str, u32, &str)] = &[
-    ("Q4_0",      2,  " 4.34G, +0.4685 ppl @ Llama-3-8B"),
-    ("Q4_1",      3,  " 4.78G, +0.4511 ppl @ Llama-3-8B"),
-    ("Q5_0",      8,  " 5.21G, +0.1316 ppl @ Llama-3-8B"),
-    ("Q5_1",      9,  " 5.65G, +0.1062 ppl @ Llama-3-8B"),
-    ("Q8_0",      7,  " 7.96G, +0.0026 ppl @ Llama-3-8B"),
-    ("Q2_K",      10, " 2.96G, +3.5199 ppl @ Llama-3-8B"),
-    ("Q2_K_S",    21, " 2.96G, +3.1836 ppl @ Llama-3-8B"),
-    ("Q3_K_S",    11, " 3.41G, +1.6321 ppl @ Llama-3-8B"),
-    ("Q3_K_M",    12, " 3.74G, +0.6569 ppl @ Llama-3-8B"),
-    ("Q3_K_L",    13, " 4.03G, +0.5562 ppl @ Llama-3-8B"),
-    ("Q4_K_S",    14, " 4.37G, +0.2689 ppl @ Llama-3-8B"),
-    ("Q4_K_M",    15, " 4.58G, +0.1754 ppl @ Llama-3-8B"),
-    ("Q5_K_S",    16, " 5.21G, +0.1049 ppl @ Llama-3-8B"),
-    ("Q5_K_M",    17, " 5.33G, +0.0569 ppl @ Llama-3-8B"),
-    ("Q6_K",      18, " 6.14G, +0.0217 ppl @ Llama-3-8B"),
-    ("IQ1_S",     24, " 1.56 bpw quantization"),
-    ("IQ1_M",     31, " 1.75 bpw quantization"),
-    ("IQ2_XXS",   19, " 2.06 bpw quantization"),
-    ("IQ2_XS",    20, " 2.31 bpw quantization"),
-    ("IQ2_S",     28, " 2.5  bpw quantization"),
-    ("IQ2_M",     29, " 2.7  bpw quantization"),
-    ("IQ3_XXS",   23, " 3.06 bpw quantization"),
-    ("IQ3_XS",    22, " 3.3  bpw quantization"),
-    ("IQ3_S",     26, " 3.44 bpw quantization"),
-    ("IQ3_M",     27, " 3.66 bpw quantization"),
-    ("IQ4_NL",    25, " 4.50 bpw non-linear quantization"),
-    ("IQ4_XS",    30, " 4.25 bpw non-linear quantization"),
-    ("TQ1_0",     36, " 1.69 bpw ternarization"),
-    ("TQ2_0",     37, " 2.06 bpw ternarization"),
-    ("F16",       1,  "14.00G, +0.0020 ppl @ Mistral-7B"),
-    ("BF16",      32, "14.00G, -0.0050 ppl @ Mistral-7B"),
-    ("F32",       0,  "26.00G              @ 7B"),
-    ("COPY",      0,  "only copy tensors, no quantizing"),
-];
-
-fn parse_ftype(name: &str) -> Option<(u32, &str)> {
-    let upper = name.to_uppercase();
-    QUANT_TYPES
-        .iter()
-        .find(|(n, _, _)| *n == upper)
-        .map(|(n, ftype, _)| (*ftype, *n))
-}
-
-fn print_quant_types() {
-    eprintln!("Available quantization types:");
-    eprintln!();
-    for (name, ftype, desc) in QUANT_TYPES {
-        if *name != "COPY" {
-            eprintln!("  {:2}  or  {:<7} :{}", ftype, name, desc);
-        } else {
-            eprintln!("        {:<7}  :{}", name, desc);
-        }
-    }
-}
+// ─── CLI ─────────────────────────────────────────────────────────────────────
 
 #[derive(clap::Parser, Debug)]
 #[command(about = "Quantize a GGUF model to a smaller precision")]
 struct Args {
     /// Input model file (F16 or F32 GGUF)
-    input: String,
+    #[arg(required_unless_present = "list_types")]
+    input: Option<String>,
 
     /// Output file or quantization type.
-    /// If this looks like a quant type (e.g. Q4_K_M), the output filename is auto-generated.
-    /// Otherwise treated as the output path, and the next argument must be the quant type.
-    output_or_type: String,
+    /// If this looks like a quant type (e.g. Q4_K_M), the output filename is
+    /// auto-generated.  Otherwise treated as the output path, and the next
+    /// argument must be the quant type.
+    #[arg(required_unless_present = "list_types")]
+    output_or_type: Option<String>,
 
-    /// Quantization type (if output path was given as second arg)
+    /// Quantization type (when output path was given as the second arg)
     quant_type: Option<String>,
 
     /// Number of threads (0 = auto)
     #[arg(long, default_value_t = 0)]
     nthreads: i32,
 
-    /// Allow requantizing already-quantized models
+    /// Allow re-quantizing already-quantized tensors
     #[arg(long)]
     allow_requantize: bool,
 
-    /// Do not quantize the output tensor
+    /// Do NOT quantize the output (lm-head) tensor
     #[arg(long)]
     leave_output_tensor: bool,
 
-    /// Quantize all tensors to the same type (disable k-quant mixtures)
+    /// Quantize every tensor to the same type (no k-quant mixing)
     #[arg(long)]
     pure: bool,
 
-    /// Only calculate size, do not write output
+    /// Only calculate output size, do not write the model
     #[arg(long)]
     dry_run: bool,
+
+    /// Keep the same number of shards as the input split model
+    #[arg(long)]
+    keep_split: bool,
+
+    /// Force storage type for a specific tensor pattern, e.g. `output=F16`
+    /// or `blk.0.*=Q8_0`.  Can be repeated.
+    #[arg(long = "tensor-type", value_name = "PATTERN=TYPE")]
+    tensor_type: Vec<String>,
+
+    /// Layer index to prune from the output model.  Can be repeated.
+    #[arg(long = "prune-layer", value_name = "N")]
+    prune_layer: Vec<i32>,
+
+    /// Disable TurboQuant attention rotation (enabled by default for
+    /// compatible models, see llama.cpp PR #21038).
+    #[arg(long)]
+    disable_attn_rot: bool,
+
+    /// List all available quantization types and exit.
+    #[arg(long)]
+    list_types: bool,
 }
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+fn print_quant_types() {
+    eprintln!("Available quantization types:");
+    eprintln!();
+    for ftype in LlamaFtype::all() {
+        eprintln!("  {:<12} — {}", ftype.name(), ftype.description());
+    }
+    eprintln!();
+    eprintln!("GgmlType values for --tensor-type:");
+    eprintln!("  F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0,");
+    eprintln!("  Q2K, Q3K, Q4K, Q5K, Q6K, Q8K, IQ1S, IQ1M,");
+    eprintln!("  IQ2XXS, IQ2XS, IQ2S, IQ3XXS, IQ3S,");
+    eprintln!("  IQ4NL, IQ4XS, TQ1_0, TQ2_0, MXFP4, NVFP4");
+}
+
+fn parse_tensor_type_override(spec: &str) -> Result<TensorTypeOverride> {
+    let (pattern, type_str) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("--tensor-type must be PATTERN=TYPE, got: {spec}"))?;
+
+    let ty = parse_ggml_type(type_str).ok_or_else(|| {
+        anyhow::anyhow!("unknown GgmlType '{type_str}' in --tensor-type {spec}")
+    })?;
+
+    TensorTypeOverride::new(pattern, ty)
+        .map_err(|e| anyhow::anyhow!("invalid pattern in --tensor-type: {e}"))
+}
+
+fn parse_ggml_type(s: &str) -> Option<GgmlType> {
+    match s.to_uppercase().as_str() {
+        "F32" => Some(GgmlType::F32),
+        "F16" => Some(GgmlType::F16),
+        "BF16" => Some(GgmlType::BF16),
+        "Q4_0" => Some(GgmlType::Q4_0),
+        "Q4_1" => Some(GgmlType::Q4_1),
+        "Q5_0" => Some(GgmlType::Q5_0),
+        "Q5_1" => Some(GgmlType::Q5_1),
+        "Q8_0" => Some(GgmlType::Q8_0),
+        "Q8_1" => Some(GgmlType::Q8_1),
+        "Q2K" | "Q2_K" => Some(GgmlType::Q2K),
+        "Q3K" | "Q3_K" => Some(GgmlType::Q3K),
+        "Q4K" | "Q4_K" => Some(GgmlType::Q4K),
+        "Q5K" | "Q5_K" => Some(GgmlType::Q5K),
+        "Q6K" | "Q6_K" => Some(GgmlType::Q6K),
+        "Q8K" | "Q8_K" => Some(GgmlType::Q8K),
+        "IQ1S" | "IQ1_S" => Some(GgmlType::IQ1S),
+        "IQ1M" | "IQ1_M" => Some(GgmlType::IQ1M),
+        "IQ2XXS" | "IQ2_XXS" => Some(GgmlType::IQ2XXS),
+        "IQ2XS" | "IQ2_XS" => Some(GgmlType::IQ2XS),
+        "IQ2S" | "IQ2_S" => Some(GgmlType::IQ2S),
+        "IQ2M" | "IQ2_M" => None, // llama_ftype only, not a raw ggml tensor type
+        "IQ3XXS" | "IQ3_XXS" => Some(GgmlType::IQ3XXS),
+        "IQ3XS" | "IQ3_XS" => None, // llama_ftype only
+        "IQ3S" | "IQ3_S" => Some(GgmlType::IQ3S),
+        "IQ3M" | "IQ3_M" => None, // llama_ftype only
+        "IQ4NL" | "IQ4_NL" => Some(GgmlType::IQ4NL),
+        "IQ4XS" | "IQ4_XS" => Some(GgmlType::IQ4XS),
+        "TQ1_0" | "TQ1" => Some(GgmlType::TQ1_0),
+        "TQ2_0" | "TQ2" => Some(GgmlType::TQ2_0),
+        "MXFP4" => Some(GgmlType::MXFP4),
+        "NVFP4" => Some(GgmlType::NVFP4),
+        _ => None,
+    }
+}
+
+// ─── main ────────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Parse quantization type and output path
-    let (fname_out, ftype, ftype_name) = if let Some((ftype, name)) = parse_ftype(&args.output_or_type) {
-        // Second arg is the quant type: <input> <type>
-        let stem = args.input.trim_end_matches(".gguf");
-        let out = format!("{stem}-{}.gguf", name.to_lowercase());
-        (out, ftype, name.to_string())
-    } else if let Some(ref qt) = args.quant_type {
-        // Second arg is output path: <input> <output> <type>
-        let (ftype, name) = parse_ftype(qt).ok_or_else(|| {
-            print_quant_types();
-            anyhow::anyhow!("unknown quantization type: {qt}")
-        })?;
-        (args.output_or_type.clone(), ftype, name.to_string())
-    } else {
+    if args.list_types {
         print_quant_types();
-        bail!(
-            "'{}' is not a recognized quantization type. Specify: <input> [output] <type>",
-            args.output_or_type
-        );
-    };
-
-    if !args.dry_run && args.input == fname_out {
-        bail!("input and output files are the same: {}", args.input);
+        return Ok(());
     }
+
+    // Unwrap required args (guaranteed by required_unless_present).
+    let input = args.input.unwrap();
+    let output_or_type = args.output_or_type.unwrap();
+
+    // Resolve (output_path, ftype, ftype_name).
+    let (fname_out, ftype) =
+        if let Some(ftype) = LlamaFtype::from_name(&output_or_type) {
+            // <input> <type>  — auto-derive output filename
+            let stem = input.strip_suffix(".gguf").unwrap_or(&input);
+            let out = format!("{stem}-{}.gguf", ftype.name().to_lowercase());
+            (out, ftype)
+        } else if let Some(ref qt) = args.quant_type {
+            // <input> <output> <type>
+            let ftype = LlamaFtype::from_name(qt).ok_or_else(|| {
+                print_quant_types();
+                anyhow::anyhow!("unknown quantization type: {qt}")
+            })?;
+            (output_or_type, ftype)
+        } else {
+            print_quant_types();
+            bail!(
+                "'{output_or_type}' is not a recognized quantization type.\n\
+                 Usage: quantize [options] <input> [output] <type>"
+            );
+        };
+
+    if !args.dry_run && input == fname_out {
+        bail!("input and output files are the same: {input}");
+    }
+
+    // ── Build QuantizeParams ──────────────────────────────────────────────
+
+    let mut params = QuantizeParams::new(ftype)
+        .with_nthread(args.nthreads)
+        .with_allow_requantize(args.allow_requantize)
+        .with_quantize_output_tensor(!args.leave_output_tensor)
+        .with_pure(args.pure)
+        .with_dry_run(args.dry_run)
+        .with_keep_split(args.keep_split)
+        .with_pruned_layers(args.prune_layer);
+
+    for spec in &args.tensor_type {
+        params = params.with_tensor_type_override(parse_tensor_type_override(spec)?);
+    }
+
+    // ── TurboQuant ────────────────────────────────────────────────────────
+    if args.disable_attn_rot {
+        set_attn_rot_disabled(true);
+    }
+    eprintln!(
+        "TurboQuant attention rotation: {}",
+        if attn_rot_disabled() { "DISABLED" } else { "enabled (default)" }
+    );
+
+    // ── Run ───────────────────────────────────────────────────────────────
 
     let _backend = LlamaBackend::init()?;
 
-    let mut params = llama_cpp_4::model_quantize_default_params();
-    params.ftype = ftype;
-    params.nthread = args.nthreads;
-    params.allow_requantize = args.allow_requantize;
-    params.quantize_output_tensor = !args.leave_output_tensor;
-    params.pure_ = args.pure;
-    params.dry_run = args.dry_run;
-
     if args.dry_run {
-        eprintln!("Calculating quantization size for '{}' as {}", args.input, ftype_name);
+        eprintln!("Calculating quantization size for '{input}' as {ftype}");
     } else {
-        eprintln!(
-            "Quantizing '{}' to '{}' as {}",
-            args.input, fname_out, ftype_name
-        );
+        eprintln!("Quantizing '{input}' → '{fname_out}' as {ftype}  ({})", ftype.description());
     }
     if args.nthreads > 0 {
         eprintln!("Using {} threads", args.nthreads);
     }
 
     let t_start = llama_cpp_4::llama_time_us();
+    llama_cpp_4::model_quantize(&input, &fname_out, &params)
+        .map_err(|code| anyhow::anyhow!("quantization failed with error code {code}"))?;
+    let t_ms = (llama_cpp_4::llama_time_us() - t_start) as f64 / 1000.0;
 
-    let result = llama_cpp_4::model_quantize(&args.input, &fname_out, Some(&params));
-
-    let t_end = llama_cpp_4::llama_time_us();
-    let t_ms = (t_end - t_start) as f64 / 1000.0;
-
-    if result != 0 {
-        bail!("quantization failed with error code {result}");
-    }
-
-    println!();
-    println!("Quantize time: {:.2} ms", t_ms);
-    println!("Total time:    {:.2} ms", t_ms);
-
+    println!("\nQuantize time: {t_ms:.2} ms");
     if !args.dry_run {
         println!("Output: {fname_out}");
     }

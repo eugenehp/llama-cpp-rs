@@ -1,11 +1,11 @@
 [package]
-name = "mtmd"
+name = "turbo-quant"
 version = "0.2.20"
 edition = "2021"
-description = "Multimodal (image/audio) example using llama-cpp-4 with the mtmd feature"
+description = "TurboQuant demo: attention rotation for better KV-cache quantization"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20", features = ["mtmd"] }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20" }
 anyhow     = { workspace = true }
 clap       = { workspace = true, features = ["derive"] }
 

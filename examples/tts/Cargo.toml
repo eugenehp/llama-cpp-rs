@@ -1,10 +1,10 @@
 [package]
 name = "tts"
-version = "0.2.10"
+version = "0.2.20"
 edition = "2021"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.10" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20" }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 encoding_rs = { workspace = true }

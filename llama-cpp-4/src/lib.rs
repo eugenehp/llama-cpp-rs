@@ -37,6 +37,7 @@ pub mod ggml;
 pub mod llama_backend;
 pub mod llama_batch;
 pub mod model;
+pub mod quantize;
 pub mod sampling;
 pub mod token;
 pub mod token_type;
@@ -419,36 +420,44 @@ pub fn model_meta_key_str(key: u32) -> String {
     c_str.to_str().expect("meta_key_str is not valid UTF-8").to_owned()
 }
 
-/// Quantize a model file.
+/// Quantize a model file using typed [`QuantizeParams`].
 ///
-/// # Parameters
-///
-/// - `fname_inp`: Path to the input model file.
-/// - `fname_out`: Path to the output quantized model file.
-/// - `params`: Quantization parameters. Use `None` for defaults.
-///
-/// # Returns
-///
-/// Returns 0 on success, non-zero on failure.
+/// Returns `Ok(())` on success, or `Err(code)` with the non-zero error code
+/// returned by `llama_model_quantize`.
 ///
 /// # Panics
 ///
-/// Panics if the paths contain null bytes.
-#[must_use]
+/// Panics if either path contains an interior null byte.
+///
+/// # Example
+///
+/// ```no_run
+/// use llama_cpp_4::quantize::{LlamaFtype, QuantizeParams};
+///
+/// let params = QuantizeParams::new(LlamaFtype::MostlyQ4KM)
+///     .with_nthread(8)
+///     .with_quantize_output_tensor(true);
+///
+/// llama_cpp_4::model_quantize("model-f16.gguf", "model-q4km.gguf", &params).unwrap();
+/// ```
 pub fn model_quantize(
     fname_inp: &str,
     fname_out: &str,
-    params: Option<&llama_cpp_sys_4::llama_model_quantize_params>,
-) -> u32 {
+    params: &quantize::QuantizeParams,
+) -> std::result::Result<(), u32> {
     let c_inp = std::ffi::CString::new(fname_inp).expect("input path contains null bytes");
     let c_out = std::ffi::CString::new(fname_out).expect("output path contains null bytes");
-    let default_params = unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() };
-    let params = params.unwrap_or(&default_params);
-    unsafe { llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), params) }
+    let guard = params.to_raw();
+    let rc =
+        unsafe { llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), &guard.raw) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
-/// Get default quantization parameters.
+/// Get default quantization parameters (raw sys type).
+///
+/// Prefer [`QuantizeParams::new`] for the typed Rust API.
 #[must_use]
+#[deprecated(since = "0.2.19", note = "use `QuantizeParams::new` instead")]
 pub fn model_quantize_default_params() -> llama_cpp_sys_4::llama_model_quantize_params {
     unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() }
 }
