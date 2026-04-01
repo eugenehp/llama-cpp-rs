@@ -68,9 +68,11 @@ fn test_model_meta_key_str() {
 
 #[test]
 fn test_model_quantize_default_params() {
-    let params = llama_cpp_4::model_quantize_default_params();
+    use llama_cpp_4::quantize::{LlamaFtype, QuantizeParams};
+    let params = QuantizeParams::new(LlamaFtype::MostlyQ4KM);
     // nthread=0 means auto
     assert!(params.nthread >= 0);
+    assert_eq!(params.ftype, LlamaFtype::MostlyQ4KM);
 }
 
 #[test]
