@@ -10,6 +10,10 @@ on:
         description: Upload artifacts to the selected tag release
         type: boolean
         default: false
+      include_experimental:
+        description: Also run experimental backend/target variants (may fail)
+        type: boolean
+        default: false
       tag:
         description: Existing tag to upload assets to (workflow_dispatch only)
         required: false
@@ -27,6 +31,7 @@ env:
 jobs:
   linux-prebuilt:
     name: Linux prebuilt (${{ matrix.label }})
+    if: matrix.experimental == false || (github.event_name == 'workflow_dispatch' && inputs.include_experimental == true)
     runs-on: ubuntu-24.04
     continue-on-error: ${{ matrix.experimental }}
     strategy:
@@ -303,6 +308,7 @@ jobs:
 
   windows-prebuilt:
     name: Windows prebuilt (${{ matrix.label }})
+    if: matrix.experimental == false || (github.event_name == 'workflow_dispatch' && inputs.include_experimental == true)
     runs-on: windows-latest
     continue-on-error: ${{ matrix.experimental }}
     strategy:
