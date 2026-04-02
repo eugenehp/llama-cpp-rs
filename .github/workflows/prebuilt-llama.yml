@@ -39,6 +39,11 @@ jobs:
             libclang-dev libssl-dev \
             libvulkan-dev glslang-tools
 
+          # FindVulkan.cmake requires glslc specifically (not just glslangValidator).
+          if ! command -v glslc >/dev/null 2>&1; then
+            sudo apt-get install -y glslc || sudo apt-get install -y shaderc
+          fi
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
