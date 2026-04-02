@@ -18,6 +18,12 @@ on:
 permissions:
   contents: write
 
+env:
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  SCCACHE_CACHE_SIZE: "10G"
+  SCCACHE_GHA_VERSION: prebuilt-v1
+
 jobs:
   linux-prebuilt:
     name: Linux prebuilt (${{ matrix.label }})
@@ -79,7 +85,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential pkg-config cmake git \
+            build-essential pkg-config cmake git mold \
             libclang-dev libssl-dev
 
       - name: Install Vulkan dependencies
@@ -100,8 +106,21 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.0
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v1
+          cache-targets: false
+          cache-on-failure: false
+
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash
+        env:
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: |
           set -euo pipefail
           if [[ -n "${{ matrix.features }}" ]]; then
@@ -196,6 +215,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.0
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v1
+          cache-targets: false
+          cache-on-failure: false
+
       - name: Install Vulkan SDK
         if: matrix.vulkan
         shell: powershell
@@ -272,20 +302,40 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - label: cpu
+          - label: arm64 cpu
+            target: aarch64-apple-darwin
             suffix: cpu
             features: ""
-          - label: q1
+          - label: arm64 q1
+            target: aarch64-apple-darwin
             suffix: q1
             features: q1
-          - label: metal
+          - label: arm64 metal
+            target: aarch64-apple-darwin
             suffix: metal
             features: metal
-          - label: q1+metal
+          - label: arm64 q1+metal
+            target: aarch64-apple-darwin
+            suffix: q1-metal
+            features: q1,metal
+          - label: x64 cpu
+            target: x86_64-apple-darwin
+            suffix: cpu
+            features: ""
+          - label: x64 q1
+            target: x86_64-apple-darwin
+            suffix: q1
+            features: q1
+          - label: x64 metal
+            target: x86_64-apple-darwin
+            suffix: metal
+            features: metal
+          - label: x64 q1+metal
+            target: x86_64-apple-darwin
             suffix: q1-metal
             features: q1,metal
     env:
-      TARGET_TRIPLE: aarch64-apple-darwin
+      TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -298,6 +348,19 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.0
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v1
+          cache-targets: false
+          cache-on-failure: false
 
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash
