@@ -151,10 +151,11 @@ jobs:
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
-          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   windows-prebuilt:
     name: Windows prebuilt (${{ matrix.label }})
@@ -265,10 +266,11 @@ jobs:
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
-          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   macos-prebuilt:
     name: macOS prebuilt (${{ matrix.label }})
@@ -365,7 +367,8 @@ jobs:
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
-          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}" "$RUNNER_TEMP/$ASSET_NAME" --clobber
