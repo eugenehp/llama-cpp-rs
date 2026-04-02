@@ -237,3 +237,95 @@ jobs:
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
           files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+
+  macos-prebuilt:
+    name: macOS prebuilt (${{ matrix.label }})
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: cpu
+            suffix: cpu
+            features: ""
+          - label: q1
+            suffix: q1
+            features: q1
+          - label: metal
+            suffix: metal
+            features: metal
+          - label: q1+metal
+            suffix: q1-metal
+            features: q1,metal
+    env:
+      TARGET_TRIPLE: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Compute asset name
+        shell: bash
+        run: |
+          echo "ASSET_NAME=llama-prebuilt-macos-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build llama-cpp-4 (prebuilt target)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${{ matrix.features }}" ]]; then
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features
+          fi
+
+      - name: Collect prebuilt libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/prebuilt"
+          mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+
+          while IFS= read -r -d '' f; do
+            rel="${f##*/out/}"
+            subdir="${rel%%/*}"
+            base="$(basename "$f")"
+            case "$subdir" in
+              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            esac
+          done < <(find target -type f \( \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dylib" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dylib" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dylib" \
+          \) -print0)
+
+          cat > "$ROOT/metadata.json" <<EOF
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
+          EOF
+
+          tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
