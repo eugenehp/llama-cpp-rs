@@ -31,7 +31,6 @@ env:
 jobs:
   linux-prebuilt:
     name: Linux prebuilt (${{ matrix.label }})
-    if: matrix.experimental == false || (github.event_name == 'workflow_dispatch' && inputs.include_experimental == true)
     runs-on: ubuntu-24.04
     continue-on-error: ${{ matrix.experimental }}
     strategy:
@@ -308,7 +307,6 @@ jobs:
 
   windows-prebuilt:
     name: Windows prebuilt (${{ matrix.label }})
-    if: matrix.experimental == false || (github.event_name == 'workflow_dispatch' && inputs.include_experimental == true)
     runs-on: windows-latest
     continue-on-error: ${{ matrix.experimental }}
     strategy:
