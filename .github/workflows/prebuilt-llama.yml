@@ -22,6 +22,7 @@ jobs:
   linux-prebuilt:
     name: Linux prebuilt (${{ matrix.label }})
     runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,18 +31,38 @@ jobs:
             suffix: cpu
             features: ""
             vulkan: false
+            webgpu: false
+            experimental: false
           - label: q1
             suffix: q1
             features: q1
             vulkan: false
+            webgpu: false
+            experimental: false
           - label: vulkan
             suffix: vulkan
             features: vulkan
             vulkan: true
+            webgpu: false
+            experimental: false
           - label: q1+vulkan
             suffix: q1-vulkan
             features: q1,vulkan
             vulkan: true
+            webgpu: false
+            experimental: false
+          - label: webgpu
+            suffix: webgpu
+            features: webgpu
+            vulkan: false
+            webgpu: true
+            experimental: false
+          - label: q1+webgpu
+            suffix: q1-webgpu
+            features: q1,webgpu
+            vulkan: false
+            webgpu: true
+            experimental: false
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
@@ -69,6 +90,12 @@ jobs:
           if ! command -v glslc >/dev/null 2>&1; then
             sudo apt-get install -y glslc || sudo apt-get install -y shaderc
           fi
+
+      - name: Install WebGPU dependencies
+        if: matrix.webgpu
+        run: |
+          # Dawn package used by ggml-webgpu's non-emscripten CMake path.
+          sudo apt-get install -y libdawn-dev || true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
