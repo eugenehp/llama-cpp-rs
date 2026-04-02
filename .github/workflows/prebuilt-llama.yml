@@ -128,26 +128,58 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
-          while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
-            base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
-            esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.so" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.so" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.so" \
-          \) -print0)
+          # Resolve the exact CMake install roots used by the current build.
+          output_files="$RUNNER_TEMP/llama-output-files.txt"
+          roots_raw="$RUNNER_TEMP/llama-roots-raw.txt"
+          roots_unique="$RUNNER_TEMP/llama-roots-unique.txt"
+
+          find "target/${TARGET_TRIPLE}/release/build" -type f -path "*/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          if [[ ! -s "$output_files" ]]; then
+            find target -type f -path "*/build/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          fi
+
+          : > "$roots_raw"
+          while IFS= read -r output; do
+            sed -n 's/^cargo:root=//p' "$output" >> "$roots_raw" || true
+          done < "$output_files"
+          sort -u "$roots_raw" > "$roots_unique"
+
+          copied=0
+          while IFS= read -r root; do
+            [[ -n "$root" && -d "$root" ]] || continue
+            echo "Collecting from root: $root"
+            for subdir in lib lib64 bin; do
+              dir="$root/$subdir"
+              [[ -d "$dir" ]] || continue
+              while IFS= read -r -d '' f; do
+                cp -f "$f" "$ROOT/$subdir/$(basename "$f")"
+                copied=$((copied + 1))
+              done < <(find "$dir" -maxdepth 1 -type f \( -name '*.a' -o -name '*.so' \) -print0)
+            done
+          done < "$roots_unique"
+
+          if [[ "$copied" -eq 0 ]]; then
+            echo "No compiled libraries were collected; failing instead of uploading empty artifact." >&2
+            echo "Searched output files:" >&2
+            sed 's/^/ - /' "$output_files" >&2 || true
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
           EOF
 
           tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+          ls -lh "$RUNNER_TEMP/$ASSET_NAME"
+          tar -tzf "$RUNNER_TEMP/$ASSET_NAME"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
@@ -243,26 +275,57 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
-          while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
-            base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
-            esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.lib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dll" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.lib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dll" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dll" \
-          \) -print0)
+          output_files="$RUNNER_TEMP/llama-output-files.txt"
+          roots_raw="$RUNNER_TEMP/llama-roots-raw.txt"
+          roots_unique="$RUNNER_TEMP/llama-roots-unique.txt"
+
+          find "target/${TARGET_TRIPLE}/release/build" -type f -path "*/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          if [[ ! -s "$output_files" ]]; then
+            find target -type f -path "*/build/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          fi
+
+          : > "$roots_raw"
+          while IFS= read -r output; do
+            sed -n 's/^cargo:root=//p' "$output" >> "$roots_raw" || true
+          done < "$output_files"
+          sort -u "$roots_raw" > "$roots_unique"
+
+          copied=0
+          while IFS= read -r root; do
+            [[ -n "$root" && -d "$root" ]] || continue
+            echo "Collecting from root: $root"
+            for subdir in lib lib64 bin; do
+              dir="$root/$subdir"
+              [[ -d "$dir" ]] || continue
+              while IFS= read -r -d '' f; do
+                cp -f "$f" "$ROOT/$subdir/$(basename "$f")"
+                copied=$((copied + 1))
+              done < <(find "$dir" -maxdepth 1 -type f \( -name '*.lib' -o -name '*.dll' \) -print0)
+            done
+          done < "$roots_unique"
+
+          if [[ "$copied" -eq 0 ]]; then
+            echo "No compiled libraries were collected; failing instead of uploading empty artifact." >&2
+            echo "Searched output files:" >&2
+            sed 's/^/ - /' "$output_files" >&2 || true
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
           EOF
 
           tar --force-local -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+          ls -lh "$RUNNER_TEMP/$ASSET_NAME"
+          tar -tzf "$RUNNER_TEMP/$ASSET_NAME"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
@@ -344,26 +407,57 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
-          while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
-            base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
-            esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dylib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dylib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dylib" \
-          \) -print0)
+          output_files="$RUNNER_TEMP/llama-output-files.txt"
+          roots_raw="$RUNNER_TEMP/llama-roots-raw.txt"
+          roots_unique="$RUNNER_TEMP/llama-roots-unique.txt"
+
+          find "target/${TARGET_TRIPLE}/release/build" -type f -path "*/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          if [[ ! -s "$output_files" ]]; then
+            find target -type f -path "*/build/llama-cpp-sys-4-*/output" > "$output_files" 2>/dev/null || true
+          fi
+
+          : > "$roots_raw"
+          while IFS= read -r output; do
+            sed -n 's/^cargo:root=//p' "$output" >> "$roots_raw" || true
+          done < "$output_files"
+          sort -u "$roots_raw" > "$roots_unique"
+
+          copied=0
+          while IFS= read -r root; do
+            [[ -n "$root" && -d "$root" ]] || continue
+            echo "Collecting from root: $root"
+            for subdir in lib lib64 bin; do
+              dir="$root/$subdir"
+              [[ -d "$dir" ]] || continue
+              while IFS= read -r -d '' f; do
+                cp -f "$f" "$ROOT/$subdir/$(basename "$f")"
+                copied=$((copied + 1))
+              done < <(find "$dir" -maxdepth 1 -type f \( -name '*.a' -o -name '*.dylib' \) -print0)
+            done
+          done < "$roots_unique"
+
+          if [[ "$copied" -eq 0 ]]; then
+            echo "No compiled libraries were collected; failing instead of uploading empty artifact." >&2
+            echo "Searched output files:" >&2
+            sed 's/^/ - /' "$output_files" >&2 || true
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
           EOF
 
           tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+          ls -lh "$RUNNER_TEMP/$ASSET_NAME"
+          tar -tzf "$RUNNER_TEMP/$ASSET_NAME"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload to GitHub release
         if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
