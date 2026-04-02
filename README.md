@@ -76,6 +76,15 @@ Notes:
 - `build.rs` still generates Rust bindings, but skips the expensive CMake
   compile when `LLAMA_PREBUILT_DIR` is set.
 
+Backend feature coverage (practical targets):
+- `metal`  → macOS (Apple Silicon and Intel Macs)
+- `vulkan` → Linux/Windows (cross-vendor desktop GPUs)
+- `webgpu` → Linux/Windows (experimental; requires Dawn/WebGPU-native stack)
+- `cuda`   → Linux/Windows with NVIDIA CUDA toolkit (experimental in CI)
+- `hip`    → Linux ROCm/HIP environments (experimental in CI)
+- `opencl` → Linux/Windows with OpenCL SDK/runtime (experimental in CI)
+- `blas`   → CPU acceleration (Linux/macOS/Windows)
+
 ```bash
 # Chat completion
 curl http://127.0.0.1:8080/v1/chat/completions \
