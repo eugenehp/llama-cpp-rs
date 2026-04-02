@@ -266,6 +266,117 @@ fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
     files
 }
 
+fn extract_prebuilt_lib_names(
+    prebuilt_root: &Path,
+    use_shared_libs: bool,
+    target: &str,
+) -> Vec<String> {
+    let lib_pattern = if target.contains("windows-msvc") {
+        "*.lib"
+    } else if target.contains("windows") {
+        "*.a"
+    } else if target.contains("apple") {
+        if use_shared_libs {
+            "*.dylib"
+        } else {
+            "*.a"
+        }
+    } else if use_shared_libs {
+        "*.so"
+    } else {
+        "*.a"
+    };
+
+    let mut lib_names = Vec::new();
+    for dir in [
+        prebuilt_root.to_path_buf(),
+        prebuilt_root.join("lib"),
+        prebuilt_root.join("lib64"),
+        prebuilt_root.join("bin"),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+        let pattern = dir.join(lib_pattern);
+        let pattern_s = match pattern.to_str() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for entry in glob(pattern_s).unwrap() {
+            match entry {
+                Ok(path) => {
+                    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    let stem = if target.contains("windows")
+                        && !target.contains("msvc")
+                        && stem.ends_with(".dll")
+                    {
+                        &stem[..stem.len() - 4]
+                    } else {
+                        stem
+                    };
+
+                    let lib_name = if let Some(stripped) = stem.strip_prefix("lib") {
+                        stripped
+                    } else {
+                        stem
+                    };
+
+                    if !lib_names.iter().any(|n| n == lib_name) {
+                        lib_names.push(lib_name.to_string());
+                    }
+                }
+                Err(e) => eprintln!("cargo:warning=error={}", e),
+            }
+        }
+    }
+
+    lib_names
+}
+
+fn extract_prebuilt_shared_assets(prebuilt_root: &Path, target: &str) -> Vec<PathBuf> {
+    let shared_pattern = if target.contains("windows") {
+        "*.dll"
+    } else if target.contains("apple") {
+        "*.dylib"
+    } else {
+        "*.so"
+    };
+
+    let mut files = Vec::new();
+    for dir in [
+        prebuilt_root.to_path_buf(),
+        prebuilt_root.join("lib"),
+        prebuilt_root.join("lib64"),
+        prebuilt_root.join("bin"),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+        let pattern = dir.join(shared_pattern);
+        let pattern_s = match pattern.to_str() {
+            Some(v) => v,
+            None => continue,
+        };
+        for entry in glob(pattern_s).unwrap() {
+            match entry {
+                Ok(path) => {
+                    if !files.iter().any(|p| p == &path) {
+                        files.push(path);
+                    }
+                }
+                Err(e) => eprintln!("cargo:warning=error={}", e),
+            }
+        }
+    }
+
+    files
+}
+
 /// Ask a clang binary for its library search path (macOS link helper).
 ///
 /// `clang_binary` should be the bare name or full path of the clang binary to
@@ -692,8 +803,7 @@ fn main() {
             .unwrap_or(&target_dir)
             .join("llama-cmake-cache")
             .join(format!("{:016x}", hash));
-        std::fs::create_dir_all(&shared)
-            .expect("failed to create shared cmake cache dir");
+        std::fs::create_dir_all(&shared).expect("failed to create shared cmake cache dir");
         debug_log!("Shared cmake dir: {}", shared.display());
         shared
     } else {
@@ -877,8 +987,116 @@ fn main() {
     fs::write(bindings_path, contents).unwrap();
 
     println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_DIR");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
 
     debug_log!("Bindings Created");
+
+    // ── Optional prebuilt path (skip CMake compile) ─────────────────────────
+    //
+    // When LLAMA_PREBUILT_DIR points to a directory containing precompiled
+    // llama/ggml libraries, use those directly and skip the full CMake build.
+    // Expected layout is flexible; files may be in <dir>, <dir>/lib,
+    // <dir>/lib64, or <dir>/bin.
+    if let Ok(prebuilt_dir_raw) = env::var("LLAMA_PREBUILT_DIR") {
+        let prebuilt_dir = PathBuf::from(&prebuilt_dir_raw);
+        if prebuilt_dir.exists() {
+            let use_shared_libs = env::var("LLAMA_PREBUILT_SHARED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+                .unwrap_or(build_shared_libs);
+
+            println!(
+                "cargo:warning=Using prebuilt llama libs from {}",
+                prebuilt_dir.display()
+            );
+
+            for p in [
+                prebuilt_dir.clone(),
+                prebuilt_dir.join("lib"),
+                prebuilt_dir.join("lib64"),
+                prebuilt_dir.join("bin"),
+            ] {
+                if p.exists() {
+                    println!("cargo:rustc-link-search={}", p.display());
+                }
+            }
+
+            let llama_libs_kind = if use_shared_libs { "dylib" } else { "static" };
+            let llama_libs = extract_prebuilt_lib_names(&prebuilt_dir, use_shared_libs, &target);
+            if llama_libs.is_empty() {
+                panic!(
+                    "LLAMA_PREBUILT_DIR was set to '{}' but no linkable libraries were found",
+                    prebuilt_dir.display()
+                );
+            }
+
+            for lib in llama_libs {
+                println!("cargo:rustc-link-lib={llama_libs_kind}={lib}");
+            }
+
+            // Platform runtime links (same as normal CMake path).
+            if cfg!(feature = "openmp") && (target.contains("gnu") || target.contains("musl")) {
+                println!("cargo:rustc-link-lib=gomp");
+            }
+            if target.contains("apple") {
+                println!("cargo:rustc-link-lib=framework=Foundation");
+                if cfg!(feature = "metal") {
+                    println!("cargo:rustc-link-lib=framework=Metal");
+                    println!("cargo:rustc-link-lib=framework=MetalKit");
+                }
+                println!("cargo:rustc-link-lib=framework=Accelerate");
+                println!("cargo:rustc-link-lib=c++");
+            }
+            if target.contains("linux") {
+                println!("cargo:rustc-link-lib=dylib=stdc++");
+            }
+            if target.contains("windows") && !target.contains("msvc") {
+                println!("cargo:rustc-link-lib=static=stdc++");
+                println!("cargo:rustc-link-lib=static=winpthread");
+            }
+            if target.contains("windows") {
+                println!("cargo:rustc-link-lib=advapi32");
+            }
+            if target.contains("apple") {
+                let clang_bin = env::var("CC").unwrap_or_else(|_| "clang".to_owned());
+                if let Some(path) = macos_link_search_path(&clang_bin) {
+                    println!("cargo:rustc-link-lib=clang_rt.osx");
+                    println!("cargo:rustc-link-search={}", path);
+                }
+            }
+
+            // Copy dynamic runtime assets next to test/example/app outputs.
+            if use_shared_libs {
+                let libs_assets = extract_prebuilt_shared_assets(&prebuilt_dir, &target);
+                for asset in libs_assets {
+                    let filename = asset
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .expect("invalid prebuilt asset file name");
+
+                    for dst in [
+                        target_dir.join(filename),
+                        target_dir.join("examples").join(filename),
+                        target_dir.join("deps").join(filename),
+                    ] {
+                        if let Some(parent) = dst.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if !dst.exists() {
+                            let _ = std::fs::hard_link(&asset, &dst)
+                                .or_else(|_| std::fs::copy(&asset, &dst).map(|_| ()));
+                        }
+                    }
+                }
+            }
+
+            return;
+        }
+        panic!(
+            "LLAMA_PREBUILT_DIR was set to '{}' but that path does not exist",
+            prebuilt_dir.display()
+        );
+    }
 
     // ── CMake build ──────────────────────────────────────────────────────────
 
@@ -896,7 +1114,11 @@ fn main() {
             .map(PathBuf::from)
             .filter(|p| p.exists())
             .or_else(|| {
-                let exe = if cfg!(windows) { "sccache.exe" } else { "sccache" };
+                let exe = if cfg!(windows) {
+                    "sccache.exe"
+                } else {
+                    "sccache"
+                };
                 env::var_os("PATH").and_then(|paths| {
                     std::env::split_paths(&paths)
                         .map(|d| d.join(exe))

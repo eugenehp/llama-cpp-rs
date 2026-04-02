@@ -52,6 +52,30 @@ cargo run -p openai-server -- \
     hf-model bartowski/Llama-3.2-3B-Instruct-GGUF Llama-3.2-3B-Instruct-Q4_K_M.gguf
 ```
 
+### Using prebuilt native libraries (skip CMake compile)
+
+`llama-cpp-sys-4` can consume precompiled llama/ggml libraries via env vars.
+This is useful for CI pipelines that publish native artifacts once and reuse
+them in downstream repos (for example, speeding up a separate app build).
+
+```bash
+# Directory containing prebuilt libs in one of:
+#   <dir>, <dir>/lib, <dir>/lib64, <dir>/bin
+export LLAMA_PREBUILT_DIR=/path/to/prebuilt
+
+# Optional: force dynamic linking mode for prebuilt artifacts.
+# Defaults to the crate's normal link mode for the active feature set.
+# export LLAMA_PREBUILT_SHARED=1
+
+cargo build -p your-app --features "q1,vulkan"
+```
+
+Notes:
+- `q1` compatibility is determined by the prebuilt artifact itself — publish
+  separate artifacts per feature/backend tuple (`q1+vulkan`, `q1+metal`, ...).
+- `build.rs` still generates Rust bindings, but skips the expensive CMake
+  compile when `LLAMA_PREBUILT_DIR` is set.
+
 ```bash
 # Chat completion
 curl http://127.0.0.1:8080/v1/chat/completions \
