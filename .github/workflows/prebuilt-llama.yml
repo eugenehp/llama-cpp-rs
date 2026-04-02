@@ -416,37 +416,115 @@ jobs:
           - label: webgpu
             suffix: webgpu
             features: webgpu
+            webgpu: true
+            opencl: false
+            cuda: false
+            hip: false
           - label: q1+webgpu
             suffix: q1-webgpu
             features: q1,webgpu
+            webgpu: true
+            opencl: false
+            cuda: false
+            hip: false
           - label: opencl
             suffix: opencl
             features: opencl
+            webgpu: false
+            opencl: true
+            cuda: false
+            hip: false
           - label: q1+opencl
             suffix: q1-opencl
             features: q1,opencl
+            webgpu: false
+            opencl: true
+            cuda: false
+            hip: false
           - label: cuda
             suffix: cuda
             features: cuda
+            webgpu: false
+            opencl: false
+            cuda: true
+            hip: false
           - label: q1+cuda
             suffix: q1-cuda
             features: q1,cuda
+            webgpu: false
+            opencl: false
+            cuda: true
+            hip: false
           - label: hip
             suffix: hip
             features: hip
+            webgpu: false
+            opencl: false
+            cuda: false
+            hip: true
           - label: q1+hip
             suffix: q1-hip
             features: q1,hip
+            webgpu: false
+            opencl: false
+            cuda: false
+            hip: true
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Install base dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake git libclang-dev libssl-dev
+
+      - name: Install WebGPU dependencies
+        if: matrix.webgpu
+        run: |
+          sudo apt-get install -y libdawn-dev || true
+          DAWN_CMAKE_DIR="$(dpkg -L libdawn-dev 2>/dev/null | grep -E 'DawnConfig\.cmake$' | head -n1 || true)"
+          if [[ -n "$DAWN_CMAKE_DIR" ]]; then
+            DAWN_CMAKE_PREFIX="$(dirname "$(dirname "$DAWN_CMAKE_DIR")")"
+            echo "CMAKE_PREFIX_PATH=$DAWN_CMAKE_PREFIX${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install OpenCL dependencies
+        if: matrix.opencl
+        run: |
+          sudo apt-get install -y ocl-icd-opencl-dev opencl-headers clinfo || true
+
+      - name: Install CUDA dependencies
+        if: matrix.cuda
+        run: |
+          sudo apt-get install -y nvidia-cuda-toolkit || true
+
+      - name: Install HIP/ROCm dependencies
+        if: matrix.hip
+        run: |
+          sudo apt-get install -y rocm-hip-sdk hipcc || true
+          if [[ -d /opt/rocm ]]; then
+            echo "ROCM_PATH=/opt/rocm" >> "$GITHUB_ENV"
+            echo "HIP_PATH=/opt/rocm/hip" >> "$GITHUB_ENV"
+            echo "/opt/rocm/bin" >> "$GITHUB_PATH"
+          fi
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.0
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-linux-exp-${{ matrix.suffix }}-v1
+          cache-targets: false
+          cache-on-failure: false
+
       - name: Build (experimental smoke)
         shell: bash
         run: |
@@ -465,35 +543,93 @@ jobs:
           - label: x64 opencl
             target: x86_64-pc-windows-msvc
             features: opencl
+            opencl: true
+            cuda: false
+            arm64: false
           - label: x64 q1+opencl
             target: x86_64-pc-windows-msvc
             features: q1,opencl
+            opencl: true
+            cuda: false
+            arm64: false
           - label: x64 cuda
             target: x86_64-pc-windows-msvc
             features: cuda
+            opencl: false
+            cuda: true
+            arm64: false
           - label: x64 q1+cuda
             target: x86_64-pc-windows-msvc
             features: q1,cuda
+            opencl: false
+            cuda: true
+            arm64: false
           - label: arm64 cpu
             target: aarch64-pc-windows-msvc
             features: ""
+            opencl: false
+            cuda: false
+            arm64: true
           - label: arm64 q1
             target: aarch64-pc-windows-msvc
             features: q1
+            opencl: false
+            cuda: false
+            arm64: true
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.0
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-windows-exp-${{ matrix.target }}-${{ matrix.features }}-v1
+          cache-targets: false
+          cache-on-failure: false
+
+      - name: Install OpenCL SDK (experimental)
+        if: matrix.opencl
+        shell: powershell
+        run: |
+          choco install intel-opencl-sdk --yes --no-progress || choco install opencl --yes --no-progress || true
+
+      - name: Install CUDA toolkit (experimental)
+        if: matrix.cuda
+        shell: powershell
+        run: |
+          choco install cuda --yes --no-progress || true
+
+      - name: Install LLVM for ARM64 clang (experimental)
+        if: matrix.arm64
+        uses: KyleMayes/install-llvm-action@v2.0.9
+        with:
+          version: "19"
+          directory: C:\LLVM
+
+      - name: Export ARM64 clang toolchain env (experimental)
+        if: matrix.arm64
+        shell: powershell
+        run: |
+          "CC=C:\LLVM\bin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "CXX=C:\LLVM\bin\clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build (experimental smoke)
         shell: bash
+        env:
+          CC: ${{ env.CC }}
+          CXX: ${{ env.CXX }}
         run: |
           set -euo pipefail
           if [[ -n "${{ matrix.features }}" ]]; then
