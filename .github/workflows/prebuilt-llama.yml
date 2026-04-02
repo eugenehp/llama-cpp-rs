@@ -38,37 +38,141 @@ jobs:
             features: ""
             vulkan: false
             webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
           - label: q1
             suffix: q1
             features: q1
             vulkan: false
             webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
           - label: vulkan
             suffix: vulkan
             features: vulkan
             vulkan: true
             webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
           - label: q1+vulkan
             suffix: q1-vulkan
             features: q1,vulkan
             vulkan: true
             webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
           - label: webgpu
             suffix: webgpu
             features: webgpu
             vulkan: false
             webgpu: true
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
           - label: q1+webgpu
             suffix: q1-webgpu
             features: q1,webgpu
             vulkan: false
             webgpu: true
+            blas: false
+            opencl: false
+            cuda: false
+            hip: false
             experimental: false
+          - label: blas
+            suffix: blas
+            features: blas
+            vulkan: false
+            webgpu: false
+            blas: true
+            opencl: false
+            cuda: false
+            hip: false
+            experimental: false
+          - label: q1+blas
+            suffix: q1-blas
+            features: q1,blas
+            vulkan: false
+            webgpu: false
+            blas: true
+            opencl: false
+            cuda: false
+            hip: false
+            experimental: false
+          - label: opencl
+            suffix: opencl
+            features: opencl
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: true
+            cuda: false
+            hip: false
+            experimental: true
+          - label: q1+opencl
+            suffix: q1-opencl
+            features: q1,opencl
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: true
+            cuda: false
+            hip: false
+            experimental: true
+          - label: cuda
+            suffix: cuda
+            features: cuda
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: false
+            cuda: true
+            hip: false
+            experimental: true
+          - label: q1+cuda
+            suffix: q1-cuda
+            features: q1,cuda
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: false
+            cuda: true
+            hip: false
+            experimental: true
+          - label: hip
+            suffix: hip
+            features: hip
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: true
+            experimental: true
+          - label: q1+hip
+            suffix: q1-hip
+            features: q1,hip
+            vulkan: false
+            webgpu: false
+            blas: false
+            opencl: false
+            cuda: false
+            hip: true
+            experimental: true
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
@@ -102,6 +206,26 @@ jobs:
         run: |
           # Dawn package used by ggml-webgpu's non-emscripten CMake path.
           sudo apt-get install -y libdawn-dev || true
+
+      - name: Install BLAS dependencies
+        if: matrix.blas
+        run: |
+          sudo apt-get install -y libopenblas-dev
+
+      - name: Install OpenCL dependencies
+        if: matrix.opencl
+        run: |
+          sudo apt-get install -y ocl-icd-opencl-dev opencl-headers || true
+
+      - name: Install CUDA dependencies (experimental)
+        if: matrix.cuda
+        run: |
+          sudo apt-get install -y nvidia-cuda-toolkit || true
+
+      - name: Install HIP/ROCm dependencies (experimental)
+        if: matrix.hip
+        run: |
+          sudo apt-get install -y rocm-hip-sdk hipcc || true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -180,28 +304,93 @@ jobs:
   windows-prebuilt:
     name: Windows prebuilt (${{ matrix.label }})
     runs-on: windows-latest
+    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - label: cpu
+          - label: x64 cpu
+            target: x86_64-pc-windows-msvc
             suffix: cpu
             features: ""
             vulkan: false
-          - label: q1
+            cuda: false
+            opencl: false
+            experimental: false
+          - label: x64 q1
+            target: x86_64-pc-windows-msvc
             suffix: q1
             features: q1
             vulkan: false
-          - label: vulkan
+            cuda: false
+            opencl: false
+            experimental: false
+          - label: x64 vulkan
+            target: x86_64-pc-windows-msvc
             suffix: vulkan
             features: vulkan
             vulkan: true
-          - label: q1+vulkan
+            cuda: false
+            opencl: false
+            experimental: false
+          - label: x64 q1+vulkan
+            target: x86_64-pc-windows-msvc
             suffix: q1-vulkan
             features: q1,vulkan
             vulkan: true
+            cuda: false
+            opencl: false
+            experimental: false
+          - label: x64 cuda
+            target: x86_64-pc-windows-msvc
+            suffix: cuda
+            features: cuda
+            vulkan: false
+            cuda: true
+            opencl: false
+            experimental: true
+          - label: x64 q1+cuda
+            target: x86_64-pc-windows-msvc
+            suffix: q1-cuda
+            features: q1,cuda
+            vulkan: false
+            cuda: true
+            opencl: false
+            experimental: true
+          - label: x64 opencl
+            target: x86_64-pc-windows-msvc
+            suffix: opencl
+            features: opencl
+            vulkan: false
+            cuda: false
+            opencl: true
+            experimental: true
+          - label: x64 q1+opencl
+            target: x86_64-pc-windows-msvc
+            suffix: q1-opencl
+            features: q1,opencl
+            vulkan: false
+            cuda: false
+            opencl: true
+            experimental: true
+          - label: arm64 cpu
+            target: aarch64-pc-windows-msvc
+            suffix: cpu
+            features: ""
+            vulkan: false
+            cuda: false
+            opencl: false
+            experimental: true
+          - label: arm64 q1
+            target: aarch64-pc-windows-msvc
+            suffix: q1
+            features: q1
+            vulkan: false
+            cuda: false
+            opencl: false
+            experimental: true
     env:
-      TARGET_TRIPLE: x86_64-pc-windows-msvc
+      TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -214,6 +403,8 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc,aarch64-pc-windows-msvc
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -235,6 +426,18 @@ jobs:
           if (-not $sdk) { throw 'Vulkan SDK not found' }
           "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$($sdk.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install CUDA toolkit (experimental)
+        if: matrix.cuda
+        shell: powershell
+        run: |
+          choco install cuda --yes --no-progress
+
+      - name: Install OpenCL SDK (experimental)
+        if: matrix.opencl
+        shell: powershell
+        run: |
+          choco install opencl-sdk --yes --no-progress
 
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash

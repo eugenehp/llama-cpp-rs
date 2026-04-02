@@ -781,11 +781,14 @@ fn main() {
         };
         // C++ feature flags that affect the compiled output.
         let cpp_features = format!(
-            "cuda={},metal={},vulkan={},webgpu={},openmp={},rpc={},q1={},native={},shared={}",
+            "cuda={},metal={},vulkan={},webgpu={},blas={},opencl={},hip={},openmp={},rpc={},q1={},native={},shared={}",
             cfg!(feature = "cuda"),
             cfg!(feature = "metal"),
             cfg!(feature = "vulkan"),
             cfg!(feature = "webgpu"),
+            cfg!(feature = "blas"),
+            cfg!(feature = "opencl"),
+            cfg!(feature = "hip"),
             cfg!(feature = "openmp"),
             cfg!(feature = "rpc"),
             cfg!(feature = "q1"),
@@ -1461,6 +1464,24 @@ fn main() {
         config.define("GGML_WEBGPU", "ON");
     } else {
         config.define("GGML_WEBGPU", "OFF");
+    }
+
+    if cfg!(feature = "blas") {
+        config.define("GGML_BLAS", "ON");
+    } else {
+        config.define("GGML_BLAS", "OFF");
+    }
+
+    if cfg!(feature = "opencl") {
+        config.define("GGML_OPENCL", "ON");
+    } else {
+        config.define("GGML_OPENCL", "OFF");
+    }
+
+    if cfg!(feature = "hip") {
+        config.define("GGML_HIP", "ON");
+    } else {
+        config.define("GGML_HIP", "OFF");
     }
 
     if cfg!(feature = "cuda") && !cfg!(target_os = "macos") {
