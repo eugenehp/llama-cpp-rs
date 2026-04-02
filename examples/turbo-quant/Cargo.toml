@@ -1,11 +1,11 @@
 [package]
 name = "turbo-quant"
-version = "0.2.20"
+version = "0.2.21"
 edition = "2021"
 description = "TurboQuant demo: attention rotation for better KV-cache quantization"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }
 anyhow     = { workspace = true }
 clap       = { workspace = true, features = ["derive"] }
 
