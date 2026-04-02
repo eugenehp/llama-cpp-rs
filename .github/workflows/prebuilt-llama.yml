@@ -82,7 +82,7 @@ jobs:
             opencl: false
             cuda: false
             hip: false
-            experimental: false
+            experimental: true
           - label: q1+webgpu
             suffix: q1-webgpu
             features: q1,webgpu
@@ -92,7 +92,7 @@ jobs:
             opencl: false
             cuda: false
             hip: false
-            experimental: false
+            experimental: true
           - label: blas
             suffix: blas
             features: blas
@@ -521,22 +521,6 @@ jobs:
             target: aarch64-apple-darwin
             suffix: q1-metal
             features: q1,metal
-          - label: x64 cpu
-            target: x86_64-apple-darwin
-            suffix: cpu
-            features: ""
-          - label: x64 q1
-            target: x86_64-apple-darwin
-            suffix: q1
-            features: q1
-          - label: x64 metal
-            target: x86_64-apple-darwin
-            suffix: metal
-            features: metal
-          - label: x64 q1+metal
-            target: x86_64-apple-darwin
-            suffix: q1-metal
-            features: q1,metal
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
@@ -552,7 +536,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
