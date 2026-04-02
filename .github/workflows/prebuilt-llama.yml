@@ -46,7 +46,6 @@ jobs:
         run: |
           cargo build -p llama-cpp-4 \
             --release \
-            --locked \
             --target "${TARGET_TRIPLE}" \
             --no-default-features \
             --features "${FEATURES}"
@@ -121,7 +120,6 @@ jobs:
         run: |
           cargo build -p llama-cpp-4 \
             --release \
-            --locked \
             --target "${TARGET_TRIPLE}" \
             --no-default-features \
             --features "${FEATURES}"
