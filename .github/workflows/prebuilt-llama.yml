@@ -317,7 +317,7 @@ jobs:
 
           tar --force-local -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
           ls -lh "$RUNNER_TEMP/$ASSET_NAME"
-          tar -tzf "$RUNNER_TEMP/$ASSET_NAME"
+          tar --force-local -tzf "$RUNNER_TEMP/$ASSET_NAME"
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
