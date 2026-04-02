@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.2.22"
+version = "0.2.23"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
@@ -17,6 +17,9 @@ include = [
 
     # Feature patches (applied at build time to the llama.cpp copy in OUT_DIR)
     "/patches",
+
+    # test files touched by the q1 patch
+    "/llama.cpp/tests/test-quantize-fns.cpp",
 
     # llama.cpp top-level
     "/llama.cpp/CMakeLists.txt",
