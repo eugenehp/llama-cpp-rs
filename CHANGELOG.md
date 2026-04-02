@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.21] - 2026-04-02
+
+### Added
+
+- **`q1` Cargo feature** — opt-in support for PrismML's 1-bit quantization formats,
+  compatible with [Bonsai](https://huggingface.co/prism-ml/Bonsai-1.7B-gguf) and other
+  models from [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp).
+  Enable with `--features q1`; the default build is completely unaffected.
+  - `LlamaFtype::MostlyQ1_0` — 1.5 bpw binary quantization (block size 32)
+  - `LlamaFtype::MostlyQ1_0_G128` — 1.125 bpw binary quantization (block size 128)
+  - `GgmlType::Q1_0` / `GgmlType::Q1_0_G128` — raw tensor type constants
+  - CPU (x86 AVX/SSE + ARM NEON), Metal, and CUDA backend kernels included
+  - Type IDs follow PrismML's GGUF numbering (`Q1_0 = 40`, `Q1_0_g128 = 41`) for
+    wire-level compatibility with existing Bonsai model files
+  - `GGML_TYPE_NVFP4` is renumbered to 42 within `q1` builds to avoid collision
+- **`llama-cpp-sys-4`: patch infrastructure** — `build.rs` now supports a
+  `patches/` directory of `.patch` files applied (in alphabetical order) to the
+  copied llama.cpp source before CMake. Patches are only applied when their
+  corresponding Cargo feature is active. The patch hash is mixed into the
+  source-version sentinel so updating a patch always triggers a clean rebuild.
+- **Build performance improvements** — cold builds with a new feature flag are
+  now ~15× faster:
+  - **sccache auto-detection**: `build.rs` finds `sccache` on PATH (or
+    `SCCACHE_PATH`) and sets `CMAKE_C/CXX_COMPILER_LAUNCHER` automatically.
+    Toggling `--features q1` recompiles only the ~5 patched files; the other
+    459 are instant cache hits.
+  - **Shared CMake cache directory**: the CMake build tree is now keyed by
+    `(source-commit, active C++ features)` and stored under
+    `target/llama-cmake-cache/`. Cargo's OUT_DIR churn no longer forces a full
+    CMake rebuild when the feature set is unchanged.
+  - **Hardlink-based source copy**: `copy_folder` now uses `cp -rl` (hardlinks)
+    instead of `cp -rf`, making the 131 MB source copy essentially instant.
+    CMake writes only into its own `build/` subdirectory, so the linked source
+    files are never modified.
+  - Set `LLAMA_NO_SCCACHE=1` to opt out, or `SCCACHE_PATH=/path/to/sccache` to
+    point at a non-PATH installation.
+- **`test_q1` integration test suite** — 17 tests covering enum values,
+  model loading, tokenization, forward pass, and autoregressive generation,
+  verified against the real `Bonsai-1.7B.gguf` model.
+
 ## [0.2.20] - 2026-04-01
 
 ### Added

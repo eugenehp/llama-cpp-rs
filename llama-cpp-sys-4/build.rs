@@ -28,13 +28,73 @@ fn get_cargo_target_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Erro
     Ok(target_dir.to_path_buf())
 }
 
+/// Compute a short hash over the contents of all `*.patch` files in `patches_dir`.
+/// Returns an empty string when the directory does not exist or contains no patches.
+fn patches_hash(patches_dir: &Path) -> String {
+    if !patches_dir.is_dir() {
+        return String::new();
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    entries.sort();
+    let mut hasher_val: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+    for path in &entries {
+        if path.extension().map(|e| e == "patch").unwrap_or(false) {
+            if let Ok(bytes) = std::fs::read(path) {
+                for &b in &bytes {
+                    hasher_val ^= b as u64;
+                    hasher_val = hasher_val.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+    }
+    format!("{:016x}", hasher_val)
+}
+
+/// Apply all `*.patch` files in `patches_dir` (sorted alphabetically) to `dst`.
+/// Uses the `patch -p1` command, which must be available on PATH.
+/// Skips the patches directory entirely when it does not exist or is empty.
+fn apply_patches(patches_dir: &Path, dst: &Path) {
+    if !patches_dir.is_dir() {
+        return;
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
+        .expect("failed to read patches dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e == "patch").unwrap_or(false))
+        .collect();
+    entries.sort();
+    for patch in &entries {
+        println!("cargo:warning=Applying patch: {}", patch.display());
+        let status = Command::new("patch")
+            .arg("-p1")
+            .arg("--forward")
+            .arg("--directory")
+            .arg(dst)
+            .arg("--input")
+            .arg(patch)
+            .status()
+            .unwrap_or_else(|e| panic!("failed to run `patch` for {}: {e}", patch.display()));
+        if !status.success() {
+            panic!(
+                "Patch {} failed to apply. The patch may need rebasing against the \
+                 current llama.cpp submodule commit.",
+                patch.display()
+            );
+        }
+    }
+}
+
 /// Return a string that uniquely identifies the current state of the llama.cpp
 /// submodule so we know when a re-copy is needed.
 ///
 /// Priority:
 /// 1. The commit hash from the submodule's git HEAD (most precise).
 /// 2. The mtime of `CMakeLists.txt` (fallback for non-git trees).
-fn llama_src_version(src: &Path) -> String {
+fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
+    let ph = patches_hash(patches_dir);
     // In a git submodule the `.git` entry is a *file* whose content is:
     //   gitdir: ../../.git/modules/llama-cpp-sys-4/llama.cpp
     let git_file = src.join(".git");
@@ -50,32 +110,51 @@ fn llama_src_version(src: &Path) -> String {
                         let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
                         let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
                         if let Ok(hash) = std::fs::read_to_string(commit_path) {
-                            return hash.trim().to_owned();
+                            return format!("{}:{}", hash.trim(), ph);
                         }
                     }
-                    return head.to_owned();
+                    return format!("{}:{}", head, ph);
                 }
             }
         }
     }
     // Fallback: modification time of the top-level CMakeLists.txt.
-    src.join("CMakeLists.txt")
+    let base = src
+        .join("CMakeLists.txt")
         .metadata()
         .and_then(|m| m.modified())
         .map(|t| format!("{t:?}"))
-        .unwrap_or_else(|_| "unknown".to_owned())
+        .unwrap_or_else(|_| "unknown".to_owned());
+    // Mix in patch contents so that updating patches forces a re-copy+re-patch.
+    format!("{}:{}", base, patches_hash(patches_dir))
 }
 
 /// Copy a directory tree.  This runs on the *host*, so cfg!(unix/windows) is correct here.
+/// Copy a directory tree using hardlinks where possible (same-device),
+/// falling back to a regular copy.
+///
+/// Hardlinks are essentially instant (no data is duplicated) and the CMake
+/// build writes into its own `build/` subdirectory, so it never modifies the
+/// linked source files.
 fn copy_folder(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("Failed to create dst directory");
     if cfg!(unix) {
-        std::process::Command::new("cp")
-            .arg("-rf")
+        // Try cp -rl (hardlink) first; fall back to cp -rf if the flag is not
+        // supported (e.g. older macOS cp, cross-device copies).
+        let status = std::process::Command::new("cp")
+            .arg("-rl")
             .arg(src)
             .arg(dst.parent().unwrap())
-            .status()
-            .expect("Failed to execute cp command");
+            .status();
+        let ok = status.map(|s| s.success()).unwrap_or(false);
+        if !ok {
+            std::process::Command::new("cp")
+                .arg("-rf")
+                .arg(src)
+                .arg(dst.parent().unwrap())
+                .status()
+                .expect("Failed to execute cp command");
+        }
     } else if cfg!(windows) {
         std::process::Command::new("robocopy.exe")
             .arg("/e")
@@ -568,6 +647,59 @@ fn main() {
         out_dir.clone()
     };
 
+    // ── Shared CMake build cache (non-Windows) ────────────────────────────────
+    // Cargo assigns a different OUT_DIR hash for every distinct feature
+    // combination, so toggling --features q1 lands in a brand-new empty dir
+    // and forces a full CMake rebuild (~10 min).  To avoid this we redirect
+    // the CMake install/build tree to a shared directory keyed by:
+    //   <source-commit> + <active C++ feature flags>
+    // so that different Cargo OUT_DIRs that represent the same C++ build can
+    // share the compiled artefacts.  The OUT_DIR is still used for bindgen
+    // output and the source copy; only the CMake build tree is shared.
+    //
+    // Skip on Windows because the MAX_PATH workaround already handles this
+    // with a short LOCALAPPDATA path derived from OUT_DIR.
+    let cmake_out_dir: PathBuf = if !target.contains("windows") {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        // Source version is the submodule commit + patches hash, already
+        // computed later; recompute it here so we can use it as the cache key.
+        let src_ver = {
+            let patches_dir_tmp = Path::new(&manifest_dir).join("patches");
+            llama_src_version(&llama_src, &patches_dir_tmp)
+        };
+        // C++ feature flags that affect the compiled output.
+        let cpp_features = format!(
+            "cuda={},metal={},vulkan={},openmp={},rpc={},q1={},native={},shared={}",
+            cfg!(feature = "cuda"),
+            cfg!(feature = "metal"),
+            cfg!(feature = "vulkan"),
+            cfg!(feature = "openmp"),
+            cfg!(feature = "rpc"),
+            cfg!(feature = "q1"),
+            cfg!(feature = "native"),
+            build_shared_libs,
+        );
+        let mut hasher = DefaultHasher::new();
+        src_ver.hash(&mut hasher);
+        cpp_features.hash(&mut hasher);
+        target.hash(&mut hasher);
+        let hash = hasher.finish();
+        // Place the shared cmake dir in the Cargo target directory so it is
+        // cleaned by `cargo clean` and lives alongside other build artefacts.
+        let shared = target_dir
+            .parent() // target/<profile> → target
+            .unwrap_or(&target_dir)
+            .join("llama-cmake-cache")
+            .join(format!("{:016x}", hash));
+        std::fs::create_dir_all(&shared)
+            .expect("failed to create shared cmake cache dir");
+        debug_log!("Shared cmake dir: {}", shared.display());
+        shared
+    } else {
+        cmake_out_dir // Windows already set above
+    };
+
     debug_log!("HOST: {}", host);
     debug_log!("TARGET: {}", target);
     debug_log!("CROSS_COMPILING: {}", is_cross);
@@ -579,10 +711,11 @@ fn main() {
     // ── Source copy with version tracking ────────────────────────────────────
     // The copy only ran when the OUT_DIR was fresh, so updating the submodule
     // (which adds/removes files like ggml-cpu/) would silently use stale data.
-    // We now store the current submodule HEAD in a sentinel file and re-copy
-    // whenever it changes.
+    // We now store the current submodule HEAD (plus a hash of any local patches)
+    // in a sentinel file and re-copy+re-patch whenever either changes.
+    let patches_dir = Path::new(&manifest_dir).join("patches");
     let sentinel = out_dir.join(".llama-src-version");
-    let current_version = llama_src_version(&llama_src);
+    let current_version = llama_src_version(&llama_src, &patches_dir);
     let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
     let needs_copy = !llama_dst.exists() || stored_version.trim() != current_version.trim();
     if needs_copy {
@@ -592,10 +725,21 @@ fn main() {
         }
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
+        // Apply local patches (only those gated by active Cargo features).
+        if cfg!(feature = "q1") {
+            let q1_patch = patches_dir.join("0001-q1-quantization.patch");
+            if q1_patch.exists() {
+                let single_dir = out_dir.join("patches-q1");
+                std::fs::create_dir_all(&single_dir).ok();
+                std::fs::copy(&q1_patch, single_dir.join("0001-q1-quantization.patch"))
+                    .expect("failed to stage q1 patch");
+                apply_patches(&single_dir, &llama_dst);
+            }
+        }
         std::fs::write(&sentinel, &current_version)
             .expect("failed to write source version sentinel");
     }
-    // Tell cargo to rerun this script when the submodule HEAD changes.
+    // Tell cargo to rerun when the submodule HEAD changes.
     // In a git submodule, llama.cpp/.git is a file pointing at the real HEAD.
     let submodule_git = llama_src.join(".git");
     if submodule_git.is_file() {
@@ -608,6 +752,10 @@ fn main() {
                 }
             }
         }
+    }
+    // Rerun when any patch file is added, removed, or modified.
+    if patches_dir.is_dir() {
+        println!("cargo:rerun-if-changed={}", patches_dir.display());
     }
     // Speed up build
     // TODO: Audit that the environment access only happens in single-threaded code.
@@ -735,6 +883,32 @@ fn main() {
     // ── CMake build ──────────────────────────────────────────────────────────
 
     let mut config = Config::new(&llama_dst);
+
+    // ── sccache launcher ────────────────────────────────────────────────────
+    // When sccache is on PATH (or SCCACHE_PATH is set) and the caller has not
+    // explicitly disabled it (LLAMA_NO_SCCACHE=1), wrap every C/C++ compiler
+    // call with sccache.  This makes feature-flag toggles essentially free
+    // after the first build: toggling --features q1 only recompiles the ~5
+    // files changed by the patch; the other 459 are cache hits.
+    if env::var("LLAMA_NO_SCCACHE").as_deref() != Ok("1") {
+        let sccache = env::var("SCCACHE_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .or_else(|| {
+                let exe = if cfg!(windows) { "sccache.exe" } else { "sccache" };
+                env::var_os("PATH").and_then(|paths| {
+                    std::env::split_paths(&paths)
+                        .map(|d| d.join(exe))
+                        .find(|p| p.exists())
+                })
+            });
+        if let Some(sc) = sccache {
+            debug_log!("sccache found at {}", sc.display());
+            config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
+            config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
+        }
+    }
 
     // Would require extra source files to pointlessly
     // be included in what's uploaded to and downloaded from

@@ -104,6 +104,12 @@ pub enum LlamaFtype {
     MostlyMXFP4Moe = 38,
     /// NVFP4
     MostlyNVFP4 = 39,
+    /// Q1_0 – 1.5 bpw binary (block size 32)
+    #[cfg(feature = "q1")]
+    MostlyQ1_0 = 40,
+    /// Q1_0_g128 – 1.125 bpw binary (block size 128)
+    #[cfg(feature = "q1")]
+    MostlyQ1_0_G128 = 41,
 }
 
 impl LlamaFtype {
@@ -145,6 +151,10 @@ impl LlamaFtype {
             Self::MostlyTQ2_0 => "TQ2_0",
             Self::MostlyMXFP4Moe => "MXFP4_MOE",
             Self::MostlyNVFP4 => "NVFP4",
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0 => "Q1_0",
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0_G128 => "Q1_0_g128",
         }
     }
 
@@ -186,6 +196,10 @@ impl LlamaFtype {
             Self::MostlyTQ2_0 => " 2.06 bpw ternary",
             Self::MostlyMXFP4Moe => "MXFP4 MoE layers",
             Self::MostlyNVFP4 => "NVFP4",
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0 => " 1.50 bpw — binary Q1_0 (block 32)",
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0_G128 => " 1.125 bpw — binary Q1_0_g128 (block 128)",
         }
     }
 
@@ -235,6 +249,10 @@ impl LlamaFtype {
             "TQ2_0" => Some(Self::MostlyTQ2_0),
             "MXFP4_MOE" => Some(Self::MostlyMXFP4Moe),
             "NVFP4" => Some(Self::MostlyNVFP4),
+            #[cfg(feature = "q1")]
+            "Q1_0" => Some(Self::MostlyQ1_0),
+            #[cfg(feature = "q1")]
+            "Q1_0_G128" | "Q1_0_g128" => Some(Self::MostlyQ1_0_G128),
             _ => None,
         }
     }
@@ -277,6 +295,10 @@ impl LlamaFtype {
             Self::MostlyTQ2_0,
             Self::MostlyMXFP4Moe,
             Self::MostlyNVFP4,
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0,
+            #[cfg(feature = "q1")]
+            Self::MostlyQ1_0_G128,
         ]
     }
 }
@@ -338,7 +360,16 @@ pub enum GgmlType {
     TQ1_0 = 34,
     TQ2_0 = 35,
     MXFP4 = 39,
+    /// NVFP4 — renumbered to 42 when the `q1` feature is active (40 and 41
+    /// are taken by Q1_0 / Q1_0_g128 for PrismML GGUF compatibility).
+    #[cfg(not(feature = "q1"))]
     NVFP4 = 40,
+    #[cfg(feature = "q1")]
+    Q1_0 = 40,
+    #[cfg(feature = "q1")]
+    Q1_0_G128 = 41,
+    #[cfg(feature = "q1")]
+    NVFP4 = 42,
 }
 
 impl From<GgmlType> for llama_cpp_sys_4::ggml_type {
@@ -383,7 +414,14 @@ impl TryFrom<llama_cpp_sys_4::ggml_type> for GgmlType {
             34 => Ok(Self::TQ1_0),
             35 => Ok(Self::TQ2_0),
             39 => Ok(Self::MXFP4),
+            #[cfg(not(feature = "q1"))]
             40 => Ok(Self::NVFP4),
+            #[cfg(feature = "q1")]
+            40 => Ok(Self::Q1_0),
+            #[cfg(feature = "q1")]
+            41 => Ok(Self::Q1_0_G128),
+            #[cfg(feature = "q1")]
+            42 => Ok(Self::NVFP4),
             _ => Err(v),
         }
     }

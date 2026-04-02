@@ -1,12 +1,12 @@
 [package]
 name = "openai-server"
-version = "0.2.20"
+version = "0.2.21"
 edition = "2021"
 publish = false
 description = "Minimal OpenAI-compatible chat completion server"
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.20" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }
 actix-web = "4"
 actix-multipart = "0.7"
 serde = { version = "1", features = ["derive"] }
