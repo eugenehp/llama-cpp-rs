@@ -1,0 +1,168 @@
+name: Build prebuilt llama artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: Upload artifacts to the selected tag release
+        type: boolean
+        default: false
+      tag:
+        description: Existing tag to upload assets to (workflow_dispatch only)
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  linux-q1-vulkan:
+    name: Linux prebuilt (q1 + vulkan)
+    runs-on: ubuntu-24.04
+    env:
+      TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      FEATURES: q1,vulkan
+      ASSET_NAME: llama-prebuilt-linux-x86_64-unknown-linux-gnu-q1-vulkan.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config cmake git \
+            libclang-dev libssl-dev \
+            libvulkan-dev glslang-tools
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build llama-cpp-4 (prebuilt target)
+        run: |
+          cargo build -p llama-cpp-4 \
+            --release \
+            --locked \
+            --target "${TARGET_TRIPLE}" \
+            --no-default-features \
+            --features "${FEATURES}"
+
+      - name: Collect prebuilt libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/prebuilt"
+          mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+
+          while IFS= read -r -d '' f; do
+            rel="${f##*/out/}"
+            subdir="${rel%%/*}"
+            base="$(basename "$f")"
+            case "$subdir" in
+              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            esac
+          done < <(find target -type f \( \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.so" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.so" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/bin/*.so" \
+          \) -print0)
+
+          cat > "$ROOT/metadata.json" <<EOF
+          {"target":"${TARGET_TRIPLE}","features":"${FEATURES}","sha":"${GITHUB_SHA}"}
+          EOF
+
+          tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+
+  windows-q1-vulkan:
+    name: Windows prebuilt (q1 + vulkan)
+    runs-on: windows-latest
+    env:
+      TARGET_TRIPLE: x86_64-pc-windows-msvc
+      FEATURES: q1,vulkan
+      ASSET_NAME: llama-prebuilt-windows-x86_64-pc-windows-msvc-q1-vulkan.tar.gz
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Vulkan SDK
+        shell: powershell
+        run: |
+          choco install vulkan-sdk --yes --no-progress
+          $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $sdk) { throw 'Vulkan SDK not found' }
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($sdk.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build llama-cpp-4 (prebuilt target)
+        shell: bash
+        run: |
+          cargo build -p llama-cpp-4 \
+            --release \
+            --locked \
+            --target "${TARGET_TRIPLE}" \
+            --no-default-features \
+            --features "${FEATURES}"
+
+      - name: Collect prebuilt libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/prebuilt"
+          mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+
+          while IFS= read -r -d '' f; do
+            rel="${f##*/out/}"
+            subdir="${rel%%/*}"
+            base="$(basename "$f")"
+            case "$subdir" in
+              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            esac
+          done < <(find target -type f \( \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.lib" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dll" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.lib" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dll" -o \
+            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dll" \
+          \) -print0)
+
+          cat > "$ROOT/metadata.json" <<EOF
+          {"target":"${TARGET_TRIPLE}","features":"${FEATURES}","sha":"${GITHUB_SHA}"}
+          EOF
+
+          tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ASSET_NAME }}
+          path: ${{ runner.temp }}/${{ env.ASSET_NAME }}
+
+      - name: Upload to GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
+          files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
