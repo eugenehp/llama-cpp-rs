@@ -155,7 +155,8 @@ jobs:
           {"target":"${TARGET_TRIPLE}","features":"${FEATURES}","sha":"${GITHUB_SHA}"}
           EOF
 
-          tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+          # Git-Bash tar interprets "D:\..." as remote host syntax unless forced local.
+          tar --force-local -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
