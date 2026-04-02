@@ -19,26 +19,52 @@ permissions:
   contents: write
 
 jobs:
-  linux-q1-vulkan:
-    name: Linux prebuilt (q1 + vulkan)
+  linux-prebuilt:
+    name: Linux prebuilt (${{ matrix.label }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: cpu
+            suffix: cpu
+            features: ""
+            vulkan: false
+          - label: q1
+            suffix: q1
+            features: q1
+            vulkan: false
+          - label: vulkan
+            suffix: vulkan
+            features: vulkan
+            vulkan: true
+          - label: q1+vulkan
+            suffix: q1-vulkan
+            features: q1,vulkan
+            vulkan: true
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
-      FEATURES: q1,vulkan
-      ASSET_NAME: llama-prebuilt-linux-x86_64-unknown-linux-gnu-q1-vulkan.tar.gz
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Compute asset name
+        shell: bash
+        run: |
+          echo "ASSET_NAME=llama-prebuilt-linux-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential pkg-config cmake git \
-            libclang-dev libssl-dev \
-            libvulkan-dev glslang-tools
+            libclang-dev libssl-dev
 
+      - name: Install Vulkan dependencies
+        if: matrix.vulkan
+        run: |
+          sudo apt-get install -y libvulkan-dev glslang-tools
           # FindVulkan.cmake requires glslc specifically (not just glslangValidator).
           if ! command -v glslc >/dev/null 2>&1; then
             sudo apt-get install -y glslc || sudo apt-get install -y shaderc
@@ -48,12 +74,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build llama-cpp-4 (prebuilt target)
+        shell: bash
         run: |
-          cargo build -p llama-cpp-4 \
-            --release \
-            --target "${TARGET_TRIPLE}" \
-            --no-default-features \
-            --features "${FEATURES}"
+          set -euo pipefail
+          if [[ -n "${{ matrix.features }}" ]]; then
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features
+          fi
 
       - name: Collect prebuilt libraries
         shell: bash
@@ -78,7 +113,7 @@ jobs:
           \) -print0)
 
           cat > "$ROOT/metadata.json" <<EOF
-          {"target":"${TARGET_TRIPLE}","features":"${FEATURES}","sha":"${GITHUB_SHA}"}
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
           EOF
 
           tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
@@ -96,22 +131,46 @@ jobs:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}
           files: ${{ runner.temp }}/${{ env.ASSET_NAME }}
 
-  windows-q1-vulkan:
-    name: Windows prebuilt (q1 + vulkan)
+  windows-prebuilt:
+    name: Windows prebuilt (${{ matrix.label }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: cpu
+            suffix: cpu
+            features: ""
+            vulkan: false
+          - label: q1
+            suffix: q1
+            features: q1
+            vulkan: false
+          - label: vulkan
+            suffix: vulkan
+            features: vulkan
+            vulkan: true
+          - label: q1+vulkan
+            suffix: q1-vulkan
+            features: q1,vulkan
+            vulkan: true
     env:
       TARGET_TRIPLE: x86_64-pc-windows-msvc
-      FEATURES: q1,vulkan
-      ASSET_NAME: llama-prebuilt-windows-x86_64-pc-windows-msvc-q1-vulkan.tar.gz
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
 
+      - name: Compute asset name
+        shell: bash
+        run: |
+          echo "ASSET_NAME=llama-prebuilt-windows-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Vulkan SDK
+        if: matrix.vulkan
         shell: powershell
         run: |
           choco install vulkan-sdk --yes --no-progress
@@ -123,11 +182,19 @@ jobs:
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash
         run: |
-          cargo build -p llama-cpp-4 \
-            --release \
-            --target "${TARGET_TRIPLE}" \
-            --no-default-features \
-            --features "${FEATURES}"
+          set -euo pipefail
+          if [[ -n "${{ matrix.features }}" ]]; then
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features
+          fi
 
       - name: Collect prebuilt libraries
         shell: bash
@@ -152,7 +219,7 @@ jobs:
           \) -print0)
 
           cat > "$ROOT/metadata.json" <<EOF
-          {"target":"${TARGET_TRIPLE}","features":"${FEATURES}","sha":"${GITHUB_SHA}"}
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
           EOF
 
           # Git-Bash tar interprets "D:\..." as remote host syntax unless forced local.
