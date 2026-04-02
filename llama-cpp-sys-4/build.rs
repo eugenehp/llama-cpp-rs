@@ -781,10 +781,11 @@ fn main() {
         };
         // C++ feature flags that affect the compiled output.
         let cpp_features = format!(
-            "cuda={},metal={},vulkan={},openmp={},rpc={},q1={},native={},shared={}",
+            "cuda={},metal={},vulkan={},webgpu={},openmp={},rpc={},q1={},native={},shared={}",
             cfg!(feature = "cuda"),
             cfg!(feature = "metal"),
             cfg!(feature = "vulkan"),
+            cfg!(feature = "webgpu"),
             cfg!(feature = "openmp"),
             cfg!(feature = "rpc"),
             cfg!(feature = "q1"),
@@ -1456,6 +1457,12 @@ fn main() {
         config.define("GGML_METAL", "OFF");
     }
 
+    if cfg!(feature = "webgpu") {
+        config.define("GGML_WEBGPU", "ON");
+    } else {
+        config.define("GGML_WEBGPU", "OFF");
+    }
+
     if cfg!(feature = "cuda") && !cfg!(target_os = "macos") {
         config.define("GGML_CUDA", "ON");
     }
@@ -1576,7 +1583,16 @@ fn main() {
                     (enable_metal && cached_metal_off) || (!enable_metal && cached_metal_on)
                 };
 
-                // 2e. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
+                // 2e. GGML_WEBGPU mismatch: stale cache may keep WebGPU ON/OFF
+                //     after feature toggles.
+                let webgpu_mismatch = {
+                    let cached_webgpu_on = cache_contents.contains("GGML_WEBGPU:BOOL=ON");
+                    let cached_webgpu_off = cache_contents.contains("GGML_WEBGPU:BOOL=OFF");
+                    (cfg!(feature = "webgpu") && cached_webgpu_off)
+                        || (!cfg!(feature = "webgpu") && cached_webgpu_on)
+                };
+
+                // 2f. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
                 //     a previous build (or from an environment-polluted cmake
                 //     run) may have the wrong architecture, producing x86_64
                 //     object code in an arm64 binary (or vice versa).
@@ -1604,6 +1620,7 @@ fn main() {
                     || arm_arch_mismatch
                     || x86_isa_mismatch
                     || metal_mismatch
+                    || webgpu_mismatch
                     || osx_arch_mismatch;
                 if mismatch {
                     debug_log!(
