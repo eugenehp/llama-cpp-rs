@@ -1774,27 +1774,35 @@ fn main() {
             let asset_clone = asset.clone();
             let filename = asset_clone.file_name().unwrap();
             let filename = filename.to_str().unwrap();
+
+            // Helper: remove stale destination before hard-linking.
+            // On Linux, cmake creates versioned symlink chains (e.g. libllama.so -> libllama.so.0).
+            // When the library version changes between builds, these become broken symlinks.
+            // Path::exists() returns false for broken symlinks, but hard_link() still fails
+            // with EEXIST because the directory entry is occupied. Using symlink_metadata()
+            // detects both regular files and symlinks (broken or valid).
+            let force_hard_link = |src: &Path, dst: &Path| {
+                if dst.symlink_metadata().is_ok() {
+                    let _ = std::fs::remove_file(dst);
+                }
+                std::fs::hard_link(src, dst).unwrap();
+            };
+
             let dst = target_dir.join(filename);
             debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
-            if !dst.exists() {
-                std::fs::hard_link(asset.clone(), dst).unwrap();
-            }
+            force_hard_link(&asset, &dst);
 
             // Copy DLLs to examples as well
             if target_dir.join("examples").exists() {
                 let dst = target_dir.join("examples").join(filename);
                 debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
-                if !dst.exists() {
-                    std::fs::hard_link(asset.clone(), dst).unwrap();
-                }
+                force_hard_link(&asset, &dst);
             }
 
             // Copy DLLs to target/profile/deps as well for tests
             let dst = target_dir.join("deps").join(filename);
             debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
-            if !dst.exists() {
-                std::fs::hard_link(asset.clone(), dst).unwrap();
-            }
+            force_hard_link(&asset, &dst);
         }
     }
 }
