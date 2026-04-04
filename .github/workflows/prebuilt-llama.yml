@@ -191,6 +191,16 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Ensure patch.exe is discoverable
+        shell: pwsh
+        run: |
+          $gitUsrBin = Join-Path $env:ProgramFiles 'Git\usr\bin'
+          if (Test-Path $gitUsrBin) {
+            if (-not ($env:PATH -split ';' | Where-Object { $_ -ieq $gitUsrBin })) {
+              $gitUsrBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
+          }
+
       - name: Compute asset name
         shell: bash
         run: |
