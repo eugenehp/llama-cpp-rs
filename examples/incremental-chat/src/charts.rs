@@ -308,7 +308,7 @@ fn chart_speedup() -> String {
 
 fn chart_samplers() -> String {
     let (w, h) = (750.0, 420.0);
-    let mut s = svg_header(w, h, "8. Samplers & Temperature",
+    let mut s = svg_header(w, h, "8. Samplers &amp; Temperature",
                            "48 tokens generated from \"Write a haiku about the ocean\" (seed=42)");
 
     struct Row { label: &'static str, gen_ms: f64, tps: f64 }

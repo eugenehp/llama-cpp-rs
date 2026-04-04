@@ -335,29 +335,29 @@ Generate charts: `cargo run -p incremental-chat --bin incremental-charts`
 
 #### 1. Latency — normal vs incremental flush at Enter
 
-<p align="center"><img src="charts/latency.svg" width="700"/></p>
+<p align="center"><img src="charts/latency.png" width="700"/></p>
 
 #### Perceived speedup
 
-<p align="center"><img src="charts/speedup.svg" width="500"/></p>
+<p align="center"><img src="charts/speedup.png" width="500"/></p>
 
 **2. Speed** — 167 tok/s generation throughput (32 tokens in 191ms)
 
 #### 3. GPU Load — BPE margin saves 40–59% total compute vs naive
 
-<p align="center"><img src="charts/load.svg" width="700"/></p>
+<p align="center"><img src="charts/load.png" width="700"/></p>
 
 **4. Precision** — incremental prefill produces identical first token to normal prefill (**✔ ALL MATCH**)
 
 #### 5. UX — mid-line edit recovery cost
 
-<p align="center"><img src="charts/ux.svg" width="600"/></p>
+<p align="center"><img src="charts/ux.png" width="600"/></p>
 
 **6. DX** — 3-method API (`new`/`prefill_speculative`/`flush`), pure userspace pattern, ~130 lines of shared code
 
 #### 7. KV Cache Quantization + TurboQuant
 
-<p align="center"><img src="charts/kv_quant.svg" width="720"/></p>
+<p align="center"><img src="charts/kv_quant.png" width="720"/></p>
 
 Generated 64 tokens and compared output to F16 baseline:
 
@@ -377,7 +377,7 @@ See also the [TurboQuant section](#turboQuant--attention-rotation) for PPL and V
 
 #### 8. Samplers & Temperature
 
-<p align="center"><img src="charts/samplers.svg" width="750"/></p>
+<p align="center"><img src="charts/samplers.png" width="750"/></p>
 
 9 sampler configurations tested with seed=42 for reproducibility:
 
