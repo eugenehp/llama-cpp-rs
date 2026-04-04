@@ -52,8 +52,100 @@ fn patches_hash(patches_dir: &Path) -> String {
     format!("{:016x}", hasher_val)
 }
 
+/// Resolve the patch binary.
+///
+/// Search order:
+/// 1. Explicit env override (`LLAMA_PATCH`, then `PATCH`).
+/// 2. `patch` already available on PATH.
+/// 3. Windows-only fallback probes for Git-for-Windows installations,
+///    including deriving `..\\usr\\bin\\patch.exe` from `where git`.
+fn resolve_patch_cmd() -> PathBuf {
+    // 1) Explicit override for fully custom installations.
+    for var in ["LLAMA_PATCH", "PATCH"] {
+        if let Ok(raw) = env::var(var) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                let candidate = PathBuf::from(trimmed.trim_matches('"'));
+                if candidate.exists() {
+                    println!(
+                        "cargo:warning=Using patch binary from {var}: {}",
+                        candidate.display()
+                    );
+                    return candidate;
+                }
+                println!(
+                    "cargo:warning={var} was set to '{}' but that path does not exist",
+                    candidate.display()
+                );
+            }
+        }
+    }
+
+    // 2) Already on PATH.
+    if command_exists("patch") {
+        return PathBuf::from("patch");
+    }
+
+    // 3) Windows fallback search.
+    if cfg!(windows) {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut push_unique = |p: PathBuf| {
+            if !candidates.iter().any(|c| c == &p) {
+                candidates.push(p);
+            }
+        };
+
+        // If git is on PATH (typically from Git\\cmd), infer sibling
+        // Git\\usr\\bin\\patch.exe from each discovered git.exe.
+        if let Ok(output) = Command::new("where").arg("git").output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let git = PathBuf::from(line.trim());
+                    if let Some(git_dir) = git.parent() {
+                        if let Some(git_root) = git_dir.parent() {
+                            push_unique(git_root.join("usr").join("bin").join("patch.exe"));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            push_unique(PathBuf::from(&program_files).join("Git\\usr\\bin\\patch.exe"));
+        }
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            push_unique(PathBuf::from(&program_files_x86).join("Git\\usr\\bin\\patch.exe"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            push_unique(PathBuf::from(&local_app_data).join("Programs\\Git\\usr\\bin\\patch.exe"));
+        }
+        push_unique(PathBuf::from("C:\\Program Files\\Git\\usr\\bin\\patch.exe"));
+
+        if let Some(found) = candidates.iter().find(|p| p.exists()).cloned() {
+            println!("cargo:warning=Using patch binary at {}", found.display());
+            return found;
+        }
+
+        let searched = candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!(
+            "could not locate `patch.exe` on PATH or common Git-for-Windows locations. \
+             Set LLAMA_PATCH (or PATCH) to the full path to patch.exe, or add Git\\usr\\bin to PATH. \
+             Searched: [{searched}]"
+        );
+    }
+
+    panic!(
+        "could not locate `patch` on PATH. Install patch, or set LLAMA_PATCH (or PATCH) to the full path to the patch binary"
+    )
+}
+
 /// Apply all `*.patch` files in `patches_dir` (sorted alphabetically) to `dst`.
-/// Uses the `patch -p1` command, which must be available on PATH.
+/// Uses the `patch -p1` command.
 /// Skips the patches directory entirely when it does not exist or is empty.
 fn apply_patches(patches_dir: &Path, dst: &Path) {
     if !patches_dir.is_dir() {
@@ -66,9 +158,10 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
         .filter(|p| p.extension().map(|e| e == "patch").unwrap_or(false))
         .collect();
     entries.sort();
+    let patch_cmd = resolve_patch_cmd();
     for patch in &entries {
         println!("cargo:warning=Applying patch: {}", patch.display());
-        let status = Command::new("patch")
+        let status = Command::new(&patch_cmd)
             .arg("-p1")
             .arg("--forward")
             .arg("--directory")
@@ -76,7 +169,13 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
             .arg("--input")
             .arg(patch)
             .status()
-            .unwrap_or_else(|e| panic!("failed to run `patch` for {}: {e}", patch.display()));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to run `{}` for {}: {e}",
+                    patch_cmd.display(),
+                    patch.display()
+                )
+            });
         if !status.success() {
             panic!(
                 "Patch {} failed to apply. The patch may need rebasing against the \
@@ -993,6 +1092,8 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_DIR");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
+    println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
+    println!("cargo:rerun-if-env-changed=PATCH");
 
     debug_log!("Bindings Created");
 
