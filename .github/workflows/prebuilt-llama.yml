@@ -128,20 +128,23 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
+          echo "::group::Searching for built libraries"
+          find target -type f \( -name '*.a' -o -name '*.so' -o -name '*.so.*' \) \
+            -path '*/build/llama-cpp-sys-4-*' 2>/dev/null | head -50
+          echo "::endgroup::"
+
+          # Broad search: any .a/.so under the llama-cpp-sys-4 build dir
           while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
             base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            case "$base" in
+              *.a)    cp -f "$f" "$ROOT/lib/$base" ;;
+              *.so*)  cp -f "$f" "$ROOT/lib/$base" ;;
             esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.so" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.so" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.so" \
-          \) -print0)
+          done < <(find target -type f \( -name '*.a' -o -name '*.so' -o -name '*.so.*' \) \
+            -path '*/build/llama-cpp-sys-4-*' -print0)
+
+          echo "Collected $(find "$ROOT/lib" -type f | wc -l) libraries"
+          ls -la "$ROOT/lib/" || true
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
@@ -253,20 +256,22 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
+          echo "::group::Searching for built libraries"
+          find target -type f \( -name '*.lib' -o -name '*.dll' \) \
+            -path '*/build/llama-cpp-sys-4-*' 2>/dev/null | head -50
+          echo "::endgroup::"
+
           while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
             base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            case "$base" in
+              *.lib)  cp -f "$f" "$ROOT/lib/$base" ;;
+              *.dll)  cp -f "$f" "$ROOT/bin/$base" ;;
             esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.lib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dll" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.lib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dll" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dll" \
-          \) -print0)
+          done < <(find target -type f \( -name '*.lib' -o -name '*.dll' \) \
+            -path '*/build/llama-cpp-sys-4-*' -print0)
+
+          echo "Collected $(find "$ROOT" -type f -not -name 'metadata.json' | wc -l) files"
+          ls -la "$ROOT/lib/" "$ROOT/bin/" 2>/dev/null || true
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
@@ -354,20 +359,22 @@ jobs:
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
 
+          echo "::group::Searching for built libraries"
+          find target -type f \( -name '*.a' -o -name '*.dylib' \) \
+            -path '*/build/llama-cpp-sys-4-*' 2>/dev/null | head -50
+          echo "::endgroup::"
+
           while IFS= read -r -d '' f; do
-            rel="${f##*/out/}"
-            subdir="${rel%%/*}"
             base="$(basename "$f")"
-            case "$subdir" in
-              lib|lib64|bin) cp -f "$f" "$ROOT/$subdir/$base" ;;
+            case "$base" in
+              *.a)      cp -f "$f" "$ROOT/lib/$base" ;;
+              *.dylib)  cp -f "$f" "$ROOT/lib/$base" ;;
             esac
-          done < <(find target -type f \( \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib/*.dylib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.a" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/lib64/*.dylib" -o \
-            -path "*/build/llama-cpp-sys-4-*/out/bin/*.dylib" \
-          \) -print0)
+          done < <(find target -type f \( -name '*.a' -o -name '*.dylib' \) \
+            -path '*/build/llama-cpp-sys-4-*' -print0)
+
+          echo "Collected $(find "$ROOT/lib" -type f | wc -l) libraries"
+          ls -la "$ROOT/lib/" || true
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
