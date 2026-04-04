@@ -589,14 +589,47 @@ fn main() -> Result<()> {
 // 7. KV quantization + TurboQuant
 // ---------------------------------------------------------------------------
 
+fn generate_text(
+    model: &LlamaModel,
+    ctx: &mut llama_cpp_4::context::LlamaContext<'_>,
+    batch: &mut LlamaBatch,
+    start_pos: i32,
+    n_gen: usize,
+) -> Result<(String, std::time::Duration)> {
+    let sampler = LlamaSampler::chain_simple([
+        LlamaSampler::common(),
+        LlamaSampler::greedy(),
+    ]);
+    let mut decoder = encoding_rs::UTF_8.new_decoder();
+    let mut output = String::new();
+    let mut n_cur = start_pos;
+    let t0 = Instant::now();
+
+    for _ in 0..n_gen {
+        let tok = sampler.sample(ctx, batch.n_tokens() - 1);
+        if model.is_eog_token(tok) {
+            break;
+        }
+        let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+        let mut s = String::with_capacity(32);
+        let _ = decoder.decode_to_string(&bytes, &mut s, false);
+        output.push_str(&s);
+
+        batch.clear();
+        batch.add(tok, n_cur, &[0], true)?;
+        n_cur += 1;
+        ctx.decode(batch)?;
+    }
+    Ok((output, t0.elapsed()))
+}
+
 fn bench_kv_quant(
     model: &LlamaModel,
     backend: &LlamaBackend,
     prompts: &[&str],
 ) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────────────┐");
-    println!("│ 7. KV QUANT — prefill + first-token with quantized KV cache        │");
-    println!("│    TurboQuant ON = attention rotation enabled (default)             │");
+    println!("│ 7. KV QUANT + TURBOQUANT — quality & speed across KV cache types  │");
     println!("└─────────────────────────────────────────────────────────────────────┘");
 
     let configs: &[(&str, GgmlType, bool)] = &[
@@ -608,16 +641,15 @@ fn bench_kv_quant(
         ("Q4_0 no turbo",    GgmlType::Q4_0, true),
     ];
 
-    // Use the longest prompt for the test
     let prompt = prompts.last().unwrap_or(&prompts[0]);
     let full = model.str_to_token(prompt, AddBos::Always)?;
-    let n_gen = 16;
+    let n_gen = 64;
 
-    println!("  Prompt: \"{}\" ({} tokens)", &prompt[..prompt.len().min(50)], full.len());
-    println!(
-        "  {:>20} {:>10} {:>10} {:>10} {:>12}",
-        "Config", "Prefill", "TTFT", "Gen 16t", "First tok"
-    );
+    println!("  Prompt: \"{}\" ({} tokens, generating {})", &prompt[..prompt.len().min(50)], full.len(), n_gen);
+    println!();
+
+    let mut baseline_output = String::new();
+    let mut results: Vec<(&str, String, std::time::Duration, std::time::Duration)> = Vec::new();
 
     for (label, kv_type, no_turbo) in configs {
         let p = LlamaContextParams::default()
@@ -636,52 +668,72 @@ fn bench_kv_quant(
         };
         let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
 
-        // Prefill
         let t0 = Instant::now();
         prefill_all(&mut ctx, &mut batch, &full)?;
         let prefill_time = t0.elapsed();
 
-        // TTFT
-        let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
-        let first_tok = sampler.sample(&ctx, batch.n_tokens() - 1);
-        let ttft = t0.elapsed();
+        let (output, gen_time) = generate_text(model, &mut ctx, &mut batch, full.len() as i32, n_gen)?;
 
-        let first_str = model
-            .token_to_bytes(first_tok, Special::Tokenize)
-            .unwrap_or_default();
-
-        // Generate n_gen tokens
-        let sampler = LlamaSampler::chain_simple([
-            LlamaSampler::common(),
-            LlamaSampler::greedy(),
-        ]);
-        let mut n_cur = full.len() as i32;
-        batch.clear();
-        batch.add(first_tok, n_cur, &[0], true)?;
-        n_cur += 1;
-        ctx.decode(&mut batch)?;
-
-        let gen_start = Instant::now();
-        for _ in 1..n_gen {
-            let tok = sampler.sample(&ctx, batch.n_tokens() - 1);
-            if model.is_eog_token(tok) {
-                break;
-            }
-            batch.clear();
-            batch.add(tok, n_cur, &[0], true)?;
-            n_cur += 1;
-            ctx.decode(&mut batch)?;
+        if baseline_output.is_empty() {
+            baseline_output = output.clone();
         }
-        let gen_time = gen_start.elapsed();
 
+        results.push((label, output, prefill_time, gen_time));
+    }
+
+    // Print timing table
+    println!(
+        "  {:>20} {:>10} {:>10} {:>8} {:>7}",
+        "Config", "Prefill", "Gen 64t", "tok/s", "Match"
+    );
+    for (label, output, prefill, gen) in &results {
+        let tps = if gen.as_secs_f64() > 0.0 {
+            64.0 / gen.as_secs_f64()
+        } else { 0.0 };
+        let matches = *output == baseline_output;
         println!(
-            "  {:>20} {:>10.2?} {:>10.2?} {:>10.2?} {:>12}",
-            label,
-            prefill_time,
-            ttft,
-            gen_time,
-            format!("\"{}\" ", String::from_utf8_lossy(&first_str).trim()),
+            "  {:>20} {:>10.2?} {:>10.2?} {:>7.1} {:>7}",
+            label, prefill, gen, tps,
+            if matches { "✔ yes" } else { "✘ NO" },
         );
+    }
+
+    // Print output comparison
+    println!();
+    println!("  Output comparison (first 120 chars):");
+    for (label, output, _, _) in &results {
+        let truncated: String = output.chars().take(120).collect();
+        let matches = *output == baseline_output;
+        println!(
+            "  {} {:>20}: \"{}\"{}",
+            if matches { "✔" } else { "✘" },
+            label,
+            truncated.replace('\n', "↵"),
+            if output.len() > 120 { "..." } else { "" },
+        );
+    }
+
+    // Show character-level diff for mismatches
+    let mut any_mismatch = false;
+    for (label, output, _, _) in &results {
+        if *output != baseline_output {
+            any_mismatch = true;
+            let first_diff = baseline_output
+                .chars()
+                .zip(output.chars())
+                .position(|(a, b)| a != b)
+                .unwrap_or(baseline_output.len().min(output.len()));
+            println!(
+                "  ⚠ {} diverges from F16 at char {}: F16=\"{}\" vs \"{}\" ",
+                label,
+                first_diff,
+                baseline_output.chars().skip(first_diff).take(20).collect::<String>(),
+                output.chars().skip(first_diff).take(20).collect::<String>(),
+            );
+        }
+    }
+    if !any_mismatch {
+        println!("  ✔ All configs produce identical output to F16 baseline");
     }
 
     println!();

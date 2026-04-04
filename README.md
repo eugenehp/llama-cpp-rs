@@ -359,9 +359,21 @@ Generate charts: `cargo run -p incremental-chat --bin incremental-charts`
 
 <p align="center"><img src="charts/kv_quant.svg" width="720"/></p>
 
-All KV quantization configs produce identical first token. On this 0.5B model the timing
-difference is negligible; on 7B+ models quantized KV cache saves gigabytes of VRAM
-(see [TurboQuant section](#turboQuant--attention-rotation) for PPL and VRAM numbers).
+Generated 64 tokens and compared output to F16 baseline:
+
+| Config | Diverges at | Quality | Output sample |
+|:---|:---:|:---|:---|
+| F16 (baseline) | — | — | "Rust and C++ are both popular programming languages..." |
+| Q8_0 + TurboQuant | char 195 | **near-identical** | Same as F16 for ~195 chars |
+| Q5_0 + TurboQuant | char 24 | **coherent** | "...both high-level programming languages..." |
+| Q4_0 + TurboQuant | char 24 | **coherent** | "...different approaches to memory management..." |
+| Q5_0 no TurboQuant | char 2 | **⚠ degraded** | "The following of the following of the of the..." |
+| Q4_0 no TurboQuant | char 2 | **⚠ degraded** | "The term 'in terms of memory safety...is a programming language..." |
+
+**TurboQuant makes quantized KV cache usable.** Without it, Q5_0/Q4_0 produce
+degenerate output (diverges at char 2). With it, Q5_0 produces coherent text
+that diverges only in wording, while Q8_0 is near-identical to F16.
+See also the [TurboQuant section](#turboQuant--attention-rotation) for PPL and VRAM numbers.
 
 ### Usage
 

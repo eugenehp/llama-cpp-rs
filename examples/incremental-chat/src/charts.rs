@@ -43,14 +43,15 @@ const UX: &[UxRow] = &[
     UxRow { label: "Prefix insert",    time_ms: 42.38, tokens: 11 },
 ];
 
-struct KvRow { label: &'static str, prefill_ms: f64, ttft_ms: f64, gen16_ms: f64 }
+struct KvRow { label: &'static str, prefill_ms: f64, gen64_ms: f64, diverge_char: i32 }
+// diverge_char: character position where output diverges from F16 (-1 = identical)
 const KV: &[KvRow] = &[
-    KvRow { label: "F16",           prefill_ms: 53.48, ttft_ms: 53.56, gen16_ms: 95.45 },
-    KvRow { label: "Q8+turbo",      prefill_ms: 52.75, ttft_ms: 53.00, gen16_ms: 99.79 },
-    KvRow { label: "Q5+turbo",      prefill_ms: 53.67, ttft_ms: 53.76, gen16_ms: 95.43 },
-    KvRow { label: "Q4+turbo",      prefill_ms: 53.15, ttft_ms: 53.23, gen16_ms: 95.07 },
-    KvRow { label: "Q5 no-t",       prefill_ms: 52.66, ttft_ms: 52.75, gen16_ms: 89.80 },
-    KvRow { label: "Q4 no-t",       prefill_ms: 53.74, ttft_ms: 53.82, gen16_ms: 89.59 },
+    KvRow { label: "F16",           prefill_ms: 51.65, gen64_ms: 386.33, diverge_char: -1  },
+    KvRow { label: "Q8+turbo",      prefill_ms: 52.76, gen64_ms: 398.55, diverge_char: 195 },
+    KvRow { label: "Q5+turbo",      prefill_ms: 53.02, gen64_ms: 411.92, diverge_char: 24  },
+    KvRow { label: "Q4+turbo",      prefill_ms: 53.24, gen64_ms: 404.23, diverge_char: 24  },
+    KvRow { label: "Q5 no-t",       prefill_ms: 58.44, gen64_ms: 387.46, diverge_char: 2   },
+    KvRow { label: "Q4 no-t",       prefill_ms: 52.23, gen64_ms: 386.76, diverge_char: 2   },
 ];
 
 // ---------------------------------------------------------------------------
@@ -217,31 +218,57 @@ fn chart_ux() -> String {
 }
 
 fn chart_kv() -> String {
-    let (w, h) = (720.0, 340.0);
+    let (w, h) = (720.0, 400.0);
     let mut s = svg_header(w, h, "7. KV Cache Quantization + TurboQuant",
-                           "Prefill and generation time across KV cache types");
-    let (max_v, base_y, ch) = (110.0, 280.0, 190.0);
-    for i in 0..=5 {
-        let v = i as f64 * 20.0;
+                           "Gen 64 tokens — divergence point from F16 baseline (higher = better quality)");
+
+    // Top half: generation time bars
+    let (max_v, base_y, ch) = (450.0, 200.0, 120.0);
+    for i in 0..=4 {
+        let v = i as f64 * 100.0;
         gridline(&mut s, 60.0, 680.0, base_y - (v/max_v)*ch, &format!("{v:.0}ms"));
     }
     let n = KV.len();
     let gw = 600.0 / n as f64;
-    let bw = 25.0;
+    let bw = 30.0;
     let gap = 3.0;
     for (i, row) in KV.iter().enumerate() {
         let cx = 80.0 + i as f64 * gw + gw / 2.0;
-        let sx = cx - (3.0 * bw + 2.0 * gap) / 2.0;
-        for (j, (val, col)) in [(row.prefill_ms, C_BLUE), (row.ttft_ms, C_TEAL), (row.gen16_ms, C_ORANGE)].iter().enumerate() {
-            let bx = sx + j as f64 * (bw + gap);
-            let bh = (val / max_v) * ch;
-            bar(&mut s, bx, base_y - bh, bw, bh, col, &format!("{val:.0}"));
-        }
+        let sx = cx - (2.0 * bw + gap) / 2.0;
+        // Prefill bar
+        let bh = (row.prefill_ms / max_v) * ch;
+        bar(&mut s, sx, base_y - bh, bw, bh, C_BLUE, &format!("{:.0}", row.prefill_ms));
+        // Gen64 bar
+        let bh2 = (row.gen64_ms / max_v) * ch;
+        bar(&mut s, sx + bw + gap, base_y - bh2, bw, bh2, C_ORANGE, &format!("{:.0}", row.gen64_ms));
         group_label(&mut s, cx, base_y + 16.0, row.label);
     }
-    legend_item(&mut s, 80.0, 310.0, C_BLUE,   "Prefill");
-    legend_item(&mut s, 80.0, 328.0, C_TEAL,   "TTFT");
-    legend_item(&mut s, 200.0, 310.0, C_ORANGE, "Gen 16 tokens");
+    legend_item(&mut s, 80.0, 220.0, C_BLUE,   "Prefill");
+    legend_item(&mut s, 80.0, 238.0, C_ORANGE, "Gen 64 tokens");
+
+    // Bottom half: quality divergence bars
+    let qual_y = 270.0;
+    write!(
+        s,
+        "<text x=\"360\" y=\"{qual_y}\" fill=\"#e0e0e0\" font-size=\"13\" \
+         font-weight=\"bold\" text-anchor=\"middle\">Output quality: chars before divergence from F16</text>\n"
+    ).unwrap();
+
+    let max_div = 220.0;
+    let bar_left = 140.0;
+    let bar_area = 520.0;
+    let qual_colors = [C_TEAL, C_GREEN, C_GREEN, C_YELLOW, C_RED, C_RED];
+    for (i, row) in KV.iter().enumerate() {
+        if row.diverge_char < 0 { continue; } // skip baseline
+        let y = qual_y + 12.0 + i as f64 * 26.0;
+        let val = row.diverge_char as f64;
+        let quality = if val >= 195.0 { "near-identical" }
+                      else if val >= 20.0 { "coherent" }
+                      else { "DEGRADED" };
+        hbar(&mut s, y, val.min(max_div), max_div, bar_area, bar_left, qual_colors[i],
+             row.label, &format!("char {} ({quality})", row.diverge_char));
+    }
+
     s.push_str(svg_footer());
     s
 }
