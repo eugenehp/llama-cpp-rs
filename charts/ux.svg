@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 260" font-family="system-ui,-apple-system,sans-serif">
+<rect width="600" height="260" fill="#1a1a2e" rx="12"/>
+<text x="300" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">5. UX — Edit Recovery Cost</text>
+<text x="300" y="50" fill="#888" font-size="11" text-anchor="middle">Time to re-sync KV cache after mid-line edits</text>
+<text x="152" y="95.0" fill="#aaa" font-size="11" text-anchor="end">Delete tail</text>
+<rect x="160" y="80" width="45.4" height="22" fill="#4C78A8" rx="3" opacity="0.85"/>
+<text x="211.4" y="95.0" fill="#eee" font-size="10" font-weight="bold">6.0ms (1 tok)</text>
+<text x="152" y="135.0" fill="#aaa" font-size="11" text-anchor="end">Retype tail</text>
+<rect x="160" y="120" width="44.1" height="22" fill="#72B7B2" rx="3" opacity="0.85"/>
+<text x="210.1" y="135.0" fill="#eee" font-size="10" font-weight="bold">5.8ms (1 tok)</text>
+<text x="152" y="175.0" fill="#aaa" font-size="11" text-anchor="end">Mid-line replace</text>
+<rect x="160" y="160" width="218.0" height="22" fill="#F58518" rx="3" opacity="0.85"/>
+<text x="384.0" y="175.0" fill="#eee" font-size="10" font-weight="bold">28.7ms (7 tok)</text>
+<text x="152" y="215.0" fill="#aaa" font-size="11" text-anchor="end">Prefix insert</text>
+<rect x="160" y="200" width="322.1" height="22" fill="#E45756" rx="3" opacity="0.85"/>
+<text x="488.1" y="215.0" fill="#eee" font-size="10" font-weight="bold">42.4ms (11 tok)</text>
+</svg>

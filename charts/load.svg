@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 320" font-family="system-ui,-apple-system,sans-serif">
+<rect width="700" height="320" fill="#1a1a2e" rx="12"/>
+<text x="350" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">3. GPU Load — Normal vs Margin vs Naive</text>
+<text x="350" y="50" fill="#888" font-size="11" text-anchor="middle">Total compute time (lower = less GPU work)</text>
+<line x1="80" y1="260" x2="620" y2="260" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="263" fill="#666" font-size="9" text-anchor="end">0ms</text>
+<line x1="80" y1="221" x2="620" y2="221" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="224" fill="#666" font-size="9" text-anchor="end">50ms</text>
+<line x1="80" y1="182" x2="620" y2="182" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="185" fill="#666" font-size="9" text-anchor="end">100ms</text>
+<line x1="80" y1="143" x2="620" y2="143" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="146" fill="#666" font-size="9" text-anchor="end">150ms</text>
+<line x1="80" y1="103" x2="620" y2="103" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="106" fill="#666" font-size="9" text-anchor="end">200ms</text>
+<rect x="122.0" y="237.8" width="30.0" height="22.2" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="137.0" y="233.8" fill="#ccc" font-size="9" text-anchor="middle">28</text>
+<rect x="155.0" y="225.2" width="30.0" height="34.8" fill="#54A24B" rx="3" opacity="0.9"/>
+<text x="170.0" y="221.2" fill="#ccc" font-size="9" text-anchor="middle">44</text>
+<rect x="188.0" y="203.0" width="30.0" height="57.0" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="203.0" y="199.0" fill="#ccc" font-size="9" text-anchor="middle">73</text>
+<text x="170.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">7 tokens (saves 39%)</text>
+<rect x="262.0" y="219.2" width="30.0" height="40.8" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="277.0" y="215.2" fill="#ccc" font-size="9" text-anchor="middle">52</text>
+<rect x="295.0" y="196.1" width="30.0" height="63.9" fill="#54A24B" rx="3" opacity="0.9"/>
+<text x="310.0" y="192.1" fill="#ccc" font-size="9" text-anchor="middle">82</text>
+<rect x="328.0" y="118.3" width="30.0" height="141.7" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="343.0" y="114.3" fill="#ccc" font-size="9" text-anchor="middle">181</text>
+<text x="310.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">14 tok A (saves 55%)</text>
+<rect x="402.0" y="217.7" width="30.0" height="42.3" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="417.0" y="213.7" fill="#ccc" font-size="9" text-anchor="middle">54</text>
+<rect x="435.0" y="190.7" width="30.0" height="69.3" fill="#54A24B" rx="3" opacity="0.9"/>
+<text x="450.0" y="186.7" fill="#ccc" font-size="9" text-anchor="middle">89</text>
+<rect x="468.0" y="91.1" width="30.0" height="168.9" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="483.0" y="87.1" fill="#ccc" font-size="9" text-anchor="middle">216</text>
+<text x="450.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">14 tok B (saves 59%)</text>
+<rect x="532.0" y="219.3" width="30.0" height="40.7" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="547.0" y="215.3" fill="#ccc" font-size="9" text-anchor="middle">52</text>
+<rect x="565.0" y="196.2" width="30.0" height="63.8" fill="#54A24B" rx="3" opacity="0.9"/>
+<text x="580.0" y="192.2" fill="#ccc" font-size="9" text-anchor="middle">82</text>
+<rect x="598.0" y="105.0" width="30.0" height="155.0" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="613.0" y="101.0" fill="#ccc" font-size="9" text-anchor="middle">198</text>
+<text x="580.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">14 tok C (saves 59%)</text>
+<rect x="90" y="270" width="12" height="12" fill="#4C78A8" rx="2"/>
+<text x="106" y="280" fill="#ccc" font-size="11">Normal</text>
+<rect x="90" y="288" width="12" height="12" fill="#54A24B" rx="2"/>
+<text x="106" y="298" fill="#ccc" font-size="11">Margin (BPE-stable)</text>
+<rect x="260" y="270" width="12" height="12" fill="#E45756" rx="2"/>
+<text x="276" y="280" fill="#ccc" font-size="11">Naive (no margin)</text>
+</svg>

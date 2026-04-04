@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 320" font-family="system-ui,-apple-system,sans-serif">
+<rect width="700" height="320" fill="#1a1a2e" rx="12"/>
+<text x="350" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">1. Latency — Normal vs Incremental Prefill</text>
+<text x="350" y="50" fill="#888" font-size="11" text-anchor="middle">Qwen2.5-0.5B Q4_K_M · Apple Silicon</text>
+<line x1="80" y1="260" x2="620" y2="260" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="263" fill="#666" font-size="9" text-anchor="end">0ms</text>
+<line x1="80" y1="200" x2="620" y2="200" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="203" fill="#666" font-size="9" text-anchor="end">20ms</text>
+<line x1="80" y1="140" x2="620" y2="140" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="143" fill="#666" font-size="9" text-anchor="end">40ms</text>
+<line x1="80" y1="80" x2="620" y2="80" stroke="#333" stroke-width="0.5"/>
+<text x="75" y="83" fill="#666" font-size="9" text-anchor="end">60ms</text>
+<rect x="114.5" y="176.4" width="35.0" height="83.6" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="132.0" y="172.4" fill="#ccc" font-size="9" text-anchor="middle">27.9</text>
+<rect x="152.5" y="219.1" width="35.0" height="40.9" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="170.0" y="215.1" fill="#ccc" font-size="9" text-anchor="middle">13.6</text>
+<rect x="190.5" y="216.8" width="35.0" height="43.2" fill="#72B7B2" rx="3" opacity="0.9"/>
+<text x="208.0" y="212.8" fill="#ccc" font-size="9" text-anchor="middle">14.4</text>
+<text x="170.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">Short (7t) (2.0×)</text>
+<rect x="254.5" y="105.1" width="35.0" height="154.9" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="272.0" y="101.1" fill="#ccc" font-size="9" text-anchor="middle">51.6</text>
+<rect x="292.5" y="228.4" width="35.0" height="31.6" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="310.0" y="224.4" fill="#ccc" font-size="9" text-anchor="middle">10.5</text>
+<rect x="330.5" y="228.2" width="35.0" height="31.8" fill="#72B7B2" rx="3" opacity="0.9"/>
+<text x="348.0" y="224.2" fill="#ccc" font-size="9" text-anchor="middle">10.6</text>
+<text x="310.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">Med A (14t) (4.9×)</text>
+<rect x="394.5" y="103.8" width="35.0" height="156.2" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="412.0" y="99.8" fill="#ccc" font-size="9" text-anchor="middle">52.1</text>
+<rect x="432.5" y="228.7" width="35.0" height="31.3" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="450.0" y="224.7" fill="#ccc" font-size="9" text-anchor="middle">10.4</text>
+<rect x="470.5" y="228.5" width="35.0" height="31.5" fill="#72B7B2" rx="3" opacity="0.9"/>
+<text x="488.0" y="224.5" fill="#ccc" font-size="9" text-anchor="middle">10.5</text>
+<text x="450.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">Med B (14t) (5.0×)</text>
+<rect x="524.5" y="103.6" width="35.0" height="156.4" fill="#E45756" rx="3" opacity="0.9"/>
+<text x="542.0" y="99.6" fill="#ccc" font-size="9" text-anchor="middle">52.1</text>
+<rect x="562.5" y="229.0" width="35.0" height="31.0" fill="#4C78A8" rx="3" opacity="0.9"/>
+<text x="580.0" y="225.0" fill="#ccc" font-size="9" text-anchor="middle">10.3</text>
+<rect x="600.5" y="228.8" width="35.0" height="31.2" fill="#72B7B2" rx="3" opacity="0.9"/>
+<text x="618.0" y="224.8" fill="#ccc" font-size="9" text-anchor="middle">10.4</text>
+<text x="580.0" y="276.0" fill="#aaa" font-size="10" text-anchor="middle">Med C (14t) (5.1×)</text>
+<rect x="90" y="270" width="12" height="12" fill="#E45756" rx="2"/>
+<text x="106" y="280" fill="#ccc" font-size="11">Normal prefill</text>
+<rect x="90" y="288" width="12" height="12" fill="#4C78A8" rx="2"/>
+<text x="106" y="298" fill="#ccc" font-size="11">Incremental flush</text>
+<rect x="250" y="270" width="12" height="12" fill="#72B7B2" rx="2"/>
+<text x="266" y="280" fill="#ccc" font-size="11">TTFT (incremental)</text>
+</svg>

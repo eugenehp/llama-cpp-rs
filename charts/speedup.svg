@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 280" font-family="system-ui,-apple-system,sans-serif">
+<rect width="500" height="280" fill="#1a1a2e" rx="12"/>
+<text x="250" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">Perceived Speedup at Enter</text>
+<text x="250" y="50" fill="#888" font-size="11" text-anchor="middle">Incremental flush vs normal prefill (higher = better)</text>
+<text x="132" y="95.0" fill="#aaa" font-size="11" text-anchor="end">Short (7t)</text>
+<rect x="140" y="80" width="102.2" height="22" fill="#4C78A8" rx="3" opacity="0.85"/>
+<text x="248.2" y="95.0" fill="#eee" font-size="10" font-weight="bold">2.0× faster</text>
+<text x="132" y="137.0" fill="#aaa" font-size="11" text-anchor="end">Med A (14t)</text>
+<rect x="140" y="122" width="245.4" height="22" fill="#54A24B" rx="3" opacity="0.85"/>
+<text x="391.4" y="137.0" fill="#eee" font-size="10" font-weight="bold">4.9× faster</text>
+<text x="132" y="179.0" fill="#aaa" font-size="11" text-anchor="end">Med B (14t)</text>
+<rect x="140" y="164" width="249.8" height="22" fill="#72B7B2" rx="3" opacity="0.85"/>
+<text x="395.8" y="179.0" fill="#eee" font-size="10" font-weight="bold">5.0× faster</text>
+<text x="132" y="221.0" fill="#aaa" font-size="11" text-anchor="end">Med C (14t)</text>
+<rect x="140" y="206" width="252.7" height="22" fill="#F58518" rx="3" opacity="0.85"/>
+<text x="398.7" y="221.0" fill="#eee" font-size="10" font-weight="bold">5.1× faster</text>
+<line x1="353" y1="70" x2="353" y2="250" stroke="#EECA3B" stroke-width="2" stroke-dasharray="6 3"/>
+<text x="353" y="265" fill="#EECA3B" font-size="11" text-anchor="middle">avg 4.3×</text>
+</svg>
