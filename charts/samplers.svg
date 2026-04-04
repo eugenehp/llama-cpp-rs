@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 420" font-family="system-ui,-apple-system,sans-serif">
 <rect width="750" height="420" fill="#1a1a2e" rx="12"/>
-<text x="375" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">8. Samplers & Temperature</text>
+<text x="375" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">8. Samplers &amp; Temperature</text>
 <text x="375" y="50" fill="#888" font-size="11" text-anchor="middle">48 tokens generated from "Write a haiku about the ocean" (seed=42)</text>
 <text x="162" y="85.0" fill="#aaa" font-size="11" text-anchor="end">greedy (t=0)</text>
 <rect x="170" y="70" width="218.6" height="22" fill="#4C78A8" rx="3" opacity="0.85"/>
