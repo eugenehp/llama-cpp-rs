@@ -502,6 +502,197 @@ fn bench_ux(
 // 6. DX — developer experience summary
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 8. Samplers & Temperature
+// ---------------------------------------------------------------------------
+
+fn bench_samplers(
+    model: &LlamaModel,
+    backend: &LlamaBackend,
+    ctx_params: &LlamaContextParams,
+) -> Result<()> {
+    println!("\u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}");
+    println!("\u{2502} 8. SAMPLERS & TEMPERATURE \u{2014} output quality across strategies    \u{2502}");
+    println!("\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}");
+
+    let prompt = "Write a haiku about the ocean";
+    let full = model.str_to_token(prompt, AddBos::Always)?;
+    let n_gen = 48;
+    let seed = 42u32;
+
+    // Define sampler configurations
+    struct SamplerConfig {
+        label: &'static str,
+        build: Box<dyn Fn() -> LlamaSampler>,
+    }
+
+    let configs: Vec<SamplerConfig> = vec![
+        SamplerConfig {
+            label: "greedy (t=0)",
+            build: Box::new(|| LlamaSampler::chain_simple([
+                LlamaSampler::greedy(),
+            ])),
+        },
+        SamplerConfig {
+            label: "temp=0.1 top_k=40",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_k(40),
+                LlamaSampler::temp(0.1),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "temp=0.4 top_p=0.9",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_p(0.9, 1),
+                LlamaSampler::temp(0.4),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "temp=0.7 top_p=0.9",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_p(0.9, 1),
+                LlamaSampler::temp(0.7),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "temp=1.0 top_p=0.95",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_p(0.95, 1),
+                LlamaSampler::temp(1.0),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "temp=1.5 top_k=50",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_k(50),
+                LlamaSampler::temp(1.5),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "min_p=0.05 t=0.7",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::min_p(0.05, 1),
+                LlamaSampler::temp(0.7),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "top_n_sigma=1.0",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::top_n_sigma(1.0),
+                LlamaSampler::dist(seed),
+            ])),
+        },
+        SamplerConfig {
+            label: "mirostat_v2 t5 e0.1",
+            build: Box::new(move || LlamaSampler::chain_simple([
+                LlamaSampler::mirostat_v2(seed, 5.0, 0.1),
+            ])),
+        },
+    ];
+
+    println!("  Prompt: \"{}\" ({} tokens, generating {})", prompt, full.len(), n_gen);
+    println!("  Seed: {} (for reproducibility with stochastic samplers)", seed);
+    println!();
+
+    println!(
+        "  {:>22} {:>8} {:>8}  {}",
+        "Sampler", "Gen ms", "tok/s", "Output (first 80 chars)"
+    );
+    println!("  {}", "-".repeat(100));
+
+    for cfg in &configs {
+        let mut ctx = new_ctx(model, backend, ctx_params)?;
+        let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
+        prefill_all(&mut ctx, &mut batch, &full)?;
+
+        let sampler = (cfg.build)();
+        let mut n_cur = full.len() as i32;
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut output = String::new();
+
+        let t0 = Instant::now();
+        for _ in 0..n_gen {
+            let tok = sampler.sample(&ctx, batch.n_tokens() - 1);
+            if model.is_eog_token(tok) {
+                break;
+            }
+            let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+            let mut s = String::with_capacity(32);
+            let _ = decoder.decode_to_string(&bytes, &mut s, false);
+            output.push_str(&s);
+
+            batch.clear();
+            batch.add(tok, n_cur, &[0], true)?;
+            n_cur += 1;
+            ctx.decode(&mut batch)?;
+        }
+        let elapsed = t0.elapsed();
+        let n_actual = (n_cur - full.len() as i32) as f64;
+        let tps = if elapsed.as_secs_f64() > 0.0 { n_actual / elapsed.as_secs_f64() } else { 0.0 };
+
+        let display: String = output.replace('\n', "\u{21b5}").chars().take(80).collect();
+        println!(
+            "  {:>22} {:>7.1?} {:>7.1}  \"{}\"{}",
+            cfg.label,
+            elapsed,
+            tps,
+            display,
+            if output.len() > 80 { "..." } else { "" },
+        );
+    }
+
+    // Reproducibility check: run the same stochastic sampler twice
+    println!();
+    println!("  Reproducibility (same seed, temp=0.7 top_p=0.9, run twice):");
+    let mut outputs = Vec::new();
+    for run in 0..2 {
+        let mut ctx = new_ctx(model, backend, ctx_params)?;
+        let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
+        prefill_all(&mut ctx, &mut batch, &full)?;
+
+        let sampler = LlamaSampler::chain_simple([
+            LlamaSampler::top_p(0.9, 1),
+            LlamaSampler::temp(0.7),
+            LlamaSampler::dist(seed),
+        ]);
+        let mut n_cur = full.len() as i32;
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut output = String::new();
+        for _ in 0..n_gen {
+            let tok = sampler.sample(&ctx, batch.n_tokens() - 1);
+            if model.is_eog_token(tok) { break; }
+            let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+            let mut s = String::with_capacity(32);
+            let _ = decoder.decode_to_string(&bytes, &mut s, false);
+            output.push_str(&s);
+            batch.clear();
+            batch.add(tok, n_cur, &[0], true)?;
+            n_cur += 1;
+            ctx.decode(&mut batch)?;
+        }
+        let display: String = output.replace('\n', "\u{21b5}").chars().take(60).collect();
+        println!("    Run {}: \"{display}\"...", run + 1);
+        outputs.push(output);
+    }
+    if outputs[0] == outputs[1] {
+        println!("    \u{2714} Identical — same seed produces deterministic output");
+    } else {
+        let diff_pos = outputs[0].chars().zip(outputs[1].chars())
+            .position(|(a, b)| a != b)
+            .unwrap_or(outputs[0].len().min(outputs[1].len()));
+        println!("    \u{2718} Diverges at char {} (non-deterministic)", diff_pos);
+    }
+
+    println!();
+    Ok(())
+}
+
 fn bench_dx() {
     println!("┌─────────────────────────────────────────────────────────────────────┐");
     println!("│ 6. DX — developer experience summary                               │");
@@ -576,6 +767,7 @@ fn main() -> Result<()> {
     bench_precision(&model, &backend, &params, prompts)?;
     bench_ux(&model, &backend, &params)?;
     bench_kv_quant(&model, &backend, prompts)?;
+    bench_samplers(&model, &backend, &params)?;
     bench_dx();
 
     println!("═══════════════════════════════════════════════════════════════════════");

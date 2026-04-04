@@ -375,6 +375,30 @@ degenerate output (diverges at char 2). With it, Q5_0 produces coherent text
 that diverges only in wording, while Q8_0 is near-identical to F16.
 See also the [TurboQuant section](#turboQuant--attention-rotation) for PPL and VRAM numbers.
 
+#### 8. Samplers & Temperature
+
+<p align="center"><img src="charts/samplers.svg" width="750"/></p>
+
+9 sampler configurations tested with seed=42 for reproducibility:
+
+| Sampler | Gen (48t) | tok/s | Output style |
+|:---|:---:|:---:|:---|
+| greedy (t=0) | 306 ms | 157 | Deterministic, factual |
+| temp=0.1 top_k=40 | 306 ms | 157 | Nearly identical to greedy |
+| temp=0.4 top_p=0.9 | 330 ms | 145 | Slight variation, still focused |
+| temp=0.7 top_p=0.9 | 335 ms | 143 | Creative, writes actual haiku |
+| temp=1.0 top_p=0.95 | 413 ms | 116 | More diverse, poetic |
+| temp=1.5 top_k=50 | 307 ms | 156 | Wild — mixes English and Chinese |
+| min_p=0.05 t=0.7 | 310 ms | 155 | Focused, similar to top_p |
+| top_n_sigma=1.0 | 643 ms | 75 | Slower (large candidate set) |
+| mirostat_v2 τ=5 | 565 ms | 85 | Adaptive, poetic output |
+
+**Key findings:**
+- Same seed produces **identical output** across runs (deterministic)
+- Greedy/low-temp are fastest (~157 tok/s), mirostat/sigma slowest (~75-85 tok/s)
+- `temp=0.7 + top_p=0.9` is the sweet spot for creative tasks
+- `min_p` is a fast alternative to `top_p` with similar quality
+
 ### Usage
 
 ```bash
