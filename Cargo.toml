@@ -20,6 +20,7 @@ members = [
     "examples/cvector-generator",
     "examples/tts",
     "examples/turbo-quant",
+    "examples/incremental-chat",
 ]
 
 [workspace.dependencies]

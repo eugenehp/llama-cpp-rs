@@ -27,6 +27,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `mtmd` | [`examples/mtmd/`](examples/mtmd/) | Multimodal (vision / audio) inference (requires `--features mtmd`) |
 | `quantize` | [`examples/quantize/`](examples/quantize/) | Quantize a GGUF model with full typed API |
 | `turbo-quant` | [`examples/turbo-quant/`](examples/turbo-quant/) | TurboQuant demo — compare attn rotation on/off |
+| `incremental-chat` | [`examples/incremental-chat/`](examples/incremental-chat/) | Chat with incremental prefill — processes tokens while you type |
 
 ---
 
@@ -283,6 +284,139 @@ cargo run -p turbo-quant -- \
     --kv-type q5_0 \
     --prompt "The capital of France is" \
     --n-predict 16
+```
+
+---
+
+## Incremental prefill
+
+The `incremental-chat` example demonstrates **incremental prefill** — decoding
+prompt tokens into the KV cache *while the user is still typing*, so that
+generation starts almost instantly when they press Enter.
+
+### Features
+
+- **Incremental prefill** — tokens decoded into the KV cache as you type
+- **BPE-stable margin** — withholds the last 2 tokens to avoid decode→invalidate churn (saves ~55% total compute)
+- **Chat template** — proper formatting via `apply_chat_template`
+- **Cached history prefix** — only the new user message is re-tokenized, not the entire conversation
+- **Conversation history** — KV cache persisted across turns with sliding-window eviction
+- **System prompt** — prefilled once at startup, never re-processed
+- **Full cursor-based editor** — arrow keys, Home/End, insert/delete at any position
+- **Multi-line input** — Alt+Enter for newlines
+- **Line editing** — Ctrl+W (word), Ctrl+U (clear), Ctrl+K (kill to end)
+- **Editing prefilled text** — mid-line edits invalidate only from the divergence point
+- **Ctrl-C to cancel** generation mid-stream (press twice while typing to quit)
+- **Performance stats** — TTFT and tok/s displayed after each response
+- **Graceful overflow** — messages exceeding context are truncated with a warning
+- **Stale message draining** — only the latest input change is processed
+- **Terminal cleanup** on panic via a custom panic hook
+- **Comprehensive benchmark** — 6 dimensions: latency, speed, load, precision, UX, DX
+
+### How it works
+
+1. The system prompt is prefilled once at startup and kept across turns.
+2. As the user types, the current input is periodically tokenized (debounced).
+3. New tokens beyond the KV cache are decoded in small batches, **withholding
+   the last 2 tokens** to avoid BPE churn (adding a character can change the
+   last 1–2 tokens retroactively — the margin prevents wasted decode cycles).
+4. If the user deletes or changes text, the KV cache is trimmed from the
+   divergence point — only the invalidated suffix is re-processed.
+5. When the user presses Enter, the remaining tokens (including the withheld
+   tail) are flushed and generation begins immediately.
+6. Conversation history stays in the KV cache.  When the context fills up,
+   the oldest turns are evicted (sliding window) rather than clearing everything.
+
+### Benchmark results
+
+Measured on **Qwen2.5-0.5B-Instruct Q4_K_M** (Apple Silicon, CPU-only).
+Run the full benchmark: `cargo run --release -p incremental-chat --bin incremental-bench -- model.gguf`
+Generate charts: `cargo run -p incremental-chat --bin incremental-charts`
+
+#### 1. Latency — normal vs incremental flush at Enter
+
+<p align="center"><img src="charts/latency.svg" width="700"/></p>
+
+#### Perceived speedup
+
+<p align="center"><img src="charts/speedup.svg" width="500"/></p>
+
+**2. Speed** — 167 tok/s generation throughput (32 tokens in 191ms)
+
+#### 3. GPU Load — BPE margin saves 40–59% total compute vs naive
+
+<p align="center"><img src="charts/load.svg" width="700"/></p>
+
+**4. Precision** — incremental prefill produces identical first token to normal prefill (**✔ ALL MATCH**)
+
+#### 5. UX — mid-line edit recovery cost
+
+<p align="center"><img src="charts/ux.svg" width="600"/></p>
+
+**6. DX** — 3-method API (`new`/`prefill_speculative`/`flush`), pure userspace pattern, ~130 lines of shared code
+
+#### 7. KV Cache Quantization + TurboQuant
+
+<p align="center"><img src="charts/kv_quant.svg" width="720"/></p>
+
+All KV quantization configs produce identical first token. On this 0.5B model the timing
+difference is negligible; on 7B+ models quantized KV cache saves gigabytes of VRAM
+(see [TurboQuant section](#turboQuant--attention-rotation) for PPL and VRAM numbers).
+
+### Usage
+
+```bash
+# Interactive chat with live prefill
+cargo run --release -p incremental-chat -- local model.gguf
+
+# Quantized KV cache with TurboQuant (saves VRAM, near-zero quality loss)
+cargo run --release -p incremental-chat -- --kv-type q5_0 local model.gguf
+
+# Without TurboQuant (for comparison)
+cargo run --release -p incremental-chat -- --kv-type q5_0 --no-turbo-quant local model.gguf
+
+# Cache the system prompt session to disk (instant restart)
+cargo run --release -p incremental-chat -- --session-cache sys.session local model.gguf
+
+# Custom system prompt, debounce, and sliding window
+cargo run --release -p incremental-chat -- \
+    --system-prompt "You are a pirate. Respond only in pirate speak." \
+    --debounce-ms 100 --keep-turns 4 \
+    local model.gguf
+
+# Run the comprehensive benchmark (7 dimensions)
+cargo run --release -p incremental-chat --bin incremental-bench -- model.gguf
+```
+
+### Using the incremental prefill API
+
+The key building blocks from `llama-cpp-4`:
+
+```rust
+use llama_cpp_4::llama_batch::LlamaBatch;
+use llama_cpp_4::token::LlamaToken;
+
+// Decode only new tokens (the delta) into the KV cache.
+// Withhold the last 2 tokens — BPE can retroactively change them
+// when the next character is typed.
+let new_tokens = model.str_to_token(&user_text, AddBos::Always)?;
+let stable_end = new_tokens.len().saturating_sub(2); // BPE margin
+let common = find_common_prefix(&cached_tokens, &new_tokens[..stable_end]);
+
+// Trim cache if the user edited earlier text
+if common < cached_tokens.len() {
+    ctx.clear_kv_cache_seq(Some(0), Some(common as u32), None)?;
+}
+
+// Decode only the genuinely new stable tokens
+let mut batch = LlamaBatch::new(512, 1);
+for (i, &token) in new_tokens[common..stable_end].iter().enumerate() {
+    let pos = (common + i) as i32;
+    batch.add(token, pos, &[0], i == stable_end - common - 1)?;
+}
+ctx.decode(&mut batch)?;
+
+// When user presses Enter: flush ALL tokens (including the tail)
 ```
 
 ---
