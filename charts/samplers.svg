@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 750 420" font-family="system-ui,-apple-system,sans-serif">
+<rect width="750" height="420" fill="#1a1a2e" rx="12"/>
+<text x="375" y="32" fill="#e0e0e0" font-size="16" font-weight="bold" text-anchor="middle">8. Samplers & Temperature</text>
+<text x="375" y="50" fill="#888" font-size="11" text-anchor="middle">48 tokens generated from "Write a haiku about the ocean" (seed=42)</text>
+<text x="162" y="85.0" fill="#aaa" font-size="11" text-anchor="end">greedy (t=0)</text>
+<rect x="170" y="70" width="218.6" height="22" fill="#4C78A8" rx="3" opacity="0.85"/>
+<text x="394.6" y="85.0" fill="#eee" font-size="10" font-weight="bold">306ms (157 tok/s)</text>
+<text x="162" y="121.0" fill="#aaa" font-size="11" text-anchor="end">t=0.1 top_k=40</text>
+<rect x="170" y="106" width="218.9" height="22" fill="#4C78A8" rx="3" opacity="0.85"/>
+<text x="394.9" y="121.0" fill="#eee" font-size="10" font-weight="bold">306ms (157 tok/s)</text>
+<text x="162" y="157.0" fill="#aaa" font-size="11" text-anchor="end">t=0.4 top_p=0.9</text>
+<rect x="170" y="142" width="235.9" height="22" fill="#72B7B2" rx="3" opacity="0.85"/>
+<text x="411.9" y="157.0" fill="#eee" font-size="10" font-weight="bold">330ms (145 tok/s)</text>
+<text x="162" y="193.0" fill="#aaa" font-size="11" text-anchor="end">t=0.7 top_p=0.9</text>
+<rect x="170" y="178" width="239.4" height="22" fill="#54A24B" rx="3" opacity="0.85"/>
+<text x="415.4" y="193.0" fill="#eee" font-size="10" font-weight="bold">335ms (143 tok/s)</text>
+<text x="162" y="229.0" fill="#aaa" font-size="11" text-anchor="end">t=1.0 top_p=0.95</text>
+<rect x="170" y="214" width="295.2" height="22" fill="#EECA3B" rx="3" opacity="0.85"/>
+<text x="471.2" y="229.0" fill="#eee" font-size="10" font-weight="bold">413ms (116 tok/s)</text>
+<text x="162" y="265.0" fill="#aaa" font-size="11" text-anchor="end">t=1.5 top_k=50</text>
+<rect x="170" y="250" width="219.4" height="22" fill="#F58518" rx="3" opacity="0.85"/>
+<text x="395.4" y="265.0" fill="#eee" font-size="10" font-weight="bold">307ms (156 tok/s)</text>
+<text x="162" y="301.0" fill="#aaa" font-size="11" text-anchor="end">min_p=0.05 t=0.7</text>
+<rect x="170" y="286" width="221.2" height="22" fill="#72B7B2" rx="3" opacity="0.85"/>
+<text x="397.2" y="301.0" fill="#eee" font-size="10" font-weight="bold">310ms (155 tok/s)</text>
+<text x="162" y="337.0" fill="#aaa" font-size="11" text-anchor="end">top_n_sigma=1.0</text>
+<rect x="170" y="322" width="459.3" height="22" fill="#E45756" rx="3" opacity="0.85"/>
+<text x="635.3" y="337.0" fill="#eee" font-size="10" font-weight="bold">643ms (75 tok/s)</text>
+<text x="162" y="373.0" fill="#aaa" font-size="11" text-anchor="end">mirostat_v2</text>
+<rect x="170" y="358" width="403.2" height="22" fill="#E45756" rx="3" opacity="0.85"/>
+<text x="579.2" y="373.0" fill="#eee" font-size="10" font-weight="bold">564ms (85 tok/s)</text>
+<text x="375" y="405" fill="#666" font-size="10" text-anchor="middle">Same seed (42) produces deterministic output across runs</text>
+</svg>

@@ -306,6 +306,46 @@ fn chart_speedup() -> String {
 // Main
 // ---------------------------------------------------------------------------
 
+fn chart_samplers() -> String {
+    let (w, h) = (750.0, 420.0);
+    let mut s = svg_header(w, h, "8. Samplers & Temperature",
+                           "48 tokens generated from \"Write a haiku about the ocean\" (seed=42)");
+
+    struct Row { label: &'static str, gen_ms: f64, tps: f64 }
+    let rows: &[Row] = &[
+        Row { label: "greedy (t=0)",       gen_ms: 306.1, tps: 156.8 },
+        Row { label: "t=0.1 top_k=40",    gen_ms: 306.4, tps: 156.7 },
+        Row { label: "t=0.4 top_p=0.9",   gen_ms: 330.3, tps: 145.3 },
+        Row { label: "t=0.7 top_p=0.9",   gen_ms: 335.2, tps: 143.2 },
+        Row { label: "t=1.0 top_p=0.95",  gen_ms: 413.3, tps: 116.1 },
+        Row { label: "t=1.5 top_k=50",    gen_ms: 307.1, tps: 156.3 },
+        Row { label: "min_p=0.05 t=0.7",  gen_ms: 309.7, tps: 155.0 },
+        Row { label: "top_n_sigma=1.0",   gen_ms: 643.0, tps: 74.7  },
+        Row { label: "mirostat_v2",       gen_ms: 564.5, tps: 85.0  },
+    ];
+
+    let colors = [C_BLUE, C_BLUE, C_TEAL, C_GREEN, C_YELLOW, C_ORANGE, C_TEAL, C_RED, C_RED];
+    let max_ms = 700.0;
+    let lx = 170.0;
+    let cw = 500.0;
+
+    for (i, row) in rows.iter().enumerate() {
+        let y = 70.0 + i as f64 * 36.0;
+        hbar(&mut s, y, row.gen_ms, max_ms, cw, lx, colors[i],
+             row.label, &format!("{:.0}ms ({:.0} tok/s)", row.gen_ms, row.tps));
+    }
+
+    // footer note
+    write!(
+        s,
+        "<text x=\"375\" y=\"405\" fill=\"#666\" font-size=\"10\" \
+         text-anchor=\"middle\">Same seed (42) produces deterministic output across runs</text>\n"
+    ).unwrap();
+
+    s.push_str(svg_footer());
+    s
+}
+
 fn main() {
     let dir = Path::new("charts");
     fs::create_dir_all(dir).expect("create charts dir");
@@ -316,6 +356,7 @@ fn main() {
         ("ux.svg",       chart_ux()),
         ("kv_quant.svg", chart_kv()),
         ("speedup.svg",  chart_speedup()),
+        ("samplers.svg", chart_samplers()),
     ];
 
     for (name, svg) in &charts {
