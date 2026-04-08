@@ -2,6 +2,7 @@
 
 use std::fmt::Debug;
 use std::fmt::Display;
+use std::mem::ManuallyDrop;
 
 pub mod data;
 pub mod data_array;
@@ -69,7 +70,8 @@ impl LlamaToken {
 /// This operation is safe because `LlamaToken` has a `repr(transparent)` attribute, ensuring that
 /// the memory layout of `LlamaToken` is the same as that of the underlying `llama_token` type.
 #[must_use]
-pub fn from_vec_token_sys(mut vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec<LlamaToken> {
+pub fn from_vec_token_sys(vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec<LlamaToken> {
+    let mut vec_sys = ManuallyDrop::new(vec_sys);
     let ptr = vec_sys.as_mut_ptr().cast::<LlamaToken>();
     unsafe { Vec::from_raw_parts(ptr, vec_sys.len(), vec_sys.capacity()) }
 }
@@ -83,7 +85,8 @@ pub fn from_vec_token_sys(mut vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec
 /// This operation is safe because `LlamaToken` has a `repr(transparent)` attribute, ensuring that
 /// the memory layout of `LlamaToken` is the same as that of the underlying `llama_token` type.
 #[must_use]
-pub fn to_vec_token_sys(mut vec_llama: Vec<LlamaToken>) -> Vec<llama_cpp_sys_4::llama_token> {
+pub fn to_vec_token_sys(vec_llama: Vec<LlamaToken>) -> Vec<llama_cpp_sys_4::llama_token> {
+    let mut vec_llama = ManuallyDrop::new(vec_llama);
     let ptr = vec_llama
         .as_mut_ptr()
         .cast::<llama_cpp_sys_4::llama_token>();
