@@ -1965,7 +1965,13 @@ fn main() {
                 if dst.symlink_metadata().is_ok() {
                     let _ = std::fs::remove_file(dst);
                 }
-                std::fs::hard_link(src, dst).unwrap();
+                // Try hard link first, fall back to copy if it fails (e.g., cross-device)
+                if let Err(e) = std::fs::hard_link(src, dst) {
+                    debug_log!("Hard link failed ({:?}), falling back to copy: {} -> {}", e, src.display(), dst.display());
+                    if let Err(copy_err) = std::fs::copy(src, dst) {
+                        panic!("Failed to copy file after hard link failed: {:?}. Original hard link error: {:?}", copy_err, e);
+                    }
+                }
             };
 
             let dst = target_dir.join(filename);
