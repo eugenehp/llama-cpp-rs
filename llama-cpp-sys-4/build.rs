@@ -802,6 +802,39 @@ fn find_vulkan_sdk_windows() -> Option<PathBuf> {
     None
 }
 
+#[cfg(feature = "prebuilt")]
+/// Setup prebuilt artifacts by automatically setting LLAMA_PREBUILT_DIR
+/// if the prebuilt feature is enabled
+fn setup_prebuilt_env() -> Option<PathBuf> {
+    // Collect enabled features for prebuilt artifact selection
+    let mut features = Vec::new();
+    if cfg!(feature = "cuda") { features.push("cuda"); }
+    if cfg!(feature = "metal") { features.push("metal"); }
+    if cfg!(feature = "vulkan") { features.push("vulkan"); }
+    if cfg!(feature = "webgpu") { features.push("webgpu"); }
+    if cfg!(feature = "blas") { features.push("blas"); }
+    if cfg!(feature = "opencl") { features.push("opencl"); }
+    if cfg!(feature = "hip") { features.push("hip"); }
+    if cfg!(feature = "openmp") { features.push("openmp"); }
+    if cfg!(feature = "mpi") { features.push("mpi"); }
+    if cfg!(feature = "rpc") { features.push("rpc"); }
+    if cfg!(feature = "mtmd") { features.push("mtmd"); }
+    if cfg!(feature = "q1") { features.push("q1"); }
+    let features = features.join(",");
+
+    debug_log!("Prebuilt feature enabled, attempting to setup prebuilt artifacts");
+    debug_log!("Target features: {}", features);
+
+    // TODO: Implement actual download and caching logic
+    // For now, this is a placeholder that demonstrates the concept
+    // In a full implementation, this would:
+    // 1. Check if prebuilt artifacts exist in cache
+    // 2. Download them if not present
+    // 3. Return the path to the cached artifacts
+
+    None
+}
+
 fn main() {
     let start_time = std::time::Instant::now();
     
@@ -1100,6 +1133,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
+    
+    // Rerun if prebuilt feature is toggled
+    #[cfg(feature = "prebuilt")]
+    println!("cargo:rustc-cfg=llama_prebuilt_enabled");
 
     debug_log!("Bindings Created");
     
@@ -1114,6 +1151,17 @@ fn main() {
     // llama/ggml libraries, use those directly and skip the full CMake build.
     // Expected layout is flexible; files may be in <dir>, <dir>/lib,
     // <dir>/lib64, or <dir>/bin.
+    
+    // Try prebuilt feature first
+    #[cfg(feature = "prebuilt")]
+    {
+        if let Some(prebuilt_dir) = setup_prebuilt_env() {
+            debug_log!("Using prebuilt artifacts from: {}", prebuilt_dir.display());
+            // TODO: Set LLAMA_PREBUILT_DIR environment variable
+            // unsafe { env::set_var("LLAMA_PREBUILT_DIR", prebuilt_dir); }
+        }
+    }
+    
     if let Ok(prebuilt_dir_raw) = env::var("LLAMA_PREBUILT_DIR") {
         let prebuilt_dir = PathBuf::from(&prebuilt_dir_raw);
         if prebuilt_dir.exists() {
