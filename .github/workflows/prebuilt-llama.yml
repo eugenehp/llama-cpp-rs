@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
-          LIBRARY_TYPE="${{ matrix.library_type${{ matrix.library_type }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
 
           echo "::group::All .a/.so/.dylib under target/"
           find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
@@ -259,7 +259,7 @@ jobs:
       - name: Compute asset name
         shell: bash
         run: |
-          LIBRARY_TYPE="${{ matrix.library_type${{ matrix.library_type }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
           echo "ASSET_NAME=llama-prebuilt-windows-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Setup Rust
@@ -289,7 +289,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          LIBRARY_TYPE="${{ matrix.library_type${{ matrix.library_type }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
           
           # Build based on library type
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
@@ -329,7 +329,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
-          LIBRARY_TYPE="${{ matrix.library_type${{ matrix.library_type }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
 
           echo "::group::All .lib/.dll under target/"
           find target -type f \( -name '*.lib' -o -name '*.dll' \) 2>/dev/null | head -80
@@ -469,7 +469,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
-          LIBRARY_TYPE="${{ matrix.library_type${{ matrix.library_type }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
 
           echo "::group::All .a/.so/.dylib under target/"
           find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
