@@ -62,7 +62,8 @@ jobs:
       - name: Compute asset name
         shell: bash
         run: |
-          echo "ASSET_NAME=llama-prebuilt-linux-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          echo "ASSET_NAME=llama-prebuilt-linux-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Install build dependencies
         run: |
@@ -225,7 +226,8 @@ jobs:
       - name: Compute asset name
         shell: bash
         run: |
-          echo "ASSET_NAME=llama-prebuilt-windows-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          echo "ASSET_NAME=llama-prebuilt-windows-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -364,7 +366,8 @@ jobs:
       - name: Compute asset name
         shell: bash
         run: |
-          echo "ASSET_NAME=llama-prebuilt-macos-${TARGET_TRIPLE}-${{ matrix.suffix }}.tar.gz" >> "$GITHUB_ENV"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          echo "ASSET_NAME=llama-prebuilt-macos-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
