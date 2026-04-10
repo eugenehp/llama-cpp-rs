@@ -18,8 +18,7 @@ include = [
     # Feature patches (applied at build time to the llama.cpp copy in OUT_DIR)
     "/patches",
 
-    # test files touched by the q1 patch
-    "/llama.cpp/tests/test-quantize-fns.cpp",
+
 
     # llama.cpp top-level
     "/llama.cpp/CMakeLists.txt",
