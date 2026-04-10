@@ -14,6 +14,14 @@ on:
         description: Existing tag to upload assets to (workflow_dispatch only)
         required: false
         default: ""
+      library_type:
+        description: Type of libraries to build (static, dynamic, or both)
+        type: choice
+        default: "static"
+        options:
+          - static
+          - dynamic
+          - both
 
 permissions:
   contents: write
@@ -34,29 +42,14 @@ jobs:
             features: ""
             vulkan: false
             blas: false
-          - label: q1
-            suffix: q1
-            features: q1
-            vulkan: false
-            blas: false
           - label: vulkan
             suffix: vulkan
             features: vulkan
             vulkan: true
             blas: false
-          - label: q1+vulkan
-            suffix: q1-vulkan
-            features: q1,vulkan
-            vulkan: true
-            blas: false
           - label: blas
             suffix: blas
             features: blas
-            vulkan: false
-            blas: true
-          - label: q1+blas
-            suffix: q1-blas
-            features: q1,blas
             vulkan: false
             blas: true
     env:
@@ -108,17 +101,40 @@ jobs:
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: |
           set -euo pipefail
-          if [[ -n "${{ matrix.features }}" ]]; then
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features \
-              --features "${{ matrix.features }}"
-          else
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          
+          # Build based on library type
+          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build dynamic library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
+            fi
+          fi
+          
+          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build static library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
           fi
 
       - name: Collect prebuilt libraries
@@ -127,6 +143,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
 
           echo "::group::All .a/.so/.dylib under target/"
           find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
@@ -137,7 +154,20 @@ jobs:
             base="$(basename "$f")"
             case "$base" in
               libllama*|libggml*|libcommon*)
-                cp -f "$f" "$ROOT/lib/$base" ;;
+                # Separate static and dynamic libraries
+                case "$base" in
+                  *.so|*.dylib)
+                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base" 
+                    fi
+                    ;;
+                  *.a)
+                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base" 
+                    fi
+                    ;;
+                esac
+                ;;
             esac
           done < <(find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) -print0)
 
@@ -145,7 +175,7 @@ jobs:
           ls -la "$ROOT/lib/" || true
 
           cat > "$ROOT/metadata.json" <<EOF
-          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
           EOF
 
           tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
@@ -170,20 +200,10 @@ jobs:
             suffix: cpu
             features: ""
             vulkan: false
-          - label: x64 q1
-            target: x86_64-pc-windows-msvc
-            suffix: q1
-            features: q1
-            vulkan: false
           - label: x64 vulkan
             target: x86_64-pc-windows-msvc
             suffix: vulkan
             features: vulkan
-            vulkan: true
-          - label: x64 q1+vulkan
-            target: x86_64-pc-windows-msvc
-            suffix: q1-vulkan
-            features: q1,vulkan
             vulkan: true
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
@@ -234,17 +254,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${{ matrix.features }}" ]]; then
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features \
-              --features "${{ matrix.features }}"
-          else
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          
+          # Build based on library type
+          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build dynamic library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
+            fi
+          fi
+          
+          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build static library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
           fi
 
       - name: Collect prebuilt libraries
@@ -253,6 +296,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
 
           echo "::group::All .lib/.dll under target/"
           find target -type f \( -name '*.lib' -o -name '*.dll' \) 2>/dev/null | head -80
@@ -264,8 +308,16 @@ jobs:
             case "$base" in
               llama*|ggml*|common*)
                 case "$base" in
-                  *.lib)  cp -f "$f" "$ROOT/lib/$base" ;;
-                  *.dll)  cp -f "$f" "$ROOT/bin/$base" ;;
+                  *.lib)
+                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base" 
+                    fi
+                    ;;
+                  *.dll)
+                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/bin/$base" 
+                    fi
+                    ;;
                 esac ;;
             esac
           done < <(find target -type f \( -name '*.lib' -o -name '*.dll' \) -print0)
@@ -274,7 +326,7 @@ jobs:
           ls -la "$ROOT/lib/" "$ROOT/bin/" 2>/dev/null || true
 
           cat > "$ROOT/metadata.json" <<EOF
-          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
           EOF
 
           tar --force-local -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
@@ -298,18 +350,10 @@ jobs:
             target: aarch64-apple-darwin
             suffix: cpu
             features: ""
-          - label: arm64 q1
-            target: aarch64-apple-darwin
-            suffix: q1
-            features: q1
           - label: arm64 metal
             target: aarch64-apple-darwin
             suffix: metal
             features: metal
-          - label: arm64 q1+metal
-            target: aarch64-apple-darwin
-            suffix: q1-metal
-            features: q1,metal
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
@@ -339,17 +383,40 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${{ matrix.features }}" ]]; then
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features \
-              --features "${{ matrix.features }}"
-          else
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          
+          # Build based on library type
+          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build dynamic library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
+            fi
+          fi
+          
+          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+            # Build static library
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
           fi
 
       - name: Collect prebuilt libraries
@@ -358,6 +425,7 @@ jobs:
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
+          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
 
           echo "::group::All .a/.so/.dylib under target/"
           find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
@@ -368,7 +436,20 @@ jobs:
             base="$(basename "$f")"
             case "$base" in
               libllama*|libggml*|libcommon*)
-                cp -f "$f" "$ROOT/lib/$base" ;;
+                # Separate static and dynamic libraries
+                case "$base" in
+                  *.so|*.dylib)
+                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base" 
+                    fi
+                    ;;
+                  *.a)
+                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base" 
+                    fi
+                    ;;
+                esac
+                ;;
             esac
           done < <(find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) -print0)
 
@@ -376,7 +457,7 @@ jobs:
           ls -la "$ROOT/lib/" || true
 
           cat > "$ROOT/metadata.json" <<EOF
-          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","sha":"${GITHUB_SHA}"}
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
           EOF
 
           tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
