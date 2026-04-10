@@ -514,7 +514,7 @@ git clone --recursive https://github.com/eugenehp/llama-cpp-rs
 # Or after cloning without --recursive
 git submodule update --init --recursive
 
-# Build everything
+# Build everything (with optimizations)
 cargo build
 
 # Run all unit tests (no model required)
@@ -523,6 +523,33 @@ cargo test
 # Run server unit tests specifically
 cargo test -p openai-server
 ```
+
+### Build Optimizations
+
+The build system includes several optimizations for faster compilation:
+
+- **Ninja build system** (2-3x faster than Make)
+- **Parallel compilation** (uses all CPU cores)
+- **sccache compilation caching** (makes feature changes instant)
+- **Shared CMake cache** (avoids rebuilds when toggling features)
+- **Unity Build** (groups source files for faster compilation)
+- **mold linker** (5-10x faster linking on Linux)
+
+For best performance, install the recommended tools:
+
+```bash
+# macOS
+brew install ninja sccache
+
+# Linux (Ubuntu/Debian)
+sudo apt-get install ninja-build mold
+cargo install sccache
+
+# Enable detailed build logging
+BUILD_DEBUG=1 cargo build
+```
+
+See [BUILD_OPTIMIZATIONS.md](BUILD_OPTIMIZATIONS.md) for more details.
 
 ### Updating llama.cpp
 

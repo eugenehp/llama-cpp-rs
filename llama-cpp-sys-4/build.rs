@@ -803,6 +803,8 @@ fn find_vulkan_sdk_windows() -> Option<PathBuf> {
 }
 
 fn main() {
+    let start_time = std::time::Instant::now();
+    
     let target = env::var("TARGET").unwrap();
     let host = env::var("HOST").unwrap();
     let is_cross = host != target;
@@ -984,6 +986,8 @@ fn main() {
         )
     };
 
+
+
     // Point CC/CXX at the MPI wrappers when building with MPI on macOS.
     // Check the *target* OS, not the host, so that cross-compilation from a
     // macOS host to a non-Apple target does not accidentally set these.
@@ -1098,6 +1102,11 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PATCH");
 
     debug_log!("Bindings Created");
+    
+    // Print build progress information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!("cargo:warning=[BUILD] Build configuration completed in {:?}", start_time.elapsed());
+    }
 
     // ── Optional prebuilt path (skip CMake compile) ─────────────────────────
     //
@@ -1205,6 +1214,11 @@ fn main() {
         );
     }
 
+    // Print build start information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!("cargo:warning=[BUILD] Starting CMake build...");
+    }
+
     // ── CMake build ──────────────────────────────────────────────────────────
 
     let mut config = Config::new(&llama_dst);
@@ -1213,6 +1227,9 @@ fn main() {
     if command_exists("ninja") {
         debug_log!("Ninja detected, using Ninja generator for CMake");
         config.generator("Ninja");
+        // Enable Ninja's parallel build with all available cores
+        let parallel = std::thread::available_parallelism().unwrap().get();
+        config.build_arg(format!("-j{}", parallel));
     } else {
         // If not Ninja, explicitly set parallel jobs for Make
         let parallel = std::thread::available_parallelism().unwrap().get();
@@ -1267,7 +1284,18 @@ fn main() {
             debug_log!("sccache found at {}", sc.display());
             config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
             config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
+            // Enable sccache's distributed compilation if available
+            config.define("CMAKE_C_COMPILER_LAUNCHER", format!("{}", sc.to_str().unwrap()));
+            config.define("CMAKE_CXX_COMPILER_LAUNCHER", format!("{}", sc.to_str().unwrap()));
         }
+    }
+    
+    // Enable mold linker for faster linking on Linux
+    if target.contains("linux") && command_exists("mold") {
+        debug_log!("Using mold linker for faster linking");
+        config.define("CMAKE_EXE_LINKER_FLAGS", "-fuse-ld=mold");
+        config.define("CMAKE_SHARED_LINKER_FLAGS", "-fuse-ld=mold");
+        config.define("CMAKE_MODULE_LINKER_FLAGS", "-fuse-ld=mold");
     }
 
     // Would require extra source files to pointlessly
@@ -1276,6 +1304,24 @@ fn main() {
     config.define("LLAMA_BUILD_TESTS", "OFF");
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
+    
+    // Disable expensive CMake tests and checks for faster builds
+    config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");
+    config.define("CMAKE_SKIP_RPATH", "ON");
+    
+    // Enable faster compilation by reducing debug info in release builds
+    if profile != "Debug" {
+        config.define("CMAKE_C_FLAGS_RELEASE", "-O3 -DNDEBUG");
+        config.define("CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
+    }
+    
+    // Enable faster CMake configuration by disabling expensive checks
+    // that aren't needed for production builds
+    if profile != "Debug" {
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Doxygen", "ON");
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Python", "ON");
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Git", "ON");
+    }
 
     // Build tools (including the mtmd library) only when the mtmd feature is
     // requested.  Common is also required because the CMakeLists gate for
@@ -1821,7 +1867,7 @@ fn main() {
     let llama_libs = extract_lib_names(&cmake_out_dir, build_shared_libs, &target);
     assert_ne!(llama_libs.len(), 0);
 
-    for lib in llama_libs {
+    for lib in &llama_libs {
         debug_log!(
             "LINK {}",
             format!("cargo:rustc-link-lib={}={}", llama_libs_kind, lib)
@@ -1938,5 +1984,11 @@ fn main() {
             debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
             force_hard_link(&asset, &dst);
         }
+    }
+    
+    // Print build completion information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!("cargo:warning=[BUILD] Build completed successfully in {:?}", start_time.elapsed());
+        println!("cargo:warning=[BUILD] Libraries built: {:?}", llama_libs);
     }
 }
