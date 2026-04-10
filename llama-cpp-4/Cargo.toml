@@ -19,7 +19,7 @@ tracing = { workspace = true }
 encoding_rs = { workspace = true }
 
 [features]
-default = ["openmp", "mtmd"]
+default = ["openmp", "mtmd", "dynamic-link"]
 cuda = ["llama-cpp-sys-4/cuda"]
 metal = ["llama-cpp-sys-4/metal"]
 dynamic-link = ["llama-cpp-sys-4/dynamic-link"]

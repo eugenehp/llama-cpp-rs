@@ -880,7 +880,7 @@ fn main() {
         };
         // C++ feature flags that affect the compiled output.
         let cpp_features = format!(
-            "cuda={},metal={},vulkan={},webgpu={},blas={},opencl={},hip={},openmp={},rpc={},q1={},native={},shared={}",
+            "cuda={},metal={},vulkan={},webgpu={},blas={},opencl={},hip={},openmp={},rpc={},q1={},mtmd={},native={},shared={}",
             cfg!(feature = "cuda"),
             cfg!(feature = "metal"),
             cfg!(feature = "vulkan"),
@@ -891,6 +891,7 @@ fn main() {
             cfg!(feature = "openmp"),
             cfg!(feature = "rpc"),
             cfg!(feature = "q1"),
+            cfg!(feature = "mtmd"),
             cfg!(feature = "native"),
             build_shared_libs,
         );
@@ -938,7 +939,6 @@ fn main() {
         }
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
-
 
         // Apply local patches (only those gated by active Cargo features).
         if cfg!(feature = "q1") {
@@ -1208,6 +1208,37 @@ fn main() {
     // ── CMake build ──────────────────────────────────────────────────────────
 
     let mut config = Config::new(&llama_dst);
+
+    // Prefer Ninja generator if available for faster builds
+    if command_exists("ninja") {
+        debug_log!("Ninja detected, using Ninja generator for CMake");
+        config.generator("Ninja");
+    } else {
+        // If not Ninja, explicitly set parallel jobs for Make
+        let parallel = std::thread::available_parallelism().unwrap().get();
+        config.build_arg(format!("-j{}", parallel));
+    }
+
+    // Homebrew OpenMP support for macOS (auto-detect prefix for CI and local)
+    if target.contains("apple") && cfg!(feature = "openmp") {
+        use std::path::Path;
+        let omp_prefix = if Path::new("/opt/homebrew/opt/libomp").exists() {
+            "/opt/homebrew/opt/libomp"
+        } else if Path::new("/usr/local/opt/libomp").exists() {
+            "/usr/local/opt/libomp"
+        } else {
+            println!("cargo:warning=libomp not found in Homebrew default locations. Please install libomp via Homebrew.");
+            ""
+        };
+        if !omp_prefix.is_empty() {
+            println!("cargo:rustc-link-search=native={}/lib", omp_prefix);
+            println!("cargo:rustc-link-lib=dylib=omp");
+            config.cflag(format!("-I{}/include", omp_prefix));
+            config.cxxflag(format!("-I{}/include", omp_prefix));
+            config.env("LDFLAGS", format!("-L{}/lib", omp_prefix));
+            config.env("DYLD_LIBRARY_PATH", format!("{}/lib", omp_prefix));
+        }
+    }
 
     // ── sccache launcher ────────────────────────────────────────────────────
     // When sccache is on PATH (or SCCACHE_PATH is set) and the caller has not

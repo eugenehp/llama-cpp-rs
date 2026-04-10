@@ -414,9 +414,10 @@ fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
     }
 }
 
+#[cfg(feature = "mtmd")]
 /// Preference order when multiple mmproj files are found in the same directory.
 /// Earlier entries win.
-const _MMPROJ_PREFER: &[&str] = &[
+const MMPROJ_PREFER: &[&str] = &[
     "-F16.gguf",
     "-f16.gguf",
     "-BF16.gguf",
@@ -1008,8 +1009,9 @@ where
     Ok((completion_tokens, finish_reason))
 }
 
+#[allow(unused)]
 /// Minimum context size needed to hold the prompt + generated tokens.
-fn _n_ctx_for_params(params: &InferenceParams) -> u32 {
+fn n_ctx_for_params(params: &InferenceParams) -> u32 {
     // Rough upper bound: 4 chars per token on average.
     let prompt_est = (params.prompt.len() / 4 + 1) as u32;
     prompt_est + params.max_tokens
