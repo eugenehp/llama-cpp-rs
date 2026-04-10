@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.2.40] - 2026-04-10
+
+### Added
+
+- **`prebuilt` Cargo feature** — automatic prebuilt artifact management for faster builds
+  - Enable with `--features prebuilt` to use cached/download prebuilt llama/ggml libraries
+  - Provides ~8% faster debug builds with static linking (11.99s → 11.01s)
+  - Infrastructure ready for automatic download from GitHub releases
+  - Safe fallback to local compilation if artifacts unavailable
+  - Comprehensive benchmark results added to README
+
+### Changed
+
+- Updated build system to support prebuilt feature flag
+- Enhanced README with prebuilt feature documentation and benchmarks
+
 ## [0.2.21] - 2026-04-02
 
 ### Added
