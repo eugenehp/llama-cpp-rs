@@ -105,8 +105,8 @@ jobs:
           LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
           
           # Build based on library type
-          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build dynamic library
+          if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+            # Build only dynamic library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -120,10 +120,8 @@ jobs:
                 --no-default-features \
                 --features "dynamic-link"
             fi
-          fi
-          
-          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build static library
+          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
+            # Build only static library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -131,6 +129,30 @@ jobs:
                 --no-default-features \
                 --features "${{ matrix.features }}"
             else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
+          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
+            # Build both static and dynamic libraries
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
               cargo build -p llama-cpp-4 \
                 --release \
                 --target "${TARGET_TRIPLE}" \
@@ -259,8 +281,8 @@ jobs:
           LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
           
           # Build based on library type
-          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build dynamic library
+          if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+            # Build only dynamic library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -274,10 +296,8 @@ jobs:
                 --no-default-features \
                 --features "dynamic-link"
             fi
-          fi
-          
-          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build static library
+          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
+            # Build only static library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -285,6 +305,30 @@ jobs:
                 --no-default-features \
                 --features "${{ matrix.features }}"
             else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
+          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
+            # Build both static and dynamic libraries
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
               cargo build -p llama-cpp-4 \
                 --release \
                 --target "${TARGET_TRIPLE}" \
@@ -389,8 +433,8 @@ jobs:
           LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
           
           # Build based on library type
-          if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build dynamic library
+          if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+            # Build only dynamic library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -404,10 +448,8 @@ jobs:
                 --no-default-features \
                 --features "dynamic-link"
             fi
-          fi
-          
-          if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
-            # Build static library
+          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
+            # Build only static library
             if [[ -n "${{ matrix.features }}" ]]; then
               cargo build -p llama-cpp-4 \
                 --release \
@@ -415,6 +457,30 @@ jobs:
                 --no-default-features \
                 --features "${{ matrix.features }}"
             else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features
+            fi
+          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
+            # Build both static and dynamic libraries
+            if [[ -n "${{ matrix.features }}" ]]; then
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }},dynamic-link"
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "${{ matrix.features }}"
+            else
+              cargo build -p llama-cpp-4 \
+                --release \
+                --target "${TARGET_TRIPLE}" \
+                --no-default-features \
+                --features "dynamic-link"
               cargo build -p llama-cpp-4 \
                 --release \
                 --target "${TARGET_TRIPLE}" \
