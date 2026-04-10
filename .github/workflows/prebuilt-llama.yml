@@ -31,7 +31,7 @@ env:
 
 jobs:
   linux-prebuilt:
-    name: Linux prebuilt (${{ matrix.label }})
+    name: Linux prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -42,16 +42,37 @@ jobs:
             features: ""
             vulkan: false
             blas: false
+            library_type: static
+          - label: cpu
+            suffix: cpu
+            features: ""
+            vulkan: false
+            blas: false
+            library_type: dynamic
           - label: vulkan
             suffix: vulkan
             features: vulkan
             vulkan: true
             blas: false
+            library_type: static
+          - label: vulkan
+            suffix: vulkan
+            features: vulkan
+            vulkan: true
+            blas: false
+            library_type: dynamic
           - label: blas
             suffix: blas
             features: blas
             vulkan: false
             blas: true
+            library_type: static
+          - label: blas
+            suffix: blas
+            features: blas
+            vulkan: false
+            blas: true
+            library_type: dynamic
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
@@ -102,7 +123,7 @@ jobs:
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: |
           set -euo pipefail
-          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
           
           # Build based on library type
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
@@ -129,30 +150,6 @@ jobs:
                 --no-default-features \
                 --features "${{ matrix.features }}"
             else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
-          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
-            # Build both static and dynamic libraries
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
               cargo build -p llama-cpp-4 \
                 --release \
                 --target "${TARGET_TRIPLE}" \
@@ -212,7 +209,7 @@ jobs:
           gh release upload "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   windows-prebuilt:
-    name: Windows prebuilt (${{ matrix.label }})
+    name: Windows prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -223,11 +220,25 @@ jobs:
             suffix: cpu
             features: ""
             vulkan: false
+            library_type: static
+          - label: x64 cpu
+            target: x86_64-pc-windows-msvc
+            suffix: cpu
+            features: ""
+            vulkan: false
+            library_type: dynamic
           - label: x64 vulkan
             target: x86_64-pc-windows-msvc
             suffix: vulkan
             features: vulkan
             vulkan: true
+            library_type: static
+          - label: x64 vulkan
+            target: x86_64-pc-windows-msvc
+            suffix: vulkan
+            features: vulkan
+            vulkan: true
+            library_type: dynamic
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
@@ -386,7 +397,7 @@ jobs:
           gh release upload "${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   macos-prebuilt:
-    name: macOS prebuilt (${{ matrix.label }})
+    name: macOS prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
     runs-on: macos-26
     strategy:
       fail-fast: false
@@ -396,10 +407,22 @@ jobs:
             target: aarch64-apple-darwin
             suffix: cpu
             features: ""
+            library_type: static
+          - label: arm64 cpu
+            target: aarch64-apple-darwin
+            suffix: cpu
+            features: ""
+            library_type: dynamic
           - label: arm64 metal
             target: aarch64-apple-darwin
             suffix: metal
             features: metal
+            library_type: static
+          - label: arm64 metal
+            target: aarch64-apple-darwin
+            suffix: metal
+            features: metal
+            library_type: dynamic
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
