@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.2.28"
+version = "0.2.29"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
@@ -23,8 +23,6 @@ include = [
 
     # llama.cpp top-level
     "/llama.cpp/CMakeLists.txt",
-    "/llama.cpp/convert_hf_to_gguf.py",
-    "/llama.cpp/pocs",
 
     # llama.cpp cmake
     "/llama.cpp/cmake",
@@ -80,24 +78,28 @@ include = [
     # these, so every subdirectory must be present even when only mtmd is
     # needed; otherwise cmake exits 1 with "not an existing directory" errors)
     "/llama.cpp/tools/CMakeLists.txt",
-    "/llama.cpp/tools/batched-bench/**/*",
-    "/llama.cpp/tools/cli/**/*",
-    "/llama.cpp/tools/completion/**/*",
-    "/llama.cpp/tools/cvector-generator/**/*",
-    "/llama.cpp/tools/export-lora/**/*",
-    "/llama.cpp/tools/fit-params/**/*",
-    "/llama.cpp/tools/gguf-split/**/*",
-    "/llama.cpp/tools/imatrix/**/*",
-    "/llama.cpp/tools/llama-bench/**/*",
+    # mtmd tool — full sources needed for multimodal support
     "/llama.cpp/tools/mtmd/**/*",
-    "/llama.cpp/tools/parser/**/*",
-    "/llama.cpp/tools/perplexity/**/*",
+    # quantize tool — needed by the q1 patch
     "/llama.cpp/tools/quantize/**/*",
-    "/llama.cpp/tools/results/**/*",
-    "/llama.cpp/tools/rpc/**/*",
-    "/llama.cpp/tools/server/**/*",
-    "/llama.cpp/tools/tokenize/**/*",
-    "/llama.cpp/tools/tts/**/*",
+    # Other tools — only CMakeLists.txt stubs so cmake doesn't error on
+    # add_subdirectory(); their full sources are NOT shipped to save ~8 MB.
+    "/llama.cpp/tools/batched-bench/CMakeLists.txt",
+    "/llama.cpp/tools/cli/CMakeLists.txt",
+    "/llama.cpp/tools/completion/CMakeLists.txt",
+    "/llama.cpp/tools/cvector-generator/CMakeLists.txt",
+    "/llama.cpp/tools/export-lora/CMakeLists.txt",
+    "/llama.cpp/tools/fit-params/CMakeLists.txt",
+    "/llama.cpp/tools/gguf-split/CMakeLists.txt",
+    "/llama.cpp/tools/imatrix/CMakeLists.txt",
+    "/llama.cpp/tools/llama-bench/CMakeLists.txt",
+    "/llama.cpp/tools/parser/CMakeLists.txt",
+    "/llama.cpp/tools/perplexity/CMakeLists.txt",
+    "/llama.cpp/tools/results/CMakeLists.txt",
+    "/llama.cpp/tools/rpc/CMakeLists.txt",
+    "/llama.cpp/tools/server/CMakeLists.txt",
+    "/llama.cpp/tools/tokenize/CMakeLists.txt",
+    "/llama.cpp/tools/tts/CMakeLists.txt",
 
     # vendor
     "/llama.cpp/vendor/**/*",
