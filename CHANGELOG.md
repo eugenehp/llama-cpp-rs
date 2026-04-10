@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.40] - 2026-04-10
+## [0.2.41] - 2026-04-10
 
 ### Added
 
 - **`prebuilt` Cargo feature** — automatic prebuilt artifact management for faster builds
   - Enable with `--features prebuilt` to use cached/download prebuilt llama/ggml libraries
+  - **NOTE**: Feature is now properly propagated to both `llama-cpp-sys-4` and `llama-cpp-4` crates
   - Provides ~8% faster debug builds with static linking (11.99s → 11.01s)
   - Infrastructure ready for automatic download from GitHub releases
   - Safe fallback to local compilation if artifacts unavailable
