@@ -177,12 +177,12 @@ jobs:
                 # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)
-                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
                       cp -f "$f" "$ROOT/lib/$base" 
                     fi
                     ;;
                   *.a)
-                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
                       cp -f "$f" "$ROOT/lib/$base" 
                     fi
                     ;;
@@ -321,30 +321,6 @@ jobs:
                 --target "${TARGET_TRIPLE}" \
                 --no-default-features
             fi
-          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
-            # Build both static and dynamic libraries
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
           fi
 
       - name: Collect prebuilt libraries
@@ -366,12 +342,12 @@ jobs:
               llama*|ggml*|common*)
                 case "$base" in
                   *.lib)
-                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
                       cp -f "$f" "$ROOT/lib/$base" 
                     fi
                     ;;
                   *.dll)
-                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
                       cp -f "$f" "$ROOT/bin/$base" 
                     fi
                     ;;
@@ -433,7 +409,7 @@ jobs:
       - name: Compute asset name
         shell: bash
         run: |
-          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
           echo "ASSET_NAME=llama-prebuilt-macos-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Setup Rust
@@ -453,7 +429,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          LIBRARY_TYPE="${{ inputs.library_type || 'static' }}"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
           
           # Build based on library type
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
@@ -485,30 +461,6 @@ jobs:
                 --target "${TARGET_TRIPLE}" \
                 --no-default-features
             fi
-          elif [[ "$LIBRARY_TYPE" == "both" ]]; then
-            # Build both static and dynamic libraries
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
           fi
 
       - name: Collect prebuilt libraries
@@ -531,12 +483,12 @@ jobs:
                 # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)
-                    if [[ "$LIBRARY_TYPE" == "dynamic" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
                       cp -f "$f" "$ROOT/lib/$base" 
                     fi
                     ;;
                   *.a)
-                    if [[ "$LIBRARY_TYPE" == "static" || "$LIBRARY_TYPE" == "both" ]]; then
+                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
                       cp -f "$f" "$ROOT/lib/$base" 
                     fi
                     ;;
