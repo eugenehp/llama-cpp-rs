@@ -51,7 +51,7 @@ jobs:
           gh pr list --json number,title --jq '.[] | select(.title | contains("Updated llama-cpp (bot)")) | .number' | xargs -I {} gh pr close {}
       - name: Create open PR
         if: steps.changes.outputs.has_changes == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ secrets.GH_TOKEN_WORKFLOW || secrets.GITHUB_TOKEN }}
           script: |
