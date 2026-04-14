@@ -14,14 +14,13 @@ pub struct PerfContextData {
 impl PerfContextData {
     /// Create a new `PerfContextData`.
     /// ```
-    /// # use llama_cpp_4::timing::PerfContextData;
-    /// let timings = PerfContextData::new(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7, 8, 9);
-    /// let timings_str = "load time = 3.00 ms
-    /// sample time = 4.00 ms / 7 runs (0.57 ms per token, 1750.00 tokens per second)
-    /// prompt eval time = 5.00 ms / 8 tokens (0.62 ms per token, 1600.00 tokens per second)
-    /// eval time = 6.00 ms / 9 runs (0.67 ms per token, 1500.00 tokens per second)
-    /// total time = 1.00 ms";
-    /// assert_eq!(timings_str, format!("{}", timings));
+    /// # use llama_cpp_4::context::perf::PerfContextData;
+    /// let timings = PerfContextData::new(1.0, 2.0, 3.0, 4.0, 5, 6);
+    /// assert_eq!(timings.t_load_ms(), 2.0);
+    /// assert_eq!(timings.t_p_eval_ms(), 3.0);
+    /// assert_eq!(timings.t_eval_ms(), 4.0);
+    /// assert_eq!(timings.n_p_eval(), 5);
+    /// assert_eq!(timings.n_eval(), 6);
     /// ```
     #[allow(clippy::too_many_arguments)]
     #[must_use]

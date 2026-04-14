@@ -328,8 +328,8 @@ impl MtmdContext {
     /// Whether `llama_decode` must use a non-causal attention mask when
     /// decoding image embeddings for this model.
     #[must_use]
-    pub fn decode_use_non_causal(&self) -> bool {
-        unsafe { sys::mtmd_decode_use_non_causal(self.ptr.as_ptr()) }
+    pub fn decode_use_non_causal(&self, chunk: &MtmdInputChunk<'_>) -> bool {
+        unsafe { sys::mtmd_decode_use_non_causal(self.ptr.as_ptr(), chunk.as_ptr()) }
     }
 
     /// Whether the model uses M-RoPE for `llama_decode`.

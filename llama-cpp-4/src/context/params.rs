@@ -94,11 +94,9 @@ impl From<LlamaPoolingType> for i32 {
 /// # use std::num::NonZeroU32;
 /// use llama_cpp_4::context::params::LlamaContextParams;
 ///
-///let ctx_params = LlamaContextParams::default()
-///    .with_n_ctx(NonZeroU32::new(2048))
-///    .with_seed(1234);
+/// let ctx_params = LlamaContextParams::default()
+///     .with_n_ctx(NonZeroU32::new(2048));
 ///
-/// assert_eq!(ctx_params.seed(), 1234);
 /// assert_eq!(ctx_params.n_ctx(), NonZeroU32::new(2048));
 /// ```
 #[derive(Debug, Clone)]

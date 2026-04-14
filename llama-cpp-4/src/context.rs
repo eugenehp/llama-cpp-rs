@@ -84,8 +84,8 @@ impl<'model> LlamaContext<'model> {
     /// - The `embeddings_enabled` flag is used to determine if embeddings are enabled for the context.
     ///
     /// # Example
-    /// ```
-    /// let llama_model = LlamaModel::load("path/to/model").unwrap();
+    /// ```ignore
+    /// let llama_model = LlamaModel::load_from_file(&backend, "path/to/model", &params).unwrap();
     /// let context_ptr = NonNull::new(some_llama_context_ptr).unwrap();
     /// let context = LlamaContext::new(&llama_model, context_ptr, true);
     /// // Now you can use the context

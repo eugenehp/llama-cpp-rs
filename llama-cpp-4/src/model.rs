@@ -809,11 +809,15 @@ impl LlamaModel {
     /// # Example
     ///
     /// ```no_run
-    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
+    /// use llama_cpp_4::token::LlamaToken;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
-    /// let token = LlamaToken(42);
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
+    /// let token = LlamaToken::new(42);
     /// let token_attrs = model.token_attr(token);
     /// # Ok(())
     /// # }
@@ -900,11 +904,15 @@ impl LlamaModel {
     /// # Example
     ///
     /// ```no_run
-    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    /// use llama_cpp_4::model::{LlamaModel, Special};
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
+    /// use llama_cpp_4::token::LlamaToken;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
-    /// let token = LlamaToken(42);
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
+    /// let token = LlamaToken::new(42);
     /// let token_string = model.token_to_str_with_size(token, 32, Special::Plaintext)?;
     /// # Ok(())
     /// # }
@@ -937,11 +945,15 @@ impl LlamaModel {
     /// # Example
     ///
     /// ```no_run
-    /// use llama_cpp_4::model::{LlamaModel, LlamaToken};
+    /// use llama_cpp_4::model::{LlamaModel, Special};
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
+    /// use llama_cpp_4::token::LlamaToken;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
-    /// let token = LlamaToken(42);
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
+    /// let token = LlamaToken::new(42);
     /// let token_bytes = model.token_to_bytes_with_size(token, 32, Special::Plaintext, None)?;
     /// # Ok(())
     /// # }
@@ -1010,9 +1022,12 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let n_vocab = model.n_vocab();
     /// # Ok(())
     /// # }
@@ -1035,9 +1050,12 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let vocab_type = model.vocab_type();
     /// # Ok(())
     /// # }
@@ -1061,9 +1079,12 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let n_embd = model.n_embd();
     /// # Ok(())
     /// # }
@@ -1336,9 +1357,12 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model")?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let chat_template = model.get_chat_template(1024)?;
     /// # Ok(())
     /// # }
@@ -1382,10 +1406,12 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::LlamaModel;
-    /// use std::path::Path;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1585,11 +1611,13 @@ impl LlamaModel {
     /// # Example
     ///
     /// ```no_run
-    /// use llama_cpp_4::model::{LlamaModel, LlamaLoraAdapter};
-    /// use std::path::Path;
+    /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let adapter = model.lora_adapter_init("path/to/lora/adapter")?;
     /// # Ok(())
     /// # }
@@ -1636,12 +1664,15 @@ impl LlamaModel {
     /// # Example
     ///
     /// ```no_run
-    /// use llama_cpp_4::model::{LlamaModel, LlamaContext};
-    /// use llama_cpp_4::LlamaContextParams;
+    /// use llama_cpp_4::model::LlamaModel;
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
-    /// let context = model.new_context(&LlamaBackend::init()?, LlamaContextParams::default())?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
+    /// let context = model.new_context(&backend, LlamaContextParams::default())?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1708,14 +1739,17 @@ impl LlamaModel {
     ///
     /// ```no_run
     /// use llama_cpp_4::model::{LlamaModel, LlamaChatMessage};
+    /// use llama_cpp_4::model::params::LlamaModelParams;
+    /// use llama_cpp_4::llama_backend::LlamaBackend;
     ///
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let model = LlamaModel::load_from_file("path/to/model", &LlamaModelParams::default())?;
+    /// let backend = LlamaBackend::init()?;
+    /// let model = LlamaModel::load_from_file(&backend, "path/to/model", &LlamaModelParams::default())?;
     /// let chat = vec![
-    ///     LlamaChatMessage::new("user", "Hello!"),
-    ///     LlamaChatMessage::new("assistant", "Hi! How can I assist you today?"),
+    ///     LlamaChatMessage::new("user".to_string(), "Hello!".to_string())?,
+    ///     LlamaChatMessage::new("assistant".to_string(), "Hi! How can I assist you today?".to_string())?,
     /// ];
-    /// let formatted_chat = model.apply_chat_template(None, chat, true)?;
+    /// let formatted_chat = model.apply_chat_template(None, &chat, true)?;
     /// # Ok(())
     /// # }
     /// ```
@@ -1823,7 +1857,7 @@ impl LlamaModel {
     /// ```
     /// use llama_cpp_4::model::LlamaModel;
     ///
-    /// let path = LlamaModel::split_path("/models/llama", 2, 4);
+    /// let path = LlamaModel::split_path("/models/llama", 1, 4);
     /// assert_eq!(path, "/models/llama-00002-of-00004.gguf");
     /// ```
     ///
@@ -1868,7 +1902,7 @@ impl LlamaModel {
     /// ```
     /// use llama_cpp_4::model::LlamaModel;
     ///
-    /// let prefix = LlamaModel::split_prefix("/models/llama-00002-of-00004.gguf", 2, 4);
+    /// let prefix = LlamaModel::split_prefix("/models/llama-00002-of-00004.gguf", 1, 4);
     /// assert_eq!(prefix, Some("/models/llama".to_string()));
     /// ```
     ///
