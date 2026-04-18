@@ -1,13 +1,13 @@
 [package]
 name = "tts"
-version = "0.2.21"
+version = "0.2.22"
 edition = "2021"
 description = "Example: tts for llama-cpp-4"
 license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.22" }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 encoding_rs = { workspace = true }

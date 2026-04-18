@@ -1,6 +1,6 @@
 [package]
 name = "simple"
-version = "0.2.21"
+version = "0.2.22"
 edition = "2021"
 description = "Example: simple for llama-cpp-4"
 license = "MIT OR Apache-2.0"
@@ -9,7 +9,7 @@ publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.22" }
 hf-hub = { workspace = true }
 clap = { workspace = true , features = ["derive"] }
 anyhow = { workspace = true }

@@ -173,7 +173,7 @@ jobs:
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
-              libllama*|libggml*|libcommon*)
+              libllama*|libggml*|libcommon*|libmtmd*)
                 # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)
@@ -349,7 +349,7 @@ jobs:
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
-              llama*|ggml*|common*)
+              llama*|ggml*|common*|mtmd*)
                 case "$base" in
                   *.lib)
                     if [[ "$LIBRARY_TYPE" == "static"   ]]; then
@@ -499,7 +499,7 @@ jobs:
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
-              libllama*|libggml*|libcommon*)
+              libllama*|libggml*|libcommon*|libmtmd*)
                 # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)

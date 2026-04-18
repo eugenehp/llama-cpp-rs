@@ -1,14 +1,14 @@
 [package]
 name = "incremental-chat"
-version = "0.2.21"
+version = "0.2.22"
 edition = "2021"
 description = "Example: incremental-chat for llama-cpp-4"
 license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }
-llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.2.21" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.22" }
+llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.2.22" }
 hf-hub = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
