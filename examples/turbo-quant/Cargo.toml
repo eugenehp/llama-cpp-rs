@@ -3,6 +3,8 @@ name = "turbo-quant"
 version = "0.2.21"
 edition = "2021"
 description = "TurboQuant demo: attention rotation for better KV-cache quantization"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }

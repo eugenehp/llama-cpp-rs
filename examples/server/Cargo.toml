@@ -2,8 +2,9 @@
 name = "openai-server"
 version = "0.2.21"
 edition = "2021"
-publish = false
 description = "Minimal OpenAI-compatible chat completion server"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21" }

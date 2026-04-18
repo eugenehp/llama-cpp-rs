@@ -3,6 +3,8 @@ name = "mtmd"
 version = "0.2.21"
 edition = "2021"
 description = "Multimodal (image/audio) example using llama-cpp-4 with the mtmd feature"
+license = "MIT OR Apache-2.0"
+publish = false
 
 [dependencies]
 llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.21", features = ["mtmd"] }
