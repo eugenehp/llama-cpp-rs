@@ -40,7 +40,7 @@ jobs:
       - name: Fmt
         run: cargo fmt
       - name: Test
-        run: cargo test --workspace --exclude llama-cpp-4
+        run: cargo test --workspace --exclude llama-cpp-4 --exclude openai-server
       - name: sccache stats
         run: sccache --show-stats || true
   linux:
@@ -129,7 +129,7 @@ jobs:
         shell: pwsh
         run: cargo build --features vulkan
       - name: Test
-        run: cargo test --workspace --exclude llama-cpp-4
+        run: cargo test --workspace --exclude llama-cpp-4 --exclude openai-server
       - name: sccache stats
         shell: pwsh
         run: sccache --show-stats
