@@ -70,7 +70,7 @@ fn main() -> Result<()> {
         )
     };
 
-    if status != llama_cpp_sys_4::LLAMA_PARAMS_FIT_STATUS_SUCCESS {
+    if status != llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_SUCCESS {
         bail!("params_fit failed (status={status})");
     }
 

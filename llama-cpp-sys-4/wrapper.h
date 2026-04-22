@@ -3,6 +3,7 @@
 // we need from them is already re-exported through llama.h.
 #include "llama.h"
 #include "common.h"
+#include "fit.h"
 
 #ifdef RPC_SUPPORT
 #include "ggml-rpc.h"
