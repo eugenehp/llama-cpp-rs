@@ -726,6 +726,7 @@ impl LlamaSampler {
     /// - If any trigger word contains null bytes.
     /// - If llama.cpp returns a null pointer.
     #[must_use]
+    #[deprecated(note = "use grammar_lazy_patterns instead")]
     pub fn grammar_lazy(
         model: &LlamaModel,
         grammar_str: &str,

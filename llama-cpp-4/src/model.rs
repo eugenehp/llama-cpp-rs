@@ -8,24 +8,19 @@ use std::path::Path;
 use std::ptr::NonNull;
 
 use llama_cpp_sys_4::{
-    llama_adapter_lora, llama_adapter_lora_init, llama_add_bos_token, llama_add_eos_token,
-    llama_chat_apply_template, llama_chat_builtin_templates, llama_chat_message,
-    llama_detokenize, llama_free_model, llama_load_model_from_file, llama_model,
-    llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
-    llama_model_get_vocab, llama_model_has_decoder, llama_model_has_encoder,
+    llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template,
+    llama_chat_builtin_templates, llama_chat_message, llama_detokenize, llama_init_from_model,
+    llama_model, llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
+    llama_model_free, llama_model_get_vocab, llama_model_has_decoder, llama_model_has_encoder,
     llama_model_is_diffusion, llama_model_is_hybrid, llama_model_is_recurrent,
-    llama_model_load_from_splits, llama_model_meta_count, llama_model_meta_key_by_index,
-    llama_model_meta_val_str, llama_model_meta_val_str_by_index, llama_model_n_cls_out,
-    llama_model_n_embd_inp, llama_model_n_embd_out, llama_model_n_head_kv, llama_model_n_params,
-    llama_model_n_swa, llama_model_rope_freq_scale_train, llama_model_rope_type,
-    llama_model_save_to_file, llama_model_size, llama_n_ctx_train, llama_n_embd, llama_n_head,
-    llama_n_layer, llama_n_vocab, llama_new_context_with_model, llama_split_path,
-    llama_split_prefix, llama_token_bos, llama_token_cls, llama_token_eos, llama_token_eot,
-    llama_token_fim_mid, llama_token_fim_pad, llama_token_fim_pre, llama_token_fim_rep,
-    llama_token_fim_sep, llama_token_fim_suf, llama_token_get_attr, llama_token_get_score,
-    llama_token_get_text, llama_token_is_control, llama_token_is_eog, llama_token_nl,
-    llama_token_pad, llama_token_sep, llama_token_to_piece, llama_tokenize, llama_vocab,
-    llama_vocab_type, LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
+    llama_model_load_from_file, llama_model_load_from_splits, llama_model_meta_count,
+    llama_model_meta_key_by_index, llama_model_meta_val_str, llama_model_meta_val_str_by_index,
+    llama_model_n_cls_out, llama_model_n_ctx_train, llama_model_n_embd, llama_model_n_embd_inp,
+    llama_model_n_embd_out, llama_model_n_head, llama_model_n_head_kv, llama_model_n_layer,
+    llama_model_n_params, llama_model_n_swa, llama_model_rope_freq_scale_train,
+    llama_model_rope_type, llama_model_save_to_file, llama_model_size, llama_split_path,
+    llama_split_prefix, llama_token_to_piece, llama_tokenize, llama_vocab, llama_vocab_type,
+    LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
 };
 
 use crate::context::params::LlamaContextParams;
@@ -457,7 +452,7 @@ impl LlamaModel {
     /// which is almost certainly positive.
     #[must_use]
     pub fn n_ctx_train(&self) -> u32 {
-        let n_ctx_train = unsafe { llama_n_ctx_train(self.model.as_ptr()) };
+        let n_ctx_train = unsafe { llama_model_n_ctx_train(self.model.as_ptr()) };
         u32::try_from(n_ctx_train).expect("n_ctx_train fits into an u32")
     }
 
@@ -483,8 +478,7 @@ impl LlamaModel {
     /// This function returns the token that represents the beginning of a stream (BOS token).
     #[must_use]
     pub fn token_bos(&self) -> LlamaToken {
-        let token = unsafe { llama_token_bos(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().bos()
     }
 
     /// Get the end of stream token.
@@ -492,8 +486,7 @@ impl LlamaModel {
     /// This function returns the token that represents the end of a stream (EOS token).
     #[must_use]
     pub fn token_eos(&self) -> LlamaToken {
-        let token = unsafe { llama_token_eos(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().eos()
     }
 
     /// Get the newline token.
@@ -501,8 +494,7 @@ impl LlamaModel {
     /// This function returns the token that represents a newline character.
     #[must_use]
     pub fn token_nl(&self) -> LlamaToken {
-        let token = unsafe { llama_token_nl(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().nl()
     }
 
     /// Check if a token represents the end of generation (end of turn, end of sequence, etc.).
@@ -519,89 +511,79 @@ impl LlamaModel {
     /// - `true` if the token is an end-of-generation token, otherwise `false`.
     #[must_use]
     pub fn is_eog_token(&self, token: LlamaToken) -> bool {
-        unsafe { llama_token_is_eog(self.get_vocab().vocab.as_ref(), token.0) }
+        self.get_vocab().is_eog(token)
     }
 
     /// Get the classification token.
     #[must_use]
     pub fn token_cls(&self) -> LlamaToken {
-        let token = unsafe { llama_token_cls(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().cls()
     }
 
     /// Get the end-of-turn token.
     #[must_use]
     pub fn token_eot(&self) -> LlamaToken {
-        let token = unsafe { llama_token_eot(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().eot()
     }
 
     /// Get the padding token.
     #[must_use]
     pub fn token_pad(&self) -> LlamaToken {
-        let token = unsafe { llama_token_pad(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().pad()
     }
 
     /// Get the separator token.
     #[must_use]
     pub fn token_sep(&self) -> LlamaToken {
-        let token = unsafe { llama_token_sep(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().sep()
     }
 
     /// Get the fill-in-the-middle prefix token.
     #[must_use]
     pub fn token_fim_pre(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_pre(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_pre()
     }
 
     /// Get the fill-in-the-middle suffix token.
     #[must_use]
     pub fn token_fim_suf(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_suf(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_suf()
     }
 
     /// Get the fill-in-the-middle middle token.
     #[must_use]
     pub fn token_fim_mid(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_mid(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_mid()
     }
 
     /// Get the fill-in-the-middle padding token.
     #[must_use]
     pub fn token_fim_pad(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_pad(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_pad()
     }
 
     /// Get the fill-in-the-middle repository token.
     #[must_use]
     pub fn token_fim_rep(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_rep(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_rep()
     }
 
     /// Get the fill-in-the-middle separator token.
     #[must_use]
     pub fn token_fim_sep(&self) -> LlamaToken {
-        let token = unsafe { llama_token_fim_sep(self.get_vocab().vocab.as_ref()) };
-        LlamaToken(token)
+        self.get_vocab().fim_sep()
     }
 
     /// Check if a token is a control token.
     #[must_use]
     pub fn token_is_control(&self, token: LlamaToken) -> bool {
-        unsafe { llama_token_is_control(self.get_vocab().vocab.as_ref(), token.0) }
+        self.get_vocab().is_control(token)
     }
 
     /// Get the score of a token.
     #[must_use]
     pub fn token_get_score(&self, token: LlamaToken) -> f32 {
-        unsafe { llama_token_get_score(self.get_vocab().vocab.as_ref(), token.0) }
+        self.get_vocab().get_score(token)
     }
 
     /// Get the raw text of a token.
@@ -610,26 +592,26 @@ impl LlamaModel {
     ///
     /// Returns an error if the token text is null or not valid UTF-8.
     pub fn token_get_text(&self, token: LlamaToken) -> Result<&str, StringFromModelError> {
-        let ptr =
-            unsafe { llama_token_get_text(self.get_vocab().vocab.as_ref(), token.0) };
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_vocab_get_text(self.get_vocab().vocab.as_ref(), token.0)
+        };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
         let cstr = unsafe { CStr::from_ptr(ptr) };
-        cstr.to_str()
-            .map_err(StringFromModelError::Utf8Error)
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
 
     /// Check if a BOS token should be added when tokenizing.
     #[must_use]
     pub fn add_bos_token(&self) -> bool {
-        unsafe { llama_add_bos_token(self.get_vocab().vocab.as_ref()) }
+        self.get_vocab().get_add_bos()
     }
 
     /// Check if an EOS token should be added when tokenizing.
     #[must_use]
     pub fn add_eos_token(&self) -> bool {
-        unsafe { llama_add_eos_token(self.get_vocab().vocab.as_ref()) }
+        self.get_vocab().get_add_eos()
     }
 
     /// Get the decoder start token.
@@ -824,7 +806,8 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
-        let token_type = unsafe { llama_token_get_attr(self.get_vocab().vocab.as_ref(), id) };
+        let token_type =
+            unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.get_vocab().vocab.as_ref(), id) };
         LlamaTokenAttrs::try_from(token_type).expect("token type is valid")
     }
 
@@ -1034,7 +1017,7 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_vocab(&self) -> i32 {
-        unsafe { llama_n_vocab(self.get_vocab().vocab.as_ref()) }
+        self.get_vocab().n_tokens()
     }
 
     /// The type of vocab the model was trained on.
@@ -1091,19 +1074,19 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_embd(&self) -> c_int {
-        unsafe { llama_n_embd(self.model.as_ptr()) }
+        unsafe { llama_model_n_embd(self.model.as_ptr()) }
     }
 
     /// Get the number of transformer layers in the model.
     #[must_use]
     pub fn n_layer(&self) -> c_int {
-        unsafe { llama_n_layer(self.model.as_ptr()) }
+        unsafe { llama_model_n_layer(self.model.as_ptr()) }
     }
 
     /// Get the number of attention heads in the model.
     #[must_use]
     pub fn n_head(&self) -> c_int {
-        unsafe { llama_n_head(self.model.as_ptr()) }
+        unsafe { llama_model_n_head(self.model.as_ptr()) }
     }
 
     /// Get the number of key-value attention heads in the model.
@@ -1432,7 +1415,7 @@ impl LlamaModel {
             .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
 
         let cstr = CString::new(path)?;
-        let llama_model = unsafe { llama_load_model_from_file(cstr.as_ptr(), params.params) };
+        let llama_model = unsafe { llama_model_load_from_file(cstr.as_ptr(), params.params) };
 
         let model = NonNull::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
 
@@ -1683,7 +1666,7 @@ impl LlamaModel {
         params: LlamaContextParams,
     ) -> Result<LlamaContext<'_>, LlamaContextLoadError> {
         // Apply TurboQuant attn-rotation preference before the KV cache is
-        // initialised inside llama_new_context_with_model.
+        // initialised inside llama_init_from_model.
         let prev_rot_var = std::env::var("LLAMA_ATTN_ROT_DISABLE").ok();
         if params.attn_rot_disabled {
             // SAFETY: we restore the value right after the call.
@@ -1697,7 +1680,7 @@ impl LlamaModel {
         }
 
         let context_params = params.context_params;
-        let context = unsafe { llama_new_context_with_model(self.model.as_ptr(), context_params) };
+        let context = unsafe { llama_init_from_model(self.model.as_ptr(), context_params) };
 
         // Restore the env-var to its previous state.
         #[allow(unused_unsafe)]
@@ -1950,7 +1933,7 @@ impl fmt::Display for LlamaModel {
 
 impl Drop for LlamaModel {
     fn drop(&mut self) {
-        unsafe { llama_free_model(self.model.as_ptr()) }
+        unsafe { llama_model_free(self.model.as_ptr()) }
     }
 }
 
