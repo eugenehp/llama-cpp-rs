@@ -482,7 +482,7 @@ impl<'model> LlamaContext<'model> {
     /// Print a breakdown of the memory usage.
     pub fn memory_breakdown_print(&self) {
         unsafe {
-            llama_cpp_sys_4::llama_memory_breakdown_print(self.context.as_ptr());
+            llama_cpp_sys_4::common_memory_breakdown_print(self.context.as_ptr());
         }
     }
 
