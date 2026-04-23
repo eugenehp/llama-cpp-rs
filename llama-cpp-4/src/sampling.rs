@@ -11,12 +11,12 @@ use llama_cpp_sys_4::{
     llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_free,
     llama_sampler_get_seed, llama_sampler_init_adaptive_p, llama_sampler_init_dist,
     llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy,
-    llama_sampler_init_grammar_lazy_patterns, llama_sampler_init_greedy,
-    llama_sampler_init_infill, llama_sampler_init_logit_bias, llama_sampler_init_min_p,
-    llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2, llama_sampler_init_penalties,
-    llama_sampler_init_temp, llama_sampler_init_temp_ext, llama_sampler_init_top_k,
-    llama_sampler_init_top_n_sigma, llama_sampler_init_top_p, llama_sampler_init_typical,
-    llama_sampler_init_xtc, llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
+    llama_sampler_init_grammar_lazy_patterns, llama_sampler_init_greedy, llama_sampler_init_infill,
+    llama_sampler_init_logit_bias, llama_sampler_init_min_p, llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
+    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_n_sigma,
+    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
+    llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
 };
 
 use crate::context::LlamaContext;
@@ -432,10 +432,10 @@ impl LlamaSampler {
     /// Penalizes tokens for being present in the context.
     ///
     /// Parameters:
-    /// - `n_vocab`: [`LlamaModel::n_vocab`]
-    /// - `special_eos_id`: [`LlamaModel::token_eos`]
-    /// - `linefeed_id`: [`LlamaModel::token_nl`]
     /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty, -1 = context size)
+    /// - `penalty_repeat`: repetition penalty (1.0 = disabled, >1.0 = penalize repeats)
+    /// - `penalty_freq`: frequency penalty (0.0 = disabled)
+    /// - `penalty_present`: presence penalty (0.0 = disabled)
     ///
     /// # Panics
     ///
@@ -443,27 +443,17 @@ impl LlamaSampler {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn penalties(
-        n_vocab: i32,
-        special_eos_id: f32,
-        linefeed_id: f32,
-        penalty_last_n: f32,
-        // penalty_repeat: f32,
-        // penalty_freq: f32,
-        // penalty_present: f32,
-        // penalize_nl: bool,
-        // ignore_eos: bool,
+        penalty_last_n: i32,
+        penalty_repeat: f32,
+        penalty_freq: f32,
+        penalty_present: f32,
     ) -> Self {
         let sampler = unsafe {
             llama_sampler_init_penalties(
-                n_vocab,
-                special_eos_id,
-                linefeed_id,
                 penalty_last_n,
-                // penalty_repeat,
-                // penalty_freq,
-                // penalty_present,
-                // penalize_nl,
-                // ignore_eos,
+                penalty_repeat,
+                penalty_freq,
+                penalty_present,
             )
         };
         Self {
@@ -471,43 +461,35 @@ impl LlamaSampler {
         }
     }
 
-    /// Same as [`Self::penalties`], but with `n_vocab`, `special_eos_id`, and `linefeed_id`
-    /// initialized from `model`, `penalize_nl = false`, and `ignore_eos = true`.
+    /// Same as [`Self::penalties`] with sensible defaults:
+    /// `penalty_freq = 0.0` and `penalty_present = 0.0`.
     ///
     /// Parameters:
-    /// - `model`: The model's tokenizer to use to initialize the sampler.
-    /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty, -1 = context size)
+    /// - `penalty_last_n`: last n tokens to penalize (0 = disable, -1 = context size)
+    /// - `penalty_repeat`: repetition penalty (1.0 = disabled)
     ///
     /// # Panics
     ///
     /// Panics if llama.cpp returns a null pointer.
     #[must_use]
-    pub fn penalties_simple(
-        model: &LlamaModel,
-        penalty_last_n: i32,
-        // penalty_repeat: f32,
-        // penalty_freq: f32,
-        // penalty_present: f32,
-    ) -> Self {
+    pub fn penalties_simple(penalty_last_n: i32, penalty_repeat: f32) -> Self {
         Self::penalties(
-            model.n_vocab(),
             #[allow(clippy::cast_precision_loss)]
             {
-                model.token_eos().0 as f32
+                penalty_last_n as i32
             },
             #[allow(clippy::cast_precision_loss)]
             {
-                model.token_nl().0 as f32
+                penalty_repeat as f32
             },
             #[allow(clippy::cast_precision_loss)]
             {
-                penalty_last_n as f32
+                0.0 as f32
             },
-            // penalty_repeat,
-            // penalty_freq,
-            // penalty_present,
-            // false,
-            // true,
+            #[allow(clippy::cast_precision_loss)]
+            {
+                0.0 as f32
+            },
         )
     }
 
@@ -662,11 +644,7 @@ impl LlamaSampler {
             .collect();
 
         let sampler = unsafe {
-            llama_sampler_init_logit_bias(
-                n_vocab,
-                logit_biases.len() as i32,
-                logit_biases.as_ptr(),
-            )
+            llama_sampler_init_logit_bias(n_vocab, logit_biases.len() as i32, logit_biases.as_ptr())
         };
         Self {
             sampler: NonNull::new(sampler).unwrap(),
@@ -682,8 +660,7 @@ impl LlamaSampler {
     /// Panics if llama.cpp returns a null pointer.
     #[must_use]
     pub fn infill(model: &LlamaModel) -> Self {
-        let sampler =
-            unsafe { llama_sampler_init_infill(model.get_vocab().vocab.as_ref()) };
+        let sampler = unsafe { llama_sampler_init_infill(model.get_vocab().vocab.as_ref()) };
         Self {
             sampler: NonNull::new(sampler).unwrap(),
         }
@@ -706,7 +683,10 @@ impl LlamaSampler {
     pub fn name(&self) -> String {
         let c_str = unsafe { llama_sampler_name(self.sampler.as_ptr()) };
         let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
-        c_str.to_str().expect("sampler name is not valid UTF-8").to_owned()
+        c_str
+            .to_str()
+            .expect("sampler name is not valid UTF-8")
+            .to_owned()
     }
 
     /// Reset the sampler state (e.g. grammar, repetition penalties).
