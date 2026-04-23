@@ -1073,6 +1073,10 @@ fn main() {
         .allowlist_type("llama_.*")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")
+        .allowlist_function("common_fit_params")
+        .allowlist_function("common_fit_print")
+        .allowlist_function("common_memory_breakdown_print")
+        .allowlist_type("common_params_fit_status")
         // .allowlist_item("common_.*")
         // .allowlist_function("common_tokenize")
         // .allowlist_function("common_detokenize")
@@ -1922,6 +1926,18 @@ fn main() {
             format!("cargo:rustc-link-lib={}={}", llama_libs_kind, lib)
         );
         println!("cargo:rustc-link-lib={llama_libs_kind}={lib}");
+    }
+
+    // llama-common-base contains build-info symbols (llama_build_number,
+    // llama_commit, etc.) required by llama-common.  CMake builds it but
+    // does not install it (no install(TARGETS ...) directive), so it lives
+    // only in the build tree.  Add the search path and link it explicitly.
+    if !build_shared_libs {
+        let common_build_dir = cmake_out_dir.join("build").join("common");
+        if common_build_dir.exists() && !llama_libs.iter().any(|l| l == "llama-common-base") {
+            println!("cargo:rustc-link-search=native={}", common_build_dir.display());
+            println!("cargo:rustc-link-lib=static=llama-common-base");
+        }
     }
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).

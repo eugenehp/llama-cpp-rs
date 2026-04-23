@@ -553,8 +553,8 @@ pub unsafe fn params_fit(
     margins: *mut usize,
     n_ctx_min: u32,
     log_level: llama_cpp_sys_4::ggml_log_level,
-) -> llama_cpp_sys_4::llama_params_fit_status {
-    llama_cpp_sys_4::llama_params_fit(
+) -> llama_cpp_sys_4::common_params_fit_status {
+    llama_cpp_sys_4::common_fit_params(
         path_model,
         mparams,
         cparams,
