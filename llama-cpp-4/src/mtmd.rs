@@ -297,6 +297,21 @@ impl MtmdContext {
         unsafe { sys::mtmd_log_set(Some(noop), std::ptr::null_mut()) };
     }
 
+    /// Like [`void_logs`](Self::void_logs), but additionally silences logs
+    /// emitted by the `mtmd_helper_*` layer (e.g. eval/decode helpers).
+    ///
+    /// Internally calls `mtmd_helper_log_set` which also routes through
+    /// `mtmd_log_set`, so this is a strict superset of `void_logs`.
+    pub fn void_helper_logs() {
+        unsafe extern "C" fn noop(
+            _level: sys::ggml_log_level,
+            _text: *const ::std::os::raw::c_char,
+            _ud: *mut ::std::os::raw::c_void,
+        ) {
+        }
+        unsafe { sys::mtmd_helper_log_set(Some(noop), std::ptr::null_mut()) };
+    }
+
     // ── Capability queries ────────────────────────────────────────────────
 
     /// Returns `true` if the model supports vision (image) input.
@@ -515,6 +530,53 @@ impl MtmdContext {
                 seq_id,
                 n_batch,
                 logits_last,
+                new_n_past,
+            )
+        };
+        if ret != 0 {
+            return Err(MtmdError::EvalError(ret));
+        }
+        Ok(())
+    }
+
+    /// Decode an image/audio chunk whose embeddings have already been
+    /// computed (e.g. via [`encode_chunk`](Self::encode_chunk) followed by
+    /// [`output_embd`](Self::output_embd)).
+    ///
+    /// Unlike [`eval_chunk_single`](Self::eval_chunk_single), this helper
+    /// handles batching plus the non-causal-attention setup required by
+    /// some models (e.g. Gemma 3, Gemma 4 audio) and the M-RoPE position
+    /// layout. Use it when the embeddings are already in hand and you want
+    /// the helper to take care of `llama_decode` plumbing.
+    ///
+    /// `encoded_embd` must contain `mtmd_image_tokens_get_n_tokens(chunk) *
+    /// llama_model_n_embd_inp(model)` `f32` elements. This call is **NOT
+    /// thread-safe**.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] with code `-1` if `chunk` is not an
+    /// image/audio chunk, or `1` if `llama_decode` fails.
+    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+    pub fn decode_image_chunk(
+        &self,
+        lctx: *mut sys::llama_context,
+        chunk: &MtmdInputChunk<'_>,
+        encoded_embd: &[f32],
+        n_past: i32,
+        seq_id: i32,
+        n_batch: i32,
+        new_n_past: &mut i32,
+    ) -> Result<()> {
+        let ret = unsafe {
+            sys::mtmd_helper_decode_image_chunk(
+                self.ptr.as_ptr(),
+                lctx,
+                chunk.ptr,
+                encoded_embd.as_ptr().cast_mut(),
+                n_past,
+                seq_id,
+                n_batch,
                 new_n_past,
             )
         };
@@ -975,6 +1037,28 @@ impl<'chunks> MtmdInputChunk<'chunks> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MtmdDecoderPos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-token position used by M-RoPE decoder attention.
+///
+/// `t` is the temporal axis, `x`/`y` the spatial axes. `z` is reserved for
+/// future use. Values are *relative* to a base `pos_0` provided when the
+/// position is computed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(C)]
+pub struct MtmdDecoderPos {
+    /// Temporal index.
+    pub t: u32,
+    /// Spatial X.
+    pub x: u32,
+    /// Spatial Y.
+    pub y: u32,
+    /// Reserved.
+    pub z: u32,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MtmdImageTokens
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1019,6 +1103,30 @@ impl MtmdImageTokens<'_> {
         }
         unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
+
+    /// Compute the per-token decoder positions used by M-RoPE models.
+    ///
+    /// Returns a vector of length [`n_tokens`](Self::n_tokens). Each entry
+    /// is relative to `pos_0`; for non-M-RoPE models this typically reduces
+    /// to `(0, i, 0, 0)` for the i-th token.
+    ///
+    /// Wraps `mtmd_helper_image_get_decoder_pos`.
+    #[must_use]
+    pub fn decoder_positions(&self, pos_0: i32) -> Vec<MtmdDecoderPos> {
+        let n = self.n_tokens();
+        let mut out = vec![MtmdDecoderPos::default(); n];
+        if n == 0 {
+            return out;
+        }
+        unsafe {
+            sys::mtmd_helper_image_get_decoder_pos(
+                self.ptr,
+                pos_0,
+                out.as_mut_ptr().cast::<sys::mtmd_decoder_pos>(),
+            );
+        }
+        out
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1037,5 +1145,29 @@ impl LlamaContext<'_> {
     #[must_use]
     pub fn as_ptr(&self) -> *mut sys::llama_context {
         self.context.as_ptr()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_pos_layout_matches_sys() {
+        // The Rust MtmdDecoderPos is cast to sys::mtmd_decoder_pos at the
+        // FFI boundary in `MtmdImageTokens::decoder_positions`. Verify the
+        // assumption.
+        assert_eq!(
+            std::mem::size_of::<MtmdDecoderPos>(),
+            std::mem::size_of::<sys::mtmd_decoder_pos>(),
+        );
+        assert_eq!(
+            std::mem::align_of::<MtmdDecoderPos>(),
+            std::mem::align_of::<sys::mtmd_decoder_pos>(),
+        );
+        assert_eq!(std::mem::offset_of!(MtmdDecoderPos, t), 0);
+        assert_eq!(std::mem::offset_of!(MtmdDecoderPos, x), 4);
+        assert_eq!(std::mem::offset_of!(MtmdDecoderPos, y), 8);
+        assert_eq!(std::mem::offset_of!(MtmdDecoderPos, z), 12);
     }
 }
