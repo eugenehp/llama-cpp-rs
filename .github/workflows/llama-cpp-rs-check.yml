@@ -31,7 +31,7 @@ jobs:
         run:
           sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -61,7 +61,7 @@ jobs:
         run:
           sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
@@ -80,7 +80,7 @@ jobs:
         with:
           submodules: recursive
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
@@ -108,7 +108,7 @@ jobs:
             }
           }
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
