@@ -110,7 +110,7 @@ enum Format {
 enum Model {
     /// Use a local GGUF model file
     Local { path: PathBuf },
-    /// Download from HuggingFace
+    /// Download from `HuggingFace`
     #[clap(name = "hf-model")]
     HuggingFace { repo: String, model: String },
 }
@@ -177,28 +177,27 @@ fn main() -> Result<()> {
         );
     };
 
-    let prompt = args.prompt.unwrap_or_else(|| {
-        match args.format {
-            Some(Format::Word) => "What is the largest planet? Answer with one word:".to_string(),
-            Some(Format::Lowercase) => "Describe the color blue in simple terms:".to_string(),
-            Some(Format::Identifier) => "Suggest a variable name for a user's email address:".to_string(),
-            Some(Format::CsvWords) => "List 5 colors:".to_string(),
-            Some(Format::Digits) => "What is 6 times 7? Answer with just the number:".to_string(),
-            None => "Hello!".to_string(),
+    let prompt = args.prompt.unwrap_or_else(|| match args.format {
+        Some(Format::Word) => "What is the largest planet? Answer with one word:".to_string(),
+        Some(Format::Lowercase) => "Describe the color blue in simple terms:".to_string(),
+        Some(Format::Identifier) => {
+            "Suggest a variable name for a user's email address:".to_string()
         }
+        Some(Format::CsvWords) => "List 5 colors:".to_string(),
+        Some(Format::Digits) => "What is 6 times 7? Answer with just the number:".to_string(),
+        None => "Hello!".to_string(),
     });
 
     // Resolve model path
-    let model_path = match args.model {
-        Some(m) => m.get_or_load()?,
-        None => {
-            eprintln!("No model specified, downloading Qwen2.5-0.5B-Instruct (Q4_K_M)...");
-            ApiBuilder::new()
-                .with_progress(true)
-                .build()?
-                .model("Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_string())
-                .get("qwen2.5-0.5b-instruct-q4_k_m.gguf")?
-        }
+    let model_path = if let Some(m) = args.model {
+        m.get_or_load()?
+    } else {
+        eprintln!("No model specified, downloading Qwen2.5-0.5B-Instruct (Q4_K_M)...");
+        ApiBuilder::new()
+            .with_progress(true)
+            .build()?
+            .model("Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_string())
+            .get("qwen2.5-0.5b-instruct-q4_k_m.gguf")?
     };
 
     // ── Load model ──
@@ -212,8 +211,7 @@ fn main() -> Result<()> {
     eprintln!();
 
     // ── Create context ──
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
+    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "unable to create context")?;
@@ -242,7 +240,7 @@ fn main() -> Result<()> {
     // ── Feed prompt ──
     let mut batch = LlamaBatch::new(2048, 1);
     let last_index = tokens_list.len() as i32 - 1;
-    for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
+    for (i, token) in (0_i32..).zip(tokens_list) {
         batch.add(token, i, &[0], i == last_index)?;
     }
     ctx.decode(&mut batch).with_context(|| "decode failed")?;
@@ -340,7 +338,11 @@ fn validate_output(format: Format, output: &str) {
         }
         Format::CsvWords => {
             let parts: Vec<&str> = trimmed.split(", ").collect();
-            if parts.len() > 1 && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_alphabetic())) {
+            if parts.len() > 1
+                && parts
+                    .iter()
+                    .all(|p| p.chars().all(|c| c.is_ascii_alphabetic()))
+            {
                 eprintln!("✓ Valid CSV: {} words", parts.len());
             } else {
                 eprintln!("✗ Not valid CSV words");

@@ -1,6 +1,6 @@
 //! # Fit Params
 //!
-//! Auto-fit model and context parameters (n_gpu_layers, n_ctx) to available memory.
+//! Auto-fit model and context parameters (`n_gpu_layers`, `n_ctx`) to available memory.
 //! This is the Rust equivalent of llama.cpp's `llama-fit-params` tool.
 //!
 //! ## Usage
@@ -46,22 +46,21 @@ fn main() -> Result<()> {
     let mut tensor_split = vec![0.0_f32; nd];
 
     let ntbo = llama_cpp_4::max_tensor_buft_overrides();
-    let mut tensor_buft_overrides =
-        vec![
-            llama_cpp_sys_4::llama_model_tensor_buft_override {
-                pattern: std::ptr::null(),
-                buft: std::ptr::null_mut(),
-            };
-            ntbo + 1
-        ];
+    let mut tensor_buft_overrides = vec![
+        llama_cpp_sys_4::llama_model_tensor_buft_override {
+            pattern: std::ptr::null(),
+            buft: std::ptr::null_mut(),
+        };
+        ntbo + 1
+    ];
 
     let mut margins = vec![0_usize; nd + 1];
 
     let status = unsafe {
         llama_cpp_4::params_fit(
             c_path.as_ptr(),
-            &mut mparams,
-            &mut cparams,
+            &raw mut mparams,
+            &raw mut cparams,
             tensor_split.as_mut_ptr(),
             tensor_buft_overrides.as_mut_ptr(),
             margins.as_mut_ptr(),

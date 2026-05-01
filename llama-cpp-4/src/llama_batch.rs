@@ -171,10 +171,7 @@ impl LlamaBatch {
     #[must_use]
     pub fn get_one(tokens: &mut [LlamaToken]) -> llama_batch {
         unsafe {
-            llama_cpp_sys_4::llama_batch_get_one(
-                tokens.as_mut_ptr().cast(),
-                tokens.len() as i32,
-            )
+            llama_cpp_sys_4::llama_batch_get_one(tokens.as_mut_ptr().cast(), tokens.len() as i32)
         }
     }
 }

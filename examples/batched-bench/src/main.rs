@@ -93,10 +93,7 @@ fn main() -> Result<()> {
 
     // Print header
     println!();
-    println!(
-        "n_kv_max = {}, n_batch = {}, n_seq_max = {}",
-        n_kv_max, n_batch, n_seq_max
-    );
+    println!("n_kv_max = {n_kv_max}, n_batch = {n_batch}, n_seq_max = {n_seq_max}");
     println!();
     println!(
         "|{:>6} | {:>6} | {:>4} | {:>6} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} | {:>8} |",
@@ -155,13 +152,12 @@ fn main() -> Result<()> {
                 let t_tg = (t_tg_end - t_tg_start) as f64 / 1_000_000.0;
                 let t = t_pp + t_tg;
 
-                let speed_pp = (pl * pp) as f64 / t_pp;
-                let speed_tg = (pl * tg) as f64 / t_tg;
-                let speed = (pl * (pp + tg)) as f64 / t;
+                let speed_pp = f64::from(pl * pp) / t_pp;
+                let speed_tg = f64::from(pl * tg) / t_tg;
+                let speed = f64::from(pl * (pp + tg)) / t;
 
                 println!(
-                    "|{:6} | {:6} | {:4} | {:6} | {:8.3} | {:8.2} | {:8.3} | {:8.2} | {:8.3} | {:8.2} |",
-                    pp, tg, pl, n_ctx_req, t_pp, speed_pp, t_tg, speed_tg, t, speed
+                    "|{pp:6} | {tg:6} | {pl:4} | {n_ctx_req:6} | {t_pp:8.3} | {speed_pp:8.2} | {t_tg:8.3} | {speed_tg:8.2} | {t:8.3} | {speed:8.2} |"
                 );
             }
         }

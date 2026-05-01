@@ -808,18 +808,42 @@ fn find_vulkan_sdk_windows() -> Option<PathBuf> {
 fn setup_prebuilt_env() -> Option<PathBuf> {
     // Collect enabled features for prebuilt artifact selection
     let mut features = Vec::new();
-    if cfg!(feature = "cuda") { features.push("cuda"); }
-    if cfg!(feature = "metal") { features.push("metal"); }
-    if cfg!(feature = "vulkan") { features.push("vulkan"); }
-    if cfg!(feature = "webgpu") { features.push("webgpu"); }
-    if cfg!(feature = "blas") { features.push("blas"); }
-    if cfg!(feature = "opencl") { features.push("opencl"); }
-    if cfg!(feature = "hip") { features.push("hip"); }
-    if cfg!(feature = "openmp") { features.push("openmp"); }
-    if cfg!(feature = "mpi") { features.push("mpi"); }
-    if cfg!(feature = "rpc") { features.push("rpc"); }
-    if cfg!(feature = "mtmd") { features.push("mtmd"); }
-    if cfg!(feature = "q1") { features.push("q1"); }
+    if cfg!(feature = "cuda") {
+        features.push("cuda");
+    }
+    if cfg!(feature = "metal") {
+        features.push("metal");
+    }
+    if cfg!(feature = "vulkan") {
+        features.push("vulkan");
+    }
+    if cfg!(feature = "webgpu") {
+        features.push("webgpu");
+    }
+    if cfg!(feature = "blas") {
+        features.push("blas");
+    }
+    if cfg!(feature = "opencl") {
+        features.push("opencl");
+    }
+    if cfg!(feature = "hip") {
+        features.push("hip");
+    }
+    if cfg!(feature = "openmp") {
+        features.push("openmp");
+    }
+    if cfg!(feature = "mpi") {
+        features.push("mpi");
+    }
+    if cfg!(feature = "rpc") {
+        features.push("rpc");
+    }
+    if cfg!(feature = "mtmd") {
+        features.push("mtmd");
+    }
+    if cfg!(feature = "q1") {
+        features.push("q1");
+    }
     let features = features.join(",");
 
     debug_log!("Prebuilt feature enabled, attempting to setup prebuilt artifacts");
@@ -837,7 +861,7 @@ fn setup_prebuilt_env() -> Option<PathBuf> {
 
 fn main() {
     let start_time = std::time::Instant::now();
-    
+
     let target = env::var("TARGET").unwrap();
     let host = env::var("HOST").unwrap();
     let is_cross = host != target;
@@ -1020,8 +1044,6 @@ fn main() {
         )
     };
 
-
-
     // Point CC/CXX at the MPI wrappers when building with MPI on macOS.
     // Check the *target* OS, not the host, so that cross-compilation from a
     // macOS host to a non-Apple target does not accidentally set these.
@@ -1138,16 +1160,19 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
-    
+
     // Rerun if prebuilt feature is toggled
     #[cfg(feature = "prebuilt")]
     println!("cargo:rustc-cfg=llama_prebuilt_enabled");
 
     debug_log!("Bindings Created");
-    
+
     // Print build progress information
     if std::env::var("BUILD_DEBUG").is_ok() {
-        println!("cargo:warning=[BUILD] Build configuration completed in {:?}", start_time.elapsed());
+        println!(
+            "cargo:warning=[BUILD] Build configuration completed in {:?}",
+            start_time.elapsed()
+        );
     }
 
     // ── Optional prebuilt path (skip CMake compile) ─────────────────────────
@@ -1156,7 +1181,7 @@ fn main() {
     // llama/ggml libraries, use those directly and skip the full CMake build.
     // Expected layout is flexible; files may be in <dir>, <dir>/lib,
     // <dir>/lib64, or <dir>/bin.
-    
+
     // Try prebuilt feature first
     #[cfg(feature = "prebuilt")]
     {
@@ -1166,7 +1191,7 @@ fn main() {
             // unsafe { env::set_var("LLAMA_PREBUILT_DIR", prebuilt_dir); }
         }
     }
-    
+
     if let Ok(prebuilt_dir_raw) = env::var("LLAMA_PREBUILT_DIR") {
         let prebuilt_dir = PathBuf::from(&prebuilt_dir_raw);
         if prebuilt_dir.exists() {
@@ -1338,11 +1363,17 @@ fn main() {
             config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
             config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
             // Enable sccache's distributed compilation if available
-            config.define("CMAKE_C_COMPILER_LAUNCHER", format!("{}", sc.to_str().unwrap()));
-            config.define("CMAKE_CXX_COMPILER_LAUNCHER", format!("{}", sc.to_str().unwrap()));
+            config.define(
+                "CMAKE_C_COMPILER_LAUNCHER",
+                sc.to_str().unwrap().to_string(),
+            );
+            config.define(
+                "CMAKE_CXX_COMPILER_LAUNCHER",
+                sc.to_str().unwrap().to_string(),
+            );
         }
     }
-    
+
     // Enable mold linker for faster linking on Linux
     if target.contains("linux") && command_exists("mold") {
         debug_log!("Using mold linker for faster linking");
@@ -1357,17 +1388,17 @@ fn main() {
     config.define("LLAMA_BUILD_TESTS", "OFF");
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
-    
+
     // Disable expensive CMake tests and checks for faster builds
     config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");
     config.define("CMAKE_SKIP_RPATH", "ON");
-    
+
     // Enable faster compilation by reducing debug info in release builds
     if profile != "Debug" {
         config.define("CMAKE_C_FLAGS_RELEASE", "-O3 -DNDEBUG");
         config.define("CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
     }
-    
+
     // Enable faster CMake configuration by disabling expensive checks
     // that aren't needed for production builds
     if profile != "Debug" {
@@ -1935,7 +1966,10 @@ fn main() {
     if !build_shared_libs {
         let common_build_dir = cmake_out_dir.join("build").join("common");
         if common_build_dir.exists() && !llama_libs.iter().any(|l| l == "llama-common-base") {
-            println!("cargo:rustc-link-search=native={}", common_build_dir.display());
+            println!(
+                "cargo:rustc-link-search=native={}",
+                common_build_dir.display()
+            );
             println!("cargo:rustc-link-lib=static=llama-common-base");
         }
     }
@@ -2032,7 +2066,12 @@ fn main() {
                 }
                 // Try hard link first, fall back to copy if it fails (e.g., cross-device)
                 if let Err(e) = std::fs::hard_link(src, dst) {
-                    debug_log!("Hard link failed ({:?}), falling back to copy: {} -> {}", e, src.display(), dst.display());
+                    debug_log!(
+                        "Hard link failed ({:?}), falling back to copy: {} -> {}",
+                        e,
+                        src.display(),
+                        dst.display()
+                    );
                     if let Err(copy_err) = std::fs::copy(src, dst) {
                         panic!("Failed to copy file after hard link failed: {:?}. Original hard link error: {:?}", copy_err, e);
                     }
@@ -2056,10 +2095,13 @@ fn main() {
             force_hard_link(&asset, &dst);
         }
     }
-    
+
     // Print build completion information
     if std::env::var("BUILD_DEBUG").is_ok() {
-        println!("cargo:warning=[BUILD] Build completed successfully in {:?}", start_time.elapsed());
+        println!(
+            "cargo:warning=[BUILD] Build completed successfully in {:?}",
+            start_time.elapsed()
+        );
         println!("cargo:warning=[BUILD] Libraries built: {:?}", llama_libs);
     }
 }

@@ -63,7 +63,11 @@ impl LlamaVocab {
     /// Get the vocabulary type.
     #[must_use]
     pub fn vocab_type(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()).try_into().unwrap() }
+        unsafe {
+            llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref())
+                .try_into()
+                .unwrap()
+        }
     }
 
     /// Get the BOS token.
@@ -185,7 +189,11 @@ impl LlamaVocab {
     /// Get the attributes of a token.
     #[must_use]
     pub fn get_attr(&self, token: LlamaToken) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0).try_into().unwrap() }
+        unsafe {
+            llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0)
+                .try_into()
+                .unwrap()
+        }
     }
 
     /// Check if a token is a control token.
@@ -256,13 +264,8 @@ impl LlamaLoraAdapter {
     ///
     /// Returns an error if the key is not found or the value is not valid UTF-8.
     #[allow(clippy::cast_sign_loss)]
-    pub fn meta_val_str(
-        &self,
-        key: &str,
-        buf_size: usize,
-    ) -> Result<String, StringFromModelError> {
-        let c_key =
-            CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
+    pub fn meta_val_str(&self, key: &str, buf_size: usize) -> Result<String, StringFromModelError> {
+        let c_key = CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
         let mut buf = vec![0u8; buf_size];
         let ret = unsafe {
             llama_cpp_sys_4::llama_adapter_meta_val_str(
@@ -329,9 +332,7 @@ impl LlamaLoraAdapter {
     #[must_use]
     pub fn n_invocation_tokens(&self) -> u64 {
         unsafe {
-            llama_cpp_sys_4::llama_adapter_get_alora_n_invocation_tokens(
-                self.lora_adapter.as_ptr(),
-            )
+            llama_cpp_sys_4::llama_adapter_get_alora_n_invocation_tokens(self.lora_adapter.as_ptr())
         }
     }
 
@@ -346,9 +347,7 @@ impl LlamaLoraAdapter {
             return &[];
         }
         let ptr = unsafe {
-            llama_cpp_sys_4::llama_adapter_get_alora_invocation_tokens(
-                self.lora_adapter.as_ptr(),
-            )
+            llama_cpp_sys_4::llama_adapter_get_alora_invocation_tokens(self.lora_adapter.as_ptr())
         };
         if ptr.is_null() {
             return &[];
@@ -824,7 +823,11 @@ impl LlamaModel {
     /// # Errors
     ///
     /// Returns an error if the detokenized text is not valid UTF-8.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss
+    )]
     pub fn detokenize(
         &self,
         tokens: &[LlamaToken],
@@ -846,7 +849,11 @@ impl LlamaModel {
             )
         };
         // llama_detokenize returns negative required size when buffer is too small
-        let buf_size = if needed < 0 { (-needed) as usize } else { needed as usize };
+        let buf_size = if needed < 0 {
+            (-needed) as usize
+        } else {
+            needed as usize
+        };
         let mut buf = vec![0u8; buf_size];
         let ret = unsafe {
             llama_detokenize(
@@ -1186,8 +1193,7 @@ impl LlamaModel {
             return Err(StringFromModelError::ReturnedError(ret));
         }
         let len = ret as usize;
-        let s = std::str::from_utf8(&buf[..len])
-            .map_err(StringFromModelError::Utf8Error)?;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
         Ok(s.to_owned())
     }
 
@@ -1200,7 +1206,11 @@ impl LlamaModel {
     ///
     /// Returns an error if the index is out of range or the key is not valid UTF-8.
     #[allow(clippy::cast_sign_loss)]
-    pub fn meta_key_by_index(&self, index: i32, buf_size: usize) -> Result<String, StringFromModelError> {
+    pub fn meta_key_by_index(
+        &self,
+        index: i32,
+        buf_size: usize,
+    ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
         let ret = unsafe {
             llama_model_meta_key_by_index(
@@ -1214,8 +1224,7 @@ impl LlamaModel {
             return Err(StringFromModelError::ReturnedError(ret));
         }
         let len = ret as usize;
-        let s = std::str::from_utf8(&buf[..len])
-            .map_err(StringFromModelError::Utf8Error)?;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
         Ok(s.to_owned())
     }
 
@@ -1228,7 +1237,11 @@ impl LlamaModel {
     ///
     /// Returns an error if the index is out of range or the value is not valid UTF-8.
     #[allow(clippy::cast_sign_loss)]
-    pub fn meta_val_str_by_index(&self, index: i32, buf_size: usize) -> Result<String, StringFromModelError> {
+    pub fn meta_val_str_by_index(
+        &self,
+        index: i32,
+        buf_size: usize,
+    ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
         let ret = unsafe {
             llama_model_meta_val_str_by_index(
@@ -1242,8 +1255,7 @@ impl LlamaModel {
             return Err(StringFromModelError::ReturnedError(ret));
         }
         let len = ret as usize;
-        let s = std::str::from_utf8(&buf[..len])
-            .map_err(StringFromModelError::Utf8Error)?;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
         Ok(s.to_owned())
     }
 
@@ -1257,8 +1269,7 @@ impl LlamaModel {
     /// Returns an error if the key is not found, contains a null byte, or the value is not valid UTF-8.
     #[allow(clippy::cast_sign_loss)]
     pub fn meta_val_str(&self, key: &str, buf_size: usize) -> Result<String, StringFromModelError> {
-        let c_key = CString::new(key)
-            .map_err(|_| StringFromModelError::ReturnedError(-1))?;
+        let c_key = CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
         let mut buf = vec![0u8; buf_size];
         let ret = unsafe {
             llama_model_meta_val_str(
@@ -1272,8 +1283,7 @@ impl LlamaModel {
             return Err(StringFromModelError::ReturnedError(ret));
         }
         let len = ret as usize;
-        let s = std::str::from_utf8(&buf[..len])
-            .map_err(StringFromModelError::Utf8Error)?;
+        let s = std::str::from_utf8(&buf[..len]).map_err(StringFromModelError::Utf8Error)?;
         Ok(s.to_owned())
     }
 

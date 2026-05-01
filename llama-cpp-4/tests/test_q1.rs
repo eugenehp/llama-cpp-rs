@@ -66,13 +66,19 @@ fn ftype_q1_0_description() {
     let d0 = LlamaFtype::MostlyQ1_0.description();
     let d128 = LlamaFtype::MostlyQ1_0_G128.description();
     assert!(d0.contains("1.5") || d0.contains("bpw"), "unexpected: {d0}");
-    assert!(d128.contains("1.125") || d128.contains("bpw"), "unexpected: {d128}");
+    assert!(
+        d128.contains("1.125") || d128.contains("bpw"),
+        "unexpected: {d128}"
+    );
 }
 
 #[test]
 fn ftype_q1_0_from_name_roundtrip() {
     assert_eq!(LlamaFtype::from_name("Q1_0"), Some(LlamaFtype::MostlyQ1_0));
-    assert_eq!(LlamaFtype::from_name("Q1_0_g128"), Some(LlamaFtype::MostlyQ1_0_G128));
+    assert_eq!(
+        LlamaFtype::from_name("Q1_0_g128"),
+        Some(LlamaFtype::MostlyQ1_0_G128)
+    );
     assert_eq!(LlamaFtype::from_name("q1_0"), Some(LlamaFtype::MostlyQ1_0));
 }
 
@@ -80,7 +86,10 @@ fn ftype_q1_0_from_name_roundtrip() {
 fn ftype_q1_0_in_all() {
     let all = LlamaFtype::all();
     assert!(all.contains(&LlamaFtype::MostlyQ1_0), "MostlyQ1_0 missing");
-    assert!(all.contains(&LlamaFtype::MostlyQ1_0_G128), "MostlyQ1_0_G128 missing");
+    assert!(
+        all.contains(&LlamaFtype::MostlyQ1_0_G128),
+        "MostlyQ1_0_G128 missing"
+    );
 }
 
 #[test]
@@ -116,14 +125,21 @@ fn model_loads_successfully() {
 #[test]
 fn model_architecture_is_qwen() {
     let Some(model) = load() else { return };
-    let arch = model.meta_val_str("general.architecture", 256).expect("missing arch");
-    assert!(arch.to_lowercase().contains("qwen"), "unexpected arch: {arch}");
+    let arch = model
+        .meta_val_str("general.architecture", 256)
+        .expect("missing arch");
+    assert!(
+        arch.to_lowercase().contains("qwen"),
+        "unexpected arch: {arch}"
+    );
 }
 
 #[test]
 fn model_ftype_is_q1_0_g128() {
     let Some(model) = load() else { return };
-    let ftype = model.meta_val_str("general.file_type", 256).unwrap_or_else(|_| "unknown".into());
+    let ftype = model
+        .meta_val_str("general.file_type", 256)
+        .unwrap_or_else(|_| "unknown".into());
     println!("general.file_type = {ftype}");
     let desc = model.desc(512).unwrap_or_default();
     println!("model desc: {desc}");
@@ -132,8 +148,12 @@ fn model_ftype_is_q1_0_g128() {
 #[test]
 fn model_numeric_properties_sane() {
     let Some(model) = load() else { return };
-    let (n_vocab, n_ctx, n_embd, n_layer) =
-        (model.n_vocab(), model.n_ctx_train(), model.n_embd(), model.n_layer());
+    let (n_vocab, n_ctx, n_embd, n_layer) = (
+        model.n_vocab(),
+        model.n_ctx_train(),
+        model.n_embd(),
+        model.n_layer(),
+    );
     println!("vocab={n_vocab}  ctx={n_ctx}  embd={n_embd}  layers={n_layer}");
     assert!(n_vocab > 1000);
     assert!(n_ctx >= 512);
@@ -147,7 +167,10 @@ fn model_metadata_contains_expected_keys() {
     let entries = model.metadata().expect("metadata failed");
     let keys: Vec<_> = entries.iter().map(|(k, _)| k.as_str()).collect();
     for required in &["general.architecture", "general.name"] {
-        assert!(keys.iter().any(|k| k == required), "missing key: {required}");
+        assert!(
+            keys.iter().any(|k| k == required),
+            "missing key: {required}"
+        );
     }
 }
 
@@ -156,7 +179,9 @@ fn model_metadata_contains_expected_keys() {
 #[test]
 fn tokenize_simple_prompt() {
     let Some(model) = load() else { return };
-    let tokens = model.str_to_token("Hello, world!", AddBos::Never).expect("tokenize failed");
+    let tokens = model
+        .str_to_token("Hello, world!", AddBos::Never)
+        .expect("tokenize failed");
     assert!(!tokens.is_empty());
     println!("'Hello, world!' → {} tokens: {tokens:?}", tokens.len());
 }
@@ -191,17 +216,23 @@ fn forward_pass_returns_valid_logits() {
     let Some(model) = load() else { return };
     let _guard = DECODE_LOCK.lock().unwrap();
 
-    let tokens = model.str_to_token("Once upon a time", AddBos::Always).unwrap();
+    let tokens = model
+        .str_to_token("Once upon a time", AddBos::Always)
+        .unwrap();
     let n_tokens = tokens.len() as i32;
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(std::num::NonZeroU32::new(512))
         .with_n_batch(512);
-    let mut ctx = model.new_context(backend(), ctx_params).expect("ctx failed");
+    let mut ctx = model
+        .new_context(backend(), ctx_params)
+        .expect("ctx failed");
 
     let mut batch = LlamaBatch::new(512, 1);
     for (i, &tok) in tokens.iter().enumerate() {
-        batch.add(tok, i as i32, &[0], i == tokens.len() - 1).unwrap();
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
     }
     ctx.decode(&mut batch).expect("decode failed");
 
@@ -215,7 +246,9 @@ fn forward_pass_returns_valid_logits() {
         .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
         .unwrap();
 
-    let best_text = model.token_get_text(LlamaToken(best_id as i32)).unwrap_or("<unk>");
+    let best_text = model
+        .token_get_text(LlamaToken(best_id as i32))
+        .unwrap_or("<unk>");
     println!("next token: {best_id} ({best_text:?})  logit={best_logit:.3}");
 
     assert!(best_logit.is_finite());
@@ -234,12 +267,16 @@ fn autoregressive_generation() {
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(std::num::NonZeroU32::new(256))
         .with_n_batch(256);
-    let mut ctx = model.new_context(backend(), ctx_params).expect("ctx failed");
+    let mut ctx = model
+        .new_context(backend(), ctx_params)
+        .expect("ctx failed");
 
     // Prefill
     let mut batch = LlamaBatch::new(256, 1);
     for (i, &tok) in tokens.iter().enumerate() {
-        batch.add(tok, i as i32, &[0], i == tokens.len() - 1).unwrap();
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
     }
     ctx.decode(&mut batch).expect("prefill failed");
 
@@ -260,7 +297,9 @@ fn autoregressive_generation() {
         logit_slot = 0;
 
         let next = LlamaToken(best_id as i32);
-        if next == eos { break; }
+        if next == eos {
+            break;
+        }
         generated.push(next);
         // Position = current sequence length (number of tokens already in KV cache).
         let next_pos = tokens.len() as i32;
@@ -271,10 +310,15 @@ fn autoregressive_generation() {
         ctx.decode(&mut batch).expect("decode failed");
     }
 
-    let output = model.detokenize(&generated, false, false).unwrap_or_default();
+    let output = model
+        .detokenize(&generated, false, false)
+        .unwrap_or_default();
     println!("prompt:    \"{prompt}\"");
     println!("generated: \"{output}\"");
 
     assert!(!generated.is_empty(), "no tokens generated");
-    assert!(output.chars().any(|c| c.is_alphanumeric()), "output has no alphanum: {output:?}");
+    assert!(
+        output.chars().any(|c| c.is_alphanumeric()),
+        "output has no alphanum: {output:?}"
+    );
 }

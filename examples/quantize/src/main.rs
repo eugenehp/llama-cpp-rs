@@ -32,8 +32,8 @@ use anyhow::{bail, Result};
 use clap::Parser;
 use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::quantize::{
-    GgmlType, LlamaFtype, QuantizeParams, TensorTypeOverride,
-    attn_rot_disabled, set_attn_rot_disabled,
+    attn_rot_disabled, set_attn_rot_disabled, GgmlType, LlamaFtype, QuantizeParams,
+    TensorTypeOverride,
 };
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ struct Args {
     input: Option<String>,
 
     /// Output file or quantization type.
-    /// If this looks like a quant type (e.g. Q4_K_M), the output filename is
+    /// If this looks like a quant type (e.g. `Q4_K_M`), the output filename is
     /// auto-generated.  Otherwise treated as the output path, and the next
     /// argument must be the quant type.
     #[arg(required_unless_present = "list_types")]
@@ -88,7 +88,7 @@ struct Args {
     #[arg(long = "prune-layer", value_name = "N")]
     prune_layer: Vec<i32>,
 
-    /// Disable TurboQuant attention rotation (enabled by default for
+    /// Disable `TurboQuant` attention rotation (enabled by default for
     /// compatible models, see llama.cpp PR #21038).
     #[arg(long)]
     disable_attn_rot: bool,
@@ -119,9 +119,8 @@ fn parse_tensor_type_override(spec: &str) -> Result<TensorTypeOverride> {
         .split_once('=')
         .ok_or_else(|| anyhow::anyhow!("--tensor-type must be PATTERN=TYPE, got: {spec}"))?;
 
-    let ty = parse_ggml_type(type_str).ok_or_else(|| {
-        anyhow::anyhow!("unknown GgmlType '{type_str}' in --tensor-type {spec}")
-    })?;
+    let ty = parse_ggml_type(type_str)
+        .ok_or_else(|| anyhow::anyhow!("unknown GgmlType '{type_str}' in --tensor-type {spec}"))?;
 
     TensorTypeOverride::new(pattern, ty)
         .map_err(|e| anyhow::anyhow!("invalid pattern in --tensor-type: {e}"))
@@ -179,26 +178,25 @@ fn main() -> Result<()> {
     let output_or_type = args.output_or_type.unwrap();
 
     // Resolve (output_path, ftype, ftype_name).
-    let (fname_out, ftype) =
-        if let Some(ftype) = LlamaFtype::from_name(&output_or_type) {
-            // <input> <type>  — auto-derive output filename
-            let stem = input.strip_suffix(".gguf").unwrap_or(&input);
-            let out = format!("{stem}-{}.gguf", ftype.name().to_lowercase());
-            (out, ftype)
-        } else if let Some(ref qt) = args.quant_type {
-            // <input> <output> <type>
-            let ftype = LlamaFtype::from_name(qt).ok_or_else(|| {
-                print_quant_types();
-                anyhow::anyhow!("unknown quantization type: {qt}")
-            })?;
-            (output_or_type, ftype)
-        } else {
+    let (fname_out, ftype) = if let Some(ftype) = LlamaFtype::from_name(&output_or_type) {
+        // <input> <type>  — auto-derive output filename
+        let stem = input.strip_suffix(".gguf").unwrap_or(&input);
+        let out = format!("{stem}-{}.gguf", ftype.name().to_lowercase());
+        (out, ftype)
+    } else if let Some(ref qt) = args.quant_type {
+        // <input> <output> <type>
+        let ftype = LlamaFtype::from_name(qt).ok_or_else(|| {
             print_quant_types();
-            bail!(
-                "'{output_or_type}' is not a recognized quantization type.\n\
+            anyhow::anyhow!("unknown quantization type: {qt}")
+        })?;
+        (output_or_type, ftype)
+    } else {
+        print_quant_types();
+        bail!(
+            "'{output_or_type}' is not a recognized quantization type.\n\
                  Usage: quantize [options] <input> [output] <type>"
-            );
-        };
+        );
+    };
 
     if !args.dry_run && input == fname_out {
         bail!("input and output files are the same: {input}");
@@ -225,7 +223,11 @@ fn main() -> Result<()> {
     }
     eprintln!(
         "TurboQuant attention rotation: {}",
-        if attn_rot_disabled() { "DISABLED" } else { "enabled (default)" }
+        if attn_rot_disabled() {
+            "DISABLED"
+        } else {
+            "enabled (default)"
+        }
     );
 
     // ── Run ───────────────────────────────────────────────────────────────
@@ -235,7 +237,10 @@ fn main() -> Result<()> {
     if args.dry_run {
         eprintln!("Calculating quantization size for '{input}' as {ftype}");
     } else {
-        eprintln!("Quantizing '{input}' → '{fname_out}' as {ftype}  ({})", ftype.description());
+        eprintln!(
+            "Quantizing '{input}' → '{fname_out}' as {ftype}  ({})",
+            ftype.description()
+        );
     }
     if args.nthreads > 0 {
         eprintln!("Using {} threads", args.nthreads);

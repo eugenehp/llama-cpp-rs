@@ -101,7 +101,11 @@ fn main() -> Result<()> {
 
     let n_ctx_i = n_ctx as i32;
     if (tokens.len() as i32) < 2 * n_ctx_i {
-        bail!("Need at least {} tokens, input has {}", 2 * n_ctx_i, tokens.len());
+        bail!(
+            "Need at least {} tokens, input has {}",
+            2 * n_ctx_i,
+            tokens.len()
+        );
     }
 
     let n_chunk_max = tokens.len() as i32 / n_ctx_i;
@@ -111,7 +115,12 @@ fn main() -> Result<()> {
         args.chunks.min(n_chunk_max)
     };
 
-    eprintln!("Processing {} chunks (ctx={}, tokens={})...", n_chunk, n_ctx, tokens.len());
+    eprintln!(
+        "Processing {} chunks (ctx={}, tokens={})...",
+        n_chunk,
+        n_ctx,
+        tokens.len()
+    );
 
     let first = n_ctx_i / 2;
     let mut all_stats: Vec<TokenStat> = Vec::new();
@@ -139,8 +148,8 @@ fn main() -> Result<()> {
 
             // Log-softmax
             let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-            let sum_exp: f64 = logits.iter().map(|&l| ((l - max_logit) as f64).exp()).sum();
-            let log_prob = (logits[target as usize] - max_logit) as f64 - sum_exp.ln();
+            let sum_exp: f64 = logits.iter().map(|&l| f64::from(l - max_logit).exp()).sum();
+            let log_prob = f64::from(logits[target as usize] - max_logit) - sum_exp.ln();
             let prob = log_prob.exp() as f32;
 
             // Rank: how many tokens have higher logit
@@ -159,7 +168,7 @@ fn main() -> Result<()> {
         let count = all_stats.len();
         let avg_nll: f64 = -all_stats.iter().map(|s| s.log_prob).sum::<f64>() / count as f64;
         let ppl = avg_nll.exp();
-        let avg_rank: f64 = all_stats.iter().map(|s| s.rank as f64).sum::<f64>() / count as f64;
+        let avg_rank: f64 = all_stats.iter().map(|s| f64::from(s.rank)).sum::<f64>() / count as f64;
         eprint!("[{}] ppl={:.4} avg_rank={:.1}  ", i + 1, ppl, avg_rank);
         std::io::stderr().flush()?;
     }
@@ -169,7 +178,7 @@ fn main() -> Result<()> {
     let count = all_stats.len();
     let total_nll: f64 = -all_stats.iter().map(|s| s.log_prob).sum::<f64>();
     let ppl = (total_nll / count as f64).exp();
-    let avg_rank: f64 = all_stats.iter().map(|s| s.rank as f64).sum::<f64>() / count as f64;
+    let avg_rank: f64 = all_stats.iter().map(|s| f64::from(s.rank)).sum::<f64>() / count as f64;
     let low_prob: usize = all_stats.iter().filter(|s| s.prob < 0.01).count();
 
     println!();
@@ -177,7 +186,10 @@ fn main() -> Result<()> {
     println!("Tokens evaluated : {count}");
     println!("Perplexity       : {ppl:.4}");
     println!("Avg token rank   : {avg_rank:.1}");
-    println!("Low-prob tokens  : {low_prob} ({:.1}%)", 100.0 * low_prob as f64 / count as f64);
+    println!(
+        "Low-prob tokens  : {low_prob} ({:.1}%)",
+        100.0 * low_prob as f64 / count as f64
+    );
 
     // Save binary stats
     let mut out = std::fs::File::create(&args.output)?;

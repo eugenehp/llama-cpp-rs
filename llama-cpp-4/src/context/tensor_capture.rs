@@ -67,12 +67,14 @@ pub struct CapturedTensor {
 impl CapturedTensor {
     /// Number of embedding dimensions (alias for `ne0`).
     #[inline]
+    #[must_use]
     pub fn n_embd(&self) -> usize {
         self.ne0
     }
 
     /// Number of tokens (alias for `ne1`).
     #[inline]
+    #[must_use]
     pub fn n_tokens(&self) -> usize {
         self.ne1
     }
@@ -81,6 +83,7 @@ impl CapturedTensor {
     ///
     /// Returns a slice of `n_embd` floats, or `None` if `token_idx` is
     /// out of range.
+    #[must_use]
     pub fn token_embedding(&self, token_idx: usize) -> Option<&[f32]> {
         if token_idx >= self.ne1 {
             return None;
@@ -126,10 +129,7 @@ impl std::fmt::Debug for TensorCapture {
         f.debug_struct("TensorCapture")
             .field("filter", &self.filter)
             .field("captured_count", &self.captured.len())
-            .field(
-                "captured_keys",
-                &self.captured.keys().collect::<Vec<_>>(),
-            )
+            .field("captured_keys", &self.captured.keys().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -147,6 +147,7 @@ impl TensorCapture {
     /// // Capture layers 13, 20, 27 (typical for LLaMA-3.2-3B with positions [0.5, 0.75, 1.0])
     /// let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
     /// ```
+    #[must_use]
     pub fn for_layers(layer_indices: &[usize]) -> Self {
         Self {
             filter: CaptureFilter::Layers(layer_indices.to_vec()),
@@ -161,9 +162,12 @@ impl TensorCapture {
     /// ```rust,ignore
     /// let mut capture = TensorCapture::for_names(&["result_norm", "l_out-27"]);
     /// ```
+    #[must_use]
     pub fn for_names(names: &[&str]) -> Self {
         Self {
-            filter: CaptureFilter::Names(names.iter().map(|s| s.to_string()).collect()),
+            filter: CaptureFilter::Names(
+                names.iter().map(std::string::ToString::to_string).collect(),
+            ),
             captured: HashMap::new(),
         }
     }
@@ -177,6 +181,7 @@ impl TensorCapture {
     /// // Capture all attention outputs
     /// let mut capture = TensorCapture::for_prefix("attn_out");
     /// ```
+    #[must_use]
     pub fn for_prefix(prefix: &str) -> Self {
         Self {
             filter: CaptureFilter::Prefix(prefix.to_string()),
@@ -188,6 +193,7 @@ impl TensorCapture {
     ///
     /// ⚠️ Warning: this can produce very large amounts of data.
     /// Use only for debugging or inspection.
+    #[must_use]
     pub fn all() -> Self {
         Self {
             filter: CaptureFilter::All,
@@ -204,6 +210,7 @@ impl TensorCapture {
     }
 
     /// Get a captured tensor by its full name (e.g. `"l_out-13"`).
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&CapturedTensor> {
         self.captured.get(name)
     }
@@ -211,21 +218,25 @@ impl TensorCapture {
     /// Get a captured layer output by layer index.
     ///
     /// Looks up `"l_out-{layer_idx}"`.
+    #[must_use]
     pub fn get_layer(&self, layer_idx: usize) -> Option<&CapturedTensor> {
         self.captured.get(&format!("l_out-{layer_idx}"))
     }
 
     /// Returns `true` if the specified layer was captured.
+    #[must_use]
     pub fn has_layer(&self, layer_idx: usize) -> bool {
         self.captured.contains_key(&format!("l_out-{layer_idx}"))
     }
 
     /// Number of tensors captured so far.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.captured.len()
     }
 
     /// Returns `true` if no tensors have been captured.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.captured.is_empty()
     }
@@ -236,12 +247,9 @@ impl TensorCapture {
     }
 
     /// Get all captured layer indices (sorted).
+    #[must_use]
     pub fn captured_layers(&self) -> Vec<usize> {
-        let mut layers: Vec<usize> = self
-            .captured
-            .values()
-            .filter_map(|ct| ct.layer)
-            .collect();
+        let mut layers: Vec<usize> = self.captured.values().filter_map(|ct| ct.layer).collect();
         layers.sort_unstable();
         layers.dedup();
         layers
@@ -309,11 +317,11 @@ pub(crate) unsafe extern "C" fn tensor_capture_callback(
         .position(|&b| b == 0)
         .unwrap_or(name_bytes.len());
     let name = std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-        name_bytes.as_ptr() as *const u8,
+        name_bytes.as_ptr().cast::<u8>(),
         len,
     ));
 
-    let state = &mut *(user_data as *mut TensorCapture);
+    let state = &mut *user_data.cast::<TensorCapture>();
 
     if !state.matches(name) {
         return false;
@@ -331,7 +339,7 @@ pub(crate) unsafe extern "C" fn tensor_capture_callback(
     let mut buf = vec![0f32; n_elements];
     llama_cpp_sys_4::ggml_backend_tensor_get(
         t,
-        buf.as_mut_ptr() as *mut std::ffi::c_void,
+        buf.as_mut_ptr().cast::<std::ffi::c_void>(),
         0,
         n_elements * std::mem::size_of::<f32>(),
     );

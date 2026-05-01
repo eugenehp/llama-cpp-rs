@@ -5,7 +5,10 @@ fn test_print_system_info() {
     let info = llama_cpp_4::print_system_info();
     assert!(!info.is_empty(), "system info should not be empty");
     // Should contain CPU feature flags
-    assert!(info.contains('='), "system info should contain feature flags");
+    assert!(
+        info.contains('='),
+        "system info should contain feature flags"
+    );
 }
 
 #[test]
@@ -63,7 +66,10 @@ fn test_flash_attn_type_name() {
 fn test_model_meta_key_str() {
     let key = llama_cpp_4::model_meta_key_str(0);
     assert!(!key.is_empty());
-    assert!(key.contains("sampling"), "key 0 should be a sampling key, got: {key}");
+    assert!(
+        key.contains("sampling"),
+        "key 0 should be a sampling key, got: {key}"
+    );
 }
 
 #[test]

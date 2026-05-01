@@ -21,13 +21,29 @@ fn main() {
     // === System Info ===
     println!("=== System Info ===");
     println!("{}", llama_cpp_4::print_system_info());
-    println!("GPU offload       : {}", llama_cpp_4::supports_gpu_offload());
+    println!(
+        "GPU offload       : {}",
+        llama_cpp_4::supports_gpu_offload()
+    );
     println!("RPC support       : {}", llama_cpp_4::supports_rpc());
-    println!("max parallel seq  : {}", llama_cpp_4::max_parallel_sequences());
-    println!("max buft overrides: {}", llama_cpp_4::max_tensor_buft_overrides());
-    println!("flash_attn name(0): {}", llama_cpp_4::flash_attn_type_name(0));
+    println!(
+        "max parallel seq  : {}",
+        llama_cpp_4::max_parallel_sequences()
+    );
+    println!(
+        "max buft overrides: {}",
+        llama_cpp_4::max_tensor_buft_overrides()
+    );
+    println!(
+        "flash_attn name(0): {}",
+        llama_cpp_4::flash_attn_type_name(0)
+    );
     println!("meta key str(0)   : {}", llama_cpp_4::model_meta_key_str(0));
-    println!("quantize defaults : nthread={}", llama_cpp_4::quantize::QuantizeParams::new(llama_cpp_4::quantize::LlamaFtype::MostlyQ4KM).nthread);
+    println!(
+        "quantize defaults : nthread={}",
+        llama_cpp_4::quantize::QuantizeParams::new(llama_cpp_4::quantize::LlamaFtype::MostlyQ4KM)
+            .nthread
+    );
     println!();
 
     let backend = LlamaBackend::init().unwrap();

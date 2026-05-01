@@ -367,11 +367,7 @@ impl<'model> LlamaContext<'model> {
     /// Set the number of threads used for generation and batch processing.
     pub fn set_n_threads(&mut self, n_threads: i32, n_threads_batch: i32) {
         unsafe {
-            llama_cpp_sys_4::llama_set_n_threads(
-                self.context.as_ptr(),
-                n_threads,
-                n_threads_batch,
-            );
+            llama_cpp_sys_4::llama_set_n_threads(self.context.as_ptr(), n_threads, n_threads_batch);
         }
     }
 
@@ -515,11 +511,7 @@ impl<'model> LlamaContext<'model> {
     /// Returns the number of bytes read.
     pub fn state_set_data(&mut self, src: &[u8]) -> usize {
         unsafe {
-            llama_cpp_sys_4::llama_state_set_data(
-                self.context.as_ptr(),
-                src.as_ptr(),
-                src.len(),
-            )
+            llama_cpp_sys_4::llama_state_set_data(self.context.as_ptr(), src.as_ptr(), src.len())
         }
     }
 
@@ -730,9 +722,8 @@ impl<'model> LlamaContext<'model> {
         if count == 0 {
             return &[];
         }
-        let ptr = unsafe {
-            llama_cpp_sys_4::llama_get_sampled_candidates_ith(self.context.as_ptr(), i)
-        };
+        let ptr =
+            unsafe { llama_cpp_sys_4::llama_get_sampled_candidates_ith(self.context.as_ptr(), i) };
         if ptr.is_null() {
             return &[];
         }
@@ -742,9 +733,7 @@ impl<'model> LlamaContext<'model> {
     /// Get the number of sampled logits for the `i`th position.
     #[must_use]
     pub fn get_sampled_logits_count_ith(&self, i: i32) -> u32 {
-        unsafe {
-            llama_cpp_sys_4::llama_get_sampled_logits_count_ith(self.context.as_ptr(), i)
-        }
+        unsafe { llama_cpp_sys_4::llama_get_sampled_logits_count_ith(self.context.as_ptr(), i) }
     }
 
     /// Get sampled logits for the `i`th position.
@@ -756,9 +745,8 @@ impl<'model> LlamaContext<'model> {
         if count == 0 {
             return &[];
         }
-        let ptr = unsafe {
-            llama_cpp_sys_4::llama_get_sampled_logits_ith(self.context.as_ptr(), i)
-        };
+        let ptr =
+            unsafe { llama_cpp_sys_4::llama_get_sampled_logits_ith(self.context.as_ptr(), i) };
         if ptr.is_null() {
             return &[];
         }
@@ -768,9 +756,7 @@ impl<'model> LlamaContext<'model> {
     /// Get the number of sampled probabilities for the `i`th position.
     #[must_use]
     pub fn get_sampled_probs_count_ith(&self, i: i32) -> u32 {
-        unsafe {
-            llama_cpp_sys_4::llama_get_sampled_probs_count_ith(self.context.as_ptr(), i)
-        }
+        unsafe { llama_cpp_sys_4::llama_get_sampled_probs_count_ith(self.context.as_ptr(), i) }
     }
 
     /// Get sampled probabilities for the `i`th position.
@@ -782,9 +768,7 @@ impl<'model> LlamaContext<'model> {
         if count == 0 {
             return &[];
         }
-        let ptr = unsafe {
-            llama_cpp_sys_4::llama_get_sampled_probs_ith(self.context.as_ptr(), i)
-        };
+        let ptr = unsafe { llama_cpp_sys_4::llama_get_sampled_probs_ith(self.context.as_ptr(), i) };
         if ptr.is_null() {
             return &[];
         }
@@ -817,12 +801,7 @@ impl<'model> LlamaContext<'model> {
     /// Restore a single sequence's state from a byte buffer with flags.
     ///
     /// Returns the number of bytes read.
-    pub fn state_seq_set_data_ext(
-        &mut self,
-        src: &[u8],
-        dest_seq_id: i32,
-        flags: u32,
-    ) -> usize {
+    pub fn state_seq_set_data_ext(&mut self, src: &[u8], dest_seq_id: i32, flags: u32) -> usize {
         unsafe {
             llama_cpp_sys_4::llama_state_seq_set_data_ext(
                 self.context.as_ptr(),

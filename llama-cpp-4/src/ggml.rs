@@ -121,12 +121,7 @@ impl GgmlContext {
     #[must_use]
     pub fn new_tensor(&self, typ: ggml_type, ne: &[i64]) -> GgmlTensor {
         let t = unsafe {
-            llama_cpp_sys_4::ggml_new_tensor(
-                self.ctx.as_ptr(),
-                typ,
-                ne.len() as i32,
-                ne.as_ptr(),
-            )
+            llama_cpp_sys_4::ggml_new_tensor(self.ctx.as_ptr(), typ, ne.len() as i32, ne.as_ptr())
         };
         GgmlTensor(NonNull::new(t).expect("ggml_new_tensor returned null"))
     }
@@ -136,17 +131,15 @@ impl GgmlContext {
     /// Element-wise addition: `a + b`
     #[must_use]
     pub fn add(&self, a: &GgmlTensor, b: &GgmlTensor) -> GgmlTensor {
-        let t =
-            unsafe { llama_cpp_sys_4::ggml_add(self.ctx.as_ptr(), a.0.as_ptr(), b.0.as_ptr()) };
+        let t = unsafe { llama_cpp_sys_4::ggml_add(self.ctx.as_ptr(), a.0.as_ptr(), b.0.as_ptr()) };
         GgmlTensor(NonNull::new(t).expect("ggml_add returned null"))
     }
 
     /// Matrix multiplication: `a @ b`
     #[must_use]
     pub fn mul_mat(&self, a: &GgmlTensor, b: &GgmlTensor) -> GgmlTensor {
-        let t = unsafe {
-            llama_cpp_sys_4::ggml_mul_mat(self.ctx.as_ptr(), a.0.as_ptr(), b.0.as_ptr())
-        };
+        let t =
+            unsafe { llama_cpp_sys_4::ggml_mul_mat(self.ctx.as_ptr(), a.0.as_ptr(), b.0.as_ptr()) };
         GgmlTensor(NonNull::new(t).expect("ggml_mul_mat returned null"))
     }
 
@@ -196,9 +189,8 @@ impl GgmlContext {
     /// Create a 1D view of a tensor.
     #[must_use]
     pub fn view_1d(&self, a: &GgmlTensor, ne0: i64, offset: usize) -> GgmlTensor {
-        let t = unsafe {
-            llama_cpp_sys_4::ggml_view_1d(self.ctx.as_ptr(), a.0.as_ptr(), ne0, offset)
-        };
+        let t =
+            unsafe { llama_cpp_sys_4::ggml_view_1d(self.ctx.as_ptr(), a.0.as_ptr(), ne0, offset) };
         GgmlTensor(NonNull::new(t).expect("ggml_view_1d returned null"))
     }
 

@@ -476,19 +476,19 @@ impl LlamaSampler {
         Self::penalties(
             #[allow(clippy::cast_precision_loss)]
             {
-                penalty_last_n as i32
+                penalty_last_n
             },
             #[allow(clippy::cast_precision_loss)]
             {
-                penalty_repeat as f32
+                penalty_repeat
             },
             #[allow(clippy::cast_precision_loss)]
             {
-                0.0 as f32
+                0.0_f32
             },
             #[allow(clippy::cast_precision_loss)]
             {
-                0.0 as f32
+                0.0_f32
             },
         )
     }

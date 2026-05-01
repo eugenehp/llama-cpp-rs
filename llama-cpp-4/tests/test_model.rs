@@ -24,7 +24,10 @@ fn find_test_model() -> Option<(PathBuf, bool)> {
     if let Ok(entries) = std::fs::read_dir(&build_dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name.to_str().map_or(false, |n| n.starts_with("llama-cpp-sys-4-")) {
+            if name
+                .to_str()
+                .map_or(false, |n| n.starts_with("llama-cpp-sys-4-"))
+            {
                 let vocab_path = entry
                     .path()
                     .join("out/llama.cpp/models/ggml-vocab-llama-bpe.gguf");
@@ -72,7 +75,10 @@ fn test_model_display() {
     let display = format!("{model}");
     assert!(!display.is_empty());
     // Should contain pipe separators
-    assert!(display.contains('|'), "Display should have sections: {display}");
+    assert!(
+        display.contains('|'),
+        "Display should have sections: {display}"
+    );
 }
 
 #[test]

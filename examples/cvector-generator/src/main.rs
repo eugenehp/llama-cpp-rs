@@ -56,7 +56,7 @@ struct Args {
     #[arg(long, default_value_t = 1)]
     layer_start: i32,
 
-    /// Ending layer for control vector application (0 = n_layer)
+    /// Ending layer for control vector application (0 = `n_layer`)
     #[arg(long, default_value_t = 0)]
     layer_end: i32,
 }
@@ -71,7 +71,7 @@ fn get_embeddings(
     let mut batch = LlamaBatch::new(tokens.len(), 1);
 
     let last = tokens.len() as i32 - 1;
-    for (i, token) in (0_i32..).zip(tokens.into_iter()) {
+    for (i, token) in (0_i32..).zip(tokens) {
         // Enable logits for the last token to get its hidden state
         batch.add(token, i, &[0], i == last)?;
     }
@@ -110,7 +110,10 @@ fn main() -> Result<()> {
 
     eprintln!("Model: {model}");
     eprintln!("Embedding dim: {n_embd}");
-    eprintln!("Layers: {n_layer} (applying to {}..{})", args.layer_start, layer_end);
+    eprintln!(
+        "Layers: {n_layer} (applying to {}..{})",
+        args.layer_start, layer_end
+    );
     eprintln!("Prompt pairs: {}", args.positive.len());
 
     // Create context with embeddings enabled
@@ -134,17 +137,25 @@ fn main() -> Result<()> {
             .with_context(|| format!("failed on negative prompt: {neg}"))?;
 
         for j in 0..n_embd {
-            diff[j] += (emb_pos[j] - emb_neg[j]) as f64;
+            diff[j] += f64::from(emb_pos[j] - emb_neg[j]);
         }
 
         // Compute cosine similarity between positive and negative
         let dot: f64 = emb_pos
             .iter()
             .zip(emb_neg.iter())
-            .map(|(a, b)| *a as f64 * *b as f64)
+            .map(|(a, b)| f64::from(*a) * f64::from(*b))
             .sum();
-        let mag_p: f64 = emb_pos.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-        let mag_n: f64 = emb_neg.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+        let mag_p: f64 = emb_pos
+            .iter()
+            .map(|x| f64::from(*x).powi(2))
+            .sum::<f64>()
+            .sqrt();
+        let mag_n: f64 = emb_neg
+            .iter()
+            .map(|x| f64::from(*x).powi(2))
+            .sum::<f64>()
+            .sqrt();
         let cossim = dot / (mag_p * mag_n);
         eprintln!("cosine_sim={cossim:.4}");
     }

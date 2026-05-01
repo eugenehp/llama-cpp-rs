@@ -107,7 +107,7 @@ impl From<LlamaPoolingType> for i32 {
 )]
 pub struct LlamaContextParams {
     pub(crate) context_params: llama_cpp_sys_4::llama_context_params,
-    /// When `true`, the TurboQuant attention rotation (PR #21038) will be
+    /// When `true`, the `TurboQuant` attention rotation (PR #21038) will be
     /// disabled for any context created from these params.
     pub(crate) attn_rot_disabled: bool,
 }
@@ -508,13 +508,11 @@ impl LlamaContextParams {
     ///     .with_tensor_capture(&mut capture);
     /// ```
     #[must_use]
-    pub fn with_tensor_capture(
-        self,
-        capture: &mut super::tensor_capture::TensorCapture,
-    ) -> Self {
+    pub fn with_tensor_capture(self, capture: &mut super::tensor_capture::TensorCapture) -> Self {
         self.with_cb_eval(Some(super::tensor_capture::tensor_capture_callback))
             .with_cb_eval_user_data(
-                capture as *mut super::tensor_capture::TensorCapture as *mut std::ffi::c_void,
+                std::ptr::from_mut::<super::tensor_capture::TensorCapture>(capture)
+                    .cast::<std::ffi::c_void>(),
             )
     }
 
@@ -522,7 +520,7 @@ impl LlamaContextParams {
     ///
     /// The default is `GgmlType::F16`.  Quantized types like `GgmlType::Q5_0`
     /// or `GgmlType::Q4_0` reduce VRAM usage significantly; combining them with
-    /// TurboQuant attention rotation (the default) keeps quality high.
+    /// `TurboQuant` attention rotation (the default) keeps quality high.
     ///
     /// # Examples
     ///
@@ -568,7 +566,7 @@ impl LlamaContextParams {
         self.context_params.type_v
     }
 
-    /// Control the TurboQuant attention-rotation feature (llama.cpp PR #21038).
+    /// Control the `TurboQuant` attention-rotation feature (llama.cpp PR #21038).
     ///
     /// By default, llama.cpp applies a Hadamard rotation to Q/K/V tensors
     /// before writing them into the KV cache.  This significantly improves
@@ -593,7 +591,7 @@ impl LlamaContextParams {
         self
     }
 
-    /// Returns `true` if TurboQuant attention rotation is disabled for this context.
+    /// Returns `true` if `TurboQuant` attention rotation is disabled for this context.
     ///
     /// ```rust
     /// let params = llama_cpp_4::context::params::LlamaContextParams::default();

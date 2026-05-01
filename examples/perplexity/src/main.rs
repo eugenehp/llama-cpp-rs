@@ -56,10 +56,10 @@ struct Args {
 /// Compute log-softmax for a single token given logits over the full vocabulary.
 fn log_softmax(logits: &[f32], token: i32) -> (f64, f32) {
     let max_logit = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    let sum_exp: f64 = logits.iter().map(|&l| ((l - max_logit) as f64).exp()).sum();
+    let sum_exp: f64 = logits.iter().map(|&l| f64::from(l - max_logit).exp()).sum();
     let log_sum_exp = sum_exp.ln();
-    let log_prob = (logits[token as usize] - max_logit) as f64 - log_sum_exp;
-    let prob = ((logits[token as usize] - max_logit) as f64 - log_sum_exp).exp() as f32;
+    let log_prob = f64::from(logits[token as usize] - max_logit) - log_sum_exp;
+    let prob = (f64::from(logits[token as usize] - max_logit) - log_sum_exp).exp() as f32;
     (log_prob, prob)
 }
 
@@ -178,7 +178,7 @@ fn main() -> Result<()> {
 
         // Print ETA after first chunk
         if i == 0 && n_chunk > 1 {
-            let eta_seconds = t_chunk * n_chunk as f64;
+            let eta_seconds = t_chunk * f64::from(n_chunk);
             if eta_seconds >= 3600.0 {
                 eprintln!(
                     " {:.1} seconds per pass - ETA {:.0} hours {:.1} minutes",
@@ -202,7 +202,7 @@ fn main() -> Result<()> {
     let avg_nll = nll / count as f64;
 
     println!();
-    println!("Final perplexity: {:.4} (avg NLL: {:.6}, {} tokens evaluated)", ppl, avg_nll, count);
+    println!("Final perplexity: {ppl:.4} (avg NLL: {avg_nll:.6}, {count} tokens evaluated)");
 
     Ok(())
 }

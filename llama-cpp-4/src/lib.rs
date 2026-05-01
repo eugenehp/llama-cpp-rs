@@ -381,7 +381,10 @@ pub fn supports_rpc() -> bool {
 pub fn print_system_info() -> String {
     let c_str = unsafe { llama_cpp_sys_4::llama_print_system_info() };
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
-    c_str.to_str().expect("system info is not valid UTF-8").to_owned()
+    c_str
+        .to_str()
+        .expect("system info is not valid UTF-8")
+        .to_owned()
 }
 
 /// Get the maximum number of parallel sequences supported.
@@ -405,7 +408,10 @@ pub fn max_tensor_buft_overrides() -> usize {
 pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
     let c_str = unsafe { llama_cpp_sys_4::llama_flash_attn_type_name(flash_attn_type) };
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
-    c_str.to_str().expect("flash_attn_type_name is not valid UTF-8").to_owned()
+    c_str
+        .to_str()
+        .expect("flash_attn_type_name is not valid UTF-8")
+        .to_owned()
 }
 
 /// Get the string representation of a model metadata key.
@@ -417,7 +423,10 @@ pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
 pub fn model_meta_key_str(key: u32) -> String {
     let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key.try_into().unwrap()) };
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
-    c_str.to_str().expect("meta_key_str is not valid UTF-8").to_owned()
+    c_str
+        .to_str()
+        .expect("meta_key_str is not valid UTF-8")
+        .to_owned()
 }
 
 /// Quantize a model file using typed [`QuantizeParams`].
@@ -448,9 +457,14 @@ pub fn model_quantize(
     let c_inp = std::ffi::CString::new(fname_inp).expect("input path contains null bytes");
     let c_out = std::ffi::CString::new(fname_out).expect("output path contains null bytes");
     let guard = params.to_raw();
-    let rc =
-        unsafe { llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), &guard.raw) };
-    if rc == 0 { Ok(()) } else { Err(rc) }
+    let rc = unsafe {
+        llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), &raw const guard.raw)
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(rc)
+    }
 }
 
 /// Get default quantization parameters (raw sys type).

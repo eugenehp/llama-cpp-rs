@@ -53,9 +53,7 @@ struct NaivePrefill {
 
 impl NaivePrefill {
     fn new() -> Self {
-        Self {
-            cached: Vec::new(),
-        }
+        Self { cached: Vec::new() }
     }
     fn sync(
         &mut self,
@@ -195,10 +193,7 @@ fn bench_latency(
             f64::INFINITY
         };
 
-        println!(
-            "  {:>5} {:>10.2?} {:>10.2?} {:>10.2?} {:>6.1}x",
-            n, normal, flush, inc_ttft, spd
-        );
+        println!("  {n:>5} {normal:>10.2?} {flush:>10.2?} {inc_ttft:>10.2?} {spd:>6.1}x");
         let _ = (normal_ttft, inc_ttft); // used above
     }
     println!();
@@ -249,11 +244,11 @@ fn bench_speed(
         ctx.decode(&mut batch)?;
     }
     let elapsed = t0.elapsed();
-    let tps = generated as f64 / elapsed.as_secs_f64();
+    let tps = f64::from(generated) / elapsed.as_secs_f64();
 
     println!("  Prompt: \"{}\"", &prompt[..prompt.len().min(50)]);
-    println!("  Generated: {} tokens in {:.2?}", generated, elapsed);
-    println!("  Throughput: {:.1} tok/s", tps);
+    println!("  Generated: {generated} tokens in {elapsed:.2?}");
+    println!("  Throughput: {tps:.1} tok/s");
     println!();
     Ok(())
 }
@@ -320,10 +315,7 @@ fn bench_load(
             0.0
         };
 
-        println!(
-            "  {:>5} {:>10.2?} {:>10.2?} {:>10.2?} {:>7.0}%",
-            n, normal, margin, naive_t, savings
-        );
+        println!("  {n:>5} {normal:>10.2?} {margin:>10.2?} {naive_t:>10.2?} {savings:>7.0}%");
     }
     println!();
     Ok(())
@@ -410,11 +402,7 @@ fn bench_precision(
 // 5. UX — simulate mid-line edits and measure recovery cost
 // ---------------------------------------------------------------------------
 
-fn bench_ux(
-    model: &LlamaModel,
-    backend: &LlamaBackend,
-    params: &LlamaContextParams,
-) -> Result<()> {
+fn bench_ux(model: &LlamaModel, backend: &LlamaBackend, params: &LlamaContextParams) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────────────┐");
     println!("│ 5. UX — mid-line edit recovery cost (delete/insert/replace)        │");
     println!("└─────────────────────────────────────────────────────────────────────┘");
@@ -446,8 +434,7 @@ fn bench_ux(
         let retype_time = t.elapsed();
 
         println!(
-            "  Delete+retype tail:  delete={:.2?} ({decoded} tok) retype={:.2?} ({decoded2} tok)",
-            delete_time, retype_time
+            "  Delete+retype tail:  delete={delete_time:.2?} ({decoded} tok) retype={retype_time:.2?} ({decoded2} tok)"
         );
         drop(ctx);
     }
@@ -468,7 +455,8 @@ fn bench_ux(
 
         println!(
             "  Mid-line replace:    {:.2?} ({decoded}/{} tok re-decoded — divergence point)",
-            mid_edit_time, edited_tokens.len()
+            mid_edit_time,
+            edited_tokens.len()
         );
         drop(ctx);
     }
@@ -489,7 +477,8 @@ fn bench_ux(
 
         println!(
             "  Prefix insert:       {:.2?} ({decoded}/{} tok — full re-decode from divergence)",
-            prefix_time, edited_tokens.len()
+            prefix_time,
+            edited_tokens.len()
         );
         drop(ctx);
     }
@@ -512,7 +501,9 @@ fn bench_samplers(
     ctx_params: &LlamaContextParams,
 ) -> Result<()> {
     println!("\u{250c}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}");
-    println!("\u{2502} 8. SAMPLERS & TEMPERATURE \u{2014} output quality across strategies    \u{2502}");
+    println!(
+        "\u{2502} 8. SAMPLERS & TEMPERATURE \u{2014} output quality across strategies    \u{2502}"
+    );
     println!("\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}");
 
     let prompt = "Write a haiku about the ocean";
@@ -529,80 +520,97 @@ fn bench_samplers(
     let configs: Vec<SamplerConfig> = vec![
         SamplerConfig {
             label: "greedy (t=0)",
-            build: Box::new(|| LlamaSampler::chain_simple([
-                LlamaSampler::greedy(),
-            ])),
+            build: Box::new(|| LlamaSampler::chain_simple([LlamaSampler::greedy()])),
         },
         SamplerConfig {
             label: "temp=0.1 top_k=40",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_k(40),
-                LlamaSampler::temp(0.1),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_k(40),
+                    LlamaSampler::temp(0.1),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "temp=0.4 top_p=0.9",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_p(0.9, 1),
-                LlamaSampler::temp(0.4),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_p(0.9, 1),
+                    LlamaSampler::temp(0.4),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "temp=0.7 top_p=0.9",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_p(0.9, 1),
-                LlamaSampler::temp(0.7),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_p(0.9, 1),
+                    LlamaSampler::temp(0.7),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "temp=1.0 top_p=0.95",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_p(0.95, 1),
-                LlamaSampler::temp(1.0),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_p(0.95, 1),
+                    LlamaSampler::temp(1.0),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "temp=1.5 top_k=50",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_k(50),
-                LlamaSampler::temp(1.5),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_k(50),
+                    LlamaSampler::temp(1.5),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "min_p=0.05 t=0.7",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::min_p(0.05, 1),
-                LlamaSampler::temp(0.7),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::min_p(0.05, 1),
+                    LlamaSampler::temp(0.7),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "top_n_sigma=1.0",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::top_n_sigma(1.0),
-                LlamaSampler::dist(seed),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([
+                    LlamaSampler::top_n_sigma(1.0),
+                    LlamaSampler::dist(seed),
+                ])
+            }),
         },
         SamplerConfig {
             label: "mirostat_v2 t5 e0.1",
-            build: Box::new(move || LlamaSampler::chain_simple([
-                LlamaSampler::mirostat_v2(seed, 5.0, 0.1),
-            ])),
+            build: Box::new(move || {
+                LlamaSampler::chain_simple([LlamaSampler::mirostat_v2(seed, 5.0, 0.1)])
+            }),
         },
     ];
 
-    println!("  Prompt: \"{}\" ({} tokens, generating {})", prompt, full.len(), n_gen);
-    println!("  Seed: {} (for reproducibility with stochastic samplers)", seed);
+    println!(
+        "  Prompt: \"{}\" ({} tokens, generating {})",
+        prompt,
+        full.len(),
+        n_gen
+    );
+    println!("  Seed: {seed} (for reproducibility with stochastic samplers)");
     println!();
 
     println!(
-        "  {:>22} {:>8} {:>8}  {}",
-        "Sampler", "Gen ms", "tok/s", "Output (first 80 chars)"
+        "  {:>22} {:>8} {:>8}  Output (first 80 chars)",
+        "Sampler", "Gen ms", "tok/s"
     );
     println!("  {}", "-".repeat(100));
 
@@ -622,7 +630,9 @@ fn bench_samplers(
             if model.is_eog_token(tok) {
                 break;
             }
-            let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+            let bytes = model
+                .token_to_bytes(tok, Special::Tokenize)
+                .unwrap_or_default();
             let mut s = String::with_capacity(32);
             let _ = decoder.decode_to_string(&bytes, &mut s, false);
             output.push_str(&s);
@@ -633,8 +643,12 @@ fn bench_samplers(
             ctx.decode(&mut batch)?;
         }
         let elapsed = t0.elapsed();
-        let n_actual = (n_cur - full.len() as i32) as f64;
-        let tps = if elapsed.as_secs_f64() > 0.0 { n_actual / elapsed.as_secs_f64() } else { 0.0 };
+        let n_actual = f64::from(n_cur - full.len() as i32);
+        let tps = if elapsed.as_secs_f64() > 0.0 {
+            n_actual / elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
 
         let display: String = output.replace('\n', "\u{21b5}").chars().take(80).collect();
         println!(
@@ -666,8 +680,12 @@ fn bench_samplers(
         let mut output = String::new();
         for _ in 0..n_gen {
             let tok = sampler.sample(&ctx, batch.n_tokens() - 1);
-            if model.is_eog_token(tok) { break; }
-            let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+            if model.is_eog_token(tok) {
+                break;
+            }
+            let bytes = model
+                .token_to_bytes(tok, Special::Tokenize)
+                .unwrap_or_default();
             let mut s = String::with_capacity(32);
             let _ = decoder.decode_to_string(&bytes, &mut s, false);
             output.push_str(&s);
@@ -683,10 +701,12 @@ fn bench_samplers(
     if outputs[0] == outputs[1] {
         println!("    \u{2714} Identical — same seed produces deterministic output");
     } else {
-        let diff_pos = outputs[0].chars().zip(outputs[1].chars())
+        let diff_pos = outputs[0]
+            .chars()
+            .zip(outputs[1].chars())
             .position(|(a, b)| a != b)
             .unwrap_or(outputs[0].len().min(outputs[1].len()));
-        println!("    \u{2718} Diverges at char {} (non-deterministic)", diff_pos);
+        println!("    \u{2718} Diverges at char {diff_pos} (non-deterministic)");
     }
 
     println!();
@@ -739,10 +759,10 @@ fn main() -> Result<()> {
         .with_n_ctx(NonZeroU32::new(2048))
         .with_flash_attention(true);
 
-    let name = model_path.split('/').last().unwrap_or(&model_path);
+    let name = model_path.split('/').next_back().unwrap_or(&model_path);
     println!("╔══════════════════════════════════════════════════════════════════════╗");
     println!("║  Incremental Prefill — Comprehensive Benchmark                     ║");
-    println!("║  Model: {:<60}║", name);
+    println!("║  Model: {name:<60}║");
     println!("╚══════════════════════════════════════════════════════════════════════╝\n");
 
     let prompts: &[&str] = &[
@@ -788,10 +808,7 @@ fn generate_text(
     start_pos: i32,
     n_gen: usize,
 ) -> Result<(String, std::time::Duration)> {
-    let sampler = LlamaSampler::chain_simple([
-        LlamaSampler::common(),
-        LlamaSampler::greedy(),
-    ]);
+    let sampler = LlamaSampler::chain_simple([LlamaSampler::common(), LlamaSampler::greedy()]);
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut output = String::new();
     let mut n_cur = start_pos;
@@ -802,7 +819,9 @@ fn generate_text(
         if model.is_eog_token(tok) {
             break;
         }
-        let bytes = model.token_to_bytes(tok, Special::Tokenize).unwrap_or_default();
+        let bytes = model
+            .token_to_bytes(tok, Special::Tokenize)
+            .unwrap_or_default();
         let mut s = String::with_capacity(32);
         let _ = decoder.decode_to_string(&bytes, &mut s, false);
         output.push_str(&s);
@@ -815,29 +834,30 @@ fn generate_text(
     Ok((output, t0.elapsed()))
 }
 
-fn bench_kv_quant(
-    model: &LlamaModel,
-    backend: &LlamaBackend,
-    prompts: &[&str],
-) -> Result<()> {
+fn bench_kv_quant(model: &LlamaModel, backend: &LlamaBackend, prompts: &[&str]) -> Result<()> {
     println!("┌─────────────────────────────────────────────────────────────────────┐");
     println!("│ 7. KV QUANT + TURBOQUANT — quality & speed across KV cache types  │");
     println!("└─────────────────────────────────────────────────────────────────────┘");
 
     let configs: &[(&str, GgmlType, bool)] = &[
-        ("F16 (baseline)",   GgmlType::F16,  false),
-        ("Q8_0 + turbo",     GgmlType::Q8_0, false),
-        ("Q5_0 + turbo",     GgmlType::Q5_0, false),
-        ("Q4_0 + turbo",     GgmlType::Q4_0, false),
-        ("Q5_0 no turbo",    GgmlType::Q5_0, true),
-        ("Q4_0 no turbo",    GgmlType::Q4_0, true),
+        ("F16 (baseline)", GgmlType::F16, false),
+        ("Q8_0 + turbo", GgmlType::Q8_0, false),
+        ("Q5_0 + turbo", GgmlType::Q5_0, false),
+        ("Q4_0 + turbo", GgmlType::Q4_0, false),
+        ("Q5_0 no turbo", GgmlType::Q5_0, true),
+        ("Q4_0 no turbo", GgmlType::Q4_0, true),
     ];
 
     let prompt = prompts.last().unwrap_or(&prompts[0]);
     let full = model.str_to_token(prompt, AddBos::Always)?;
     let n_gen = 64;
 
-    println!("  Prompt: \"{}\" ({} tokens, generating {})", &prompt[..prompt.len().min(50)], full.len(), n_gen);
+    println!(
+        "  Prompt: \"{}\" ({} tokens, generating {})",
+        &prompt[..prompt.len().min(50)],
+        full.len(),
+        n_gen
+    );
     println!();
 
     let mut baseline_output = String::new();
@@ -851,12 +871,11 @@ fn bench_kv_quant(
             .with_cache_type_v(*kv_type)
             .with_attn_rot_disabled(*no_turbo);
 
-        let mut ctx = match model.new_context(backend, p) {
-            Ok(c) => c,
-            Err(_) => {
-                println!("  {:>20} (unsupported by this build)", label);
-                continue;
-            }
+        let mut ctx = if let Ok(c) = model.new_context(backend, p) {
+            c
+        } else {
+            println!("  {label:>20} (unsupported by this build)");
+            continue;
         };
         let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
 
@@ -864,7 +883,8 @@ fn bench_kv_quant(
         prefill_all(&mut ctx, &mut batch, &full)?;
         let prefill_time = t0.elapsed();
 
-        let (output, gen_time) = generate_text(model, &mut ctx, &mut batch, full.len() as i32, n_gen)?;
+        let (output, gen_time) =
+            generate_text(model, &mut ctx, &mut batch, full.len() as i32, n_gen)?;
 
         if baseline_output.is_empty() {
             baseline_output = output.clone();
@@ -881,11 +901,16 @@ fn bench_kv_quant(
     for (label, output, prefill, gen) in &results {
         let tps = if gen.as_secs_f64() > 0.0 {
             64.0 / gen.as_secs_f64()
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let matches = *output == baseline_output;
         println!(
             "  {:>20} {:>10.2?} {:>10.2?} {:>7.1} {:>7}",
-            label, prefill, gen, tps,
+            label,
+            prefill,
+            gen,
+            tps,
             if matches { "✔ yes" } else { "✘ NO" },
         );
     }
@@ -919,7 +944,11 @@ fn bench_kv_quant(
                 "  ⚠ {} diverges from F16 at char {}: F16=\"{}\" vs \"{}\" ",
                 label,
                 first_diff,
-                baseline_output.chars().skip(first_diff).take(20).collect::<String>(),
+                baseline_output
+                    .chars()
+                    .skip(first_diff)
+                    .take(20)
+                    .collect::<String>(),
                 output.chars().skip(first_diff).take(20).collect::<String>(),
             );
         }

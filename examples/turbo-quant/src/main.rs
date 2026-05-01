@@ -1,9 +1,9 @@
-//! # TurboQuant demo
+//! # `TurboQuant` demo
 //!
 //! Demonstrates the **attention-rotation** feature introduced in llama.cpp PR #21038,
-//! informally called *TurboQuant*.
+//! informally called *`TurboQuant`*.
 //!
-//! ## What is TurboQuant?
+//! ## What is `TurboQuant`?
 //!
 //! When a model's attention head size is a power of two, llama.cpp applies a
 //! Hadamard rotation to the Q, K, and V tensors **before** storing them in the
@@ -71,7 +71,7 @@ struct Args {
     prompt: String,
 
     /// KV-cache quantization type for the comparison run.
-    /// Use "f16" for the baseline, "q4_0" / "q5_0" to stress-test TurboQuant.
+    /// Use "f16" for the baseline, "`q4_0`" / "`q5_0`" to stress-test `TurboQuant`.
     #[arg(long, default_value = "f16")]
     kv_type: String,
 
@@ -88,13 +88,13 @@ struct Args {
 
 fn parse_kv_type(s: &str) -> Option<GgmlType> {
     Some(match s.to_lowercase().as_str() {
-        "f32"            => GgmlType::F32,
-        "f16"            => GgmlType::F16,
-        "bf16"           => GgmlType::BF16,
+        "f32" => GgmlType::F32,
+        "f16" => GgmlType::F16,
+        "bf16" => GgmlType::BF16,
         "q4_0" | "q4_k" => GgmlType::Q4_0,
-        "q4_1"           => GgmlType::Q4_1,
+        "q4_1" => GgmlType::Q4_1,
         "q5_0" | "q5_k" => GgmlType::Q5_0,
-        "q5_1"           => GgmlType::Q5_1,
+        "q5_1" => GgmlType::Q5_1,
         "q8_0" | "q8_k" => GgmlType::Q8_0,
         _ => return None,
     })
@@ -174,7 +174,9 @@ fn show_api_examples() {
     println!("          TensorTypeOverride::new(\"output\", GgmlType::F16).unwrap()");
     println!("      );");
     println!();
-    println!("  llama_cpp_4::model_quantize(\"model-f16.gguf\", \"model-q4km.gguf\", &params).unwrap();");
+    println!(
+        "  llama_cpp_4::model_quantize(\"model-f16.gguf\", \"model-q4km.gguf\", &params).unwrap();"
+    );
     println!();
 
     println!("── 2. Inference with TurboQuant (ON by default) ────────────────────");
@@ -265,14 +267,14 @@ fn main() -> Result<()> {
     );
 
     let kv_type = parse_kv_type(&args.kv_type).unwrap_or_else(|| {
-        eprintln!(
-            "Unknown KV type '{}', falling back to F16",
-            args.kv_type
-        );
+        eprintln!("Unknown KV type '{}', falling back to F16", args.kv_type);
         GgmlType::F16
     });
 
-    println!("KV cache type                 : {}", args.kv_type.to_uppercase());
+    println!(
+        "KV cache type                 : {}",
+        args.kv_type.to_uppercase()
+    );
     println!("Prompt                        : {:?}", args.prompt);
     println!("Predict tokens                : {}", args.n_predict);
     println!();

@@ -130,4 +130,3 @@ impl Default for common_sampler_params {
         }
     }
 }
-

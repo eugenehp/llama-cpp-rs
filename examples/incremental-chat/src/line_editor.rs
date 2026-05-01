@@ -78,8 +78,7 @@ impl LineEditor {
         let prev = self.buf[..self.cursor]
             .char_indices()
             .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
         self.buf.drain(prev..self.cursor);
         self.cursor = prev;
         true
@@ -90,7 +89,11 @@ impl LineEditor {
         if self.cursor >= self.buf.len() {
             return false;
         }
-        let next = self.cursor + self.buf[self.cursor..].chars().next().map_or(0, |c| c.len_utf8());
+        let next = self.cursor
+            + self.buf[self.cursor..]
+                .chars()
+                .next()
+                .map_or(0, char::len_utf8);
         self.buf.drain(self.cursor..next);
         true
     }
@@ -103,8 +106,7 @@ impl LineEditor {
         let prev = self.buf[..self.cursor]
             .char_indices()
             .next_back()
-            .map(|(i, _)| i)
-            .unwrap_or(0);
+            .map_or(0, |(i, _)| i);
         self.cursor = prev;
         true
     }
@@ -114,7 +116,11 @@ impl LineEditor {
         if self.cursor >= self.buf.len() {
             return false;
         }
-        let next = self.cursor + self.buf[self.cursor..].chars().next().map_or(0, |c| c.len_utf8());
+        let next = self.cursor
+            + self.buf[self.cursor..]
+                .chars()
+                .next()
+                .map_or(0, char::len_utf8);
         self.cursor = next;
         true
     }
@@ -122,9 +128,7 @@ impl LineEditor {
     /// Move cursor to start of current line.
     pub fn home(&mut self) {
         // Find the start of the current line (after the last \n before cursor)
-        self.cursor = self.buf[..self.cursor]
-            .rfind('\n')
-            .map_or(0, |i| i + 1);
+        self.cursor = self.buf[..self.cursor].rfind('\n').map_or(0, |i| i + 1);
     }
 
     /// Move cursor to end of current line.
@@ -162,7 +166,7 @@ impl LineEditor {
             .map_or(self.buf.len(), |i| self.cursor + i);
         if line_end == self.cursor {
             // At a newline — just delete the newline
-            self.buf.drain(self.cursor..self.cursor + 1);
+            self.buf.drain(self.cursor..=self.cursor);
         } else {
             self.buf.drain(self.cursor..line_end);
         }

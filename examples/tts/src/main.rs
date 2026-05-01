@@ -1,6 +1,6 @@
 //! # Text-to-Speech (token generation)
 //!
-//! Generate audio tokens from text using a TTS model (e.g. OuteTTS, Kokoro).
+//! Generate audio tokens from text using a TTS model (e.g. `OuteTTS`, Kokoro).
 //!
 //! The C++ `llama-tts` tool includes a full audio codec decoder to produce WAV files.
 //! This simplified Rust version generates the audio token sequence that a TTS model
@@ -76,8 +76,7 @@ fn main() -> Result<()> {
     eprintln!("Vocab: {} tokens", model.n_vocab());
     eprintln!("Input: {:?}", args.prompt);
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(4096).unwrap()));
+    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(4096).unwrap()));
     let mut ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "failed to create context")?;
@@ -155,7 +154,7 @@ fn main() -> Result<()> {
         println!();
         println!("Audio tokens:");
         for chunk in audio_tokens.chunks(20) {
-            let s: Vec<String> = chunk.iter().map(|t| t.to_string()).collect();
+            let s: Vec<String> = chunk.iter().map(std::string::ToString::to_string).collect();
             println!("  {}", s.join(", "));
         }
     }

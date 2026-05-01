@@ -12,7 +12,7 @@
 //! llama_cpp_4::model_quantize("model-f16.gguf", "model-q4km.gguf", &params).unwrap();
 //! ```
 //!
-//! # TurboQuant – attention rotation (PR #21038)
+//! # `TurboQuant` – attention rotation (PR #21038)
 //!
 //! llama.cpp applies a Hadamard rotation to Q/K/V tensors before writing them into the KV cache.
 //! This significantly improves KV-cache quantization quality at near-zero cost, and is enabled by
@@ -40,67 +40,67 @@ pub enum LlamaFtype {
     AllF32 = 0,
     /// F16 – 14 GB @ 7B, +0.0020 ppl vs Mistral-7B
     MostlyF16 = 1,
-    /// Q4_0 – 4.34 GB @ 8B, +0.4685 ppl
+    /// `Q4_0` – 4.34 GB @ 8B, +0.4685 ppl
     MostlyQ4_0 = 2,
-    /// Q4_1 – 4.78 GB @ 8B, +0.4511 ppl
+    /// `Q4_1` – 4.78 GB @ 8B, +0.4511 ppl
     MostlyQ4_1 = 3,
-    /// Q8_0 – 7.96 GB @ 8B, +0.0026 ppl
+    /// `Q8_0` – 7.96 GB @ 8B, +0.0026 ppl
     MostlyQ8_0 = 7,
-    /// Q5_0 – 5.21 GB @ 8B, +0.1316 ppl
+    /// `Q5_0` – 5.21 GB @ 8B, +0.1316 ppl
     MostlyQ5_0 = 8,
-    /// Q5_1 – 5.65 GB @ 8B, +0.1062 ppl
+    /// `Q5_1` – 5.65 GB @ 8B, +0.1062 ppl
     MostlyQ5_1 = 9,
-    /// Q2_K – 2.96 GB @ 8B, +3.5199 ppl
+    /// `Q2_K` – 2.96 GB @ 8B, +3.5199 ppl
     MostlyQ2K = 10,
-    /// Q3_K small – 3.41 GB @ 8B, +1.6321 ppl
+    /// `Q3_K` small – 3.41 GB @ 8B, +1.6321 ppl
     MostlyQ3KS = 11,
-    /// Q3_K medium – 3.74 GB @ 8B, +0.6569 ppl
+    /// `Q3_K` medium – 3.74 GB @ 8B, +0.6569 ppl
     MostlyQ3KM = 12,
-    /// Q3_K large – 4.03 GB @ 8B, +0.5562 ppl
+    /// `Q3_K` large – 4.03 GB @ 8B, +0.5562 ppl
     MostlyQ3KL = 13,
-    /// Q4_K small – 4.37 GB @ 8B, +0.2689 ppl
+    /// `Q4_K` small – 4.37 GB @ 8B, +0.2689 ppl
     MostlyQ4KS = 14,
-    /// Q4_K medium – 4.58 GB @ 8B, +0.1754 ppl  *(recommended default)*
+    /// `Q4_K` medium – 4.58 GB @ 8B, +0.1754 ppl  *(recommended default)*
     MostlyQ4KM = 15,
-    /// Q5_K small – 5.21 GB @ 8B, +0.1049 ppl
+    /// `Q5_K` small – 5.21 GB @ 8B, +0.1049 ppl
     MostlyQ5KS = 16,
-    /// Q5_K medium – 5.33 GB @ 8B, +0.0569 ppl
+    /// `Q5_K` medium – 5.33 GB @ 8B, +0.0569 ppl
     MostlyQ5KM = 17,
-    /// Q6_K – 6.14 GB @ 8B, +0.0217 ppl
+    /// `Q6_K` – 6.14 GB @ 8B, +0.0217 ppl
     MostlyQ6K = 18,
-    /// IQ2_XXS – 2.06 bpw
+    /// `IQ2_XXS` – 2.06 bpw
     MostlyIQ2XXS = 19,
-    /// IQ2_XS – 2.31 bpw
+    /// `IQ2_XS` – 2.31 bpw
     MostlyIQ2XS = 20,
-    /// Q2_K small
+    /// `Q2_K` small
     MostlyQ2KS = 21,
-    /// IQ3_XS – 3.3 bpw
+    /// `IQ3_XS` – 3.3 bpw
     MostlyIQ3XS = 22,
-    /// IQ3_XXS – 3.06 bpw
+    /// `IQ3_XXS` – 3.06 bpw
     MostlyIQ3XXS = 23,
-    /// IQ1_S – 1.56 bpw (extremely small, high loss)
+    /// `IQ1_S` – 1.56 bpw (extremely small, high loss)
     MostlyIQ1S = 24,
-    /// IQ4_NL – 4.50 bpw non-linear
+    /// `IQ4_NL` – 4.50 bpw non-linear
     MostlyIQ4NL = 25,
-    /// IQ3_S – 3.44 bpw
+    /// `IQ3_S` – 3.44 bpw
     MostlyIQ3S = 26,
-    /// IQ3_M – 3.66 bpw
+    /// `IQ3_M` – 3.66 bpw
     MostlyIQ3M = 27,
-    /// IQ2_S – 2.5 bpw
+    /// `IQ2_S` – 2.5 bpw
     MostlyIQ2S = 28,
-    /// IQ2_M – 2.7 bpw
+    /// `IQ2_M` – 2.7 bpw
     MostlyIQ2M = 29,
-    /// IQ4_XS – 4.25 bpw non-linear
+    /// `IQ4_XS` – 4.25 bpw non-linear
     MostlyIQ4XS = 30,
-    /// IQ1_M – 1.75 bpw
+    /// `IQ1_M` – 1.75 bpw
     MostlyIQ1M = 31,
     /// BF16 – 14 GB @ 7B, −0.0050 ppl vs Mistral-7B
     MostlyBF16 = 32,
-    /// TQ1_0 – 1.69 bpw ternary
+    /// `TQ1_0` – 1.69 bpw ternary
     MostlyTQ1_0 = 36,
-    /// TQ2_0 – 2.06 bpw ternary
+    /// `TQ2_0` – 2.06 bpw ternary
     MostlyTQ2_0 = 37,
-    /// MXFP4 (MoE layers)
+    /// MXFP4 (`MoE` layers)
     MostlyMXFP4Moe = 38,
     /// NVFP4
     MostlyNVFP4 = 39,
@@ -361,7 +361,7 @@ pub enum GgmlType {
     TQ2_0 = 35,
     MXFP4 = 39,
     /// NVFP4 — renumbered to 42 when the `q1` feature is active (40 and 41
-    /// are taken by Q1_0 / Q1_0_g128 for PrismML GGUF compatibility).
+    /// are taken by `Q1_0` / `Q1_0_g128` for `PrismML` GGUF compatibility).
     #[cfg(not(feature = "q1"))]
     NVFP4 = 40,
     #[cfg(feature = "q1")]
@@ -839,30 +839,22 @@ impl QuantizeParams {
                     KvOverrideValue::Int(v) => {
                         raw.tag = llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_INT;
                         raw.__bindgen_anon_1 =
-                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
-                                val_i64: *v,
-                            };
+                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_i64: *v };
                     }
                     KvOverrideValue::Float(v) => {
                         raw.tag = llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_FLOAT;
                         raw.__bindgen_anon_1 =
-                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
-                                val_f64: *v,
-                            };
+                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_f64: *v };
                     }
                     KvOverrideValue::Bool(v) => {
                         raw.tag = llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_BOOL;
                         raw.__bindgen_anon_1 =
-                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
-                                val_bool: *v,
-                            };
+                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_bool: *v };
                     }
                     KvOverrideValue::Str(s) => {
                         raw.tag = llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_STR;
                         raw.__bindgen_anon_1 =
-                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 {
-                                val_str: *s,
-                            };
+                            llama_cpp_sys_4::llama_model_kv_override__bindgen_ty_1 { val_str: *s };
                     }
                 }
                 raw
@@ -904,12 +896,14 @@ impl QuantizeParams {
             ftype: self.ftype as llama_cpp_sys_4::llama_ftype,
             output_tensor_type: self
                 .output_tensor_type
-                .map(|t| t as llama_cpp_sys_4::ggml_type)
-                .unwrap_or(llama_cpp_sys_4::GGML_TYPE_COUNT),
+                .map_or(llama_cpp_sys_4::GGML_TYPE_COUNT, |t| {
+                    t as llama_cpp_sys_4::ggml_type
+                }),
             token_embedding_type: self
                 .token_embedding_type
-                .map(|t| t as llama_cpp_sys_4::ggml_type)
-                .unwrap_or(llama_cpp_sys_4::GGML_TYPE_COUNT),
+                .map_or(llama_cpp_sys_4::GGML_TYPE_COUNT, |t| {
+                    t as llama_cpp_sys_4::ggml_type
+                }),
             allow_requantize: self.allow_requantize,
             quantize_output_tensor: self.quantize_output_tensor,
             only_copy: self.only_copy,
@@ -966,7 +960,7 @@ pub(crate) struct RawQuantizeParamsGuard<'a> {
 // TurboQuant – attention rotation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Control the TurboQuant attention-rotation feature globally.
+/// Control the `TurboQuant` attention-rotation feature globally.
 ///
 /// When enabled (the default), llama.cpp applies a Hadamard rotation to Q/K/V
 /// tensors before storing them in the KV cache.  This significantly improves
@@ -1010,11 +1004,11 @@ pub fn set_attn_rot_disabled(disabled: bool) {
     }
 }
 
-/// Returns `true` if TurboQuant attention rotation is currently disabled.
+/// Returns `true` if `TurboQuant` attention rotation is currently disabled.
 #[must_use]
 pub fn attn_rot_disabled() -> bool {
     std::env::var("LLAMA_ATTN_ROT_DISABLE")
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
-        .map_or(false, |v| v != 0)
+        .is_some_and(|v| v != 0)
 }

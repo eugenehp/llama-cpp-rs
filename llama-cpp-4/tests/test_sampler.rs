@@ -52,7 +52,10 @@ fn test_min_p_sampler() {
 fn test_typical_sampler() {
     let sampler = LlamaSampler::typical(1.0, 1);
     let name = sampler.name();
-    assert!(name.contains("typical"), "expected 'typical' in name, got: {name}");
+    assert!(
+        name.contains("typical"),
+        "expected 'typical' in name, got: {name}"
+    );
 }
 
 #[test]
@@ -108,10 +111,7 @@ fn test_chain_creation() {
 
 #[test]
 fn test_chain_remove() {
-    let mut chain = LlamaSampler::chain_simple([
-        LlamaSampler::top_k(40),
-        LlamaSampler::greedy(),
-    ]);
+    let mut chain = LlamaSampler::chain_simple([LlamaSampler::top_k(40), LlamaSampler::greedy()]);
     assert_eq!(chain.chain_n(), 2);
     let removed = chain.chain_remove(0);
     assert_eq!(removed.name(), "top-k");

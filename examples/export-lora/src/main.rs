@@ -1,10 +1,10 @@
-//! # Export LoRA
+//! # Export `LoRA`
 //!
-//! Load a base model with a LoRA adapter applied and verify it works.
+//! Load a base model with a `LoRA` adapter applied and verify it works.
 //!
 //! The C++ `llama-export-lora` tool performs a tensor-level merge using gguf APIs
 //! to produce a standalone merged model file. This Rust version demonstrates loading
-//! and applying a LoRA adapter, inspecting its metadata, and running inference with it.
+//! and applying a `LoRA` adapter, inspecting its metadata, and running inference with it.
 //!
 //! ## Usage
 //!
@@ -38,11 +38,11 @@ struct Args {
     #[arg(short = 'm', long)]
     model: PathBuf,
 
-    /// Path to the LoRA adapter file
+    /// Path to the `LoRA` adapter file
     #[arg(long)]
     lora: PathBuf,
 
-    /// LoRA scale factor (default: 1.0)
+    /// `LoRA` scale factor (default: 1.0)
     #[arg(long, default_value_t = 1.0)]
     scale: f32,
 
@@ -99,8 +99,7 @@ fn main() -> Result<()> {
     }
 
     // Create context and apply adapter
-    let ctx_params =
-        LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
+    let ctx_params = LlamaContextParams::default().with_n_ctx(Some(NonZeroU32::new(2048).unwrap()));
     let ctx = model
         .new_context(&backend, ctx_params)
         .with_context(|| "failed to create context")?;
@@ -116,7 +115,7 @@ fn main() -> Result<()> {
     let tokens_list = model.str_to_token(&args.prompt, AddBos::Always)?;
     let mut batch = LlamaBatch::new(2048, 1);
     let last_idx = tokens_list.len() as i32 - 1;
-    for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
+    for (i, token) in (0_i32..).zip(tokens_list) {
         batch.add(token, i, &[0], i == last_idx)?;
     }
 
@@ -124,10 +123,7 @@ fn main() -> Result<()> {
     let mut ctx = ctx;
     ctx.decode(&mut batch)?;
 
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::temp(0.8),
-        LlamaSampler::dist(42),
-    ]);
+    let mut sampler = LlamaSampler::chain_simple([LlamaSampler::temp(0.8), LlamaSampler::dist(42)]);
 
     let mut n_cur = batch.n_tokens();
     let n_len = n_cur + args.n_predict;
@@ -154,7 +150,10 @@ fn main() -> Result<()> {
     }
 
     println!();
-    eprintln!("\n--- Done ({} tokens generated) ---", n_cur - batch.n_tokens());
+    eprintln!(
+        "\n--- Done ({} tokens generated) ---",
+        n_cur - batch.n_tokens()
+    );
 
     Ok(())
 }

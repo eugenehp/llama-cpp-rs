@@ -190,9 +190,12 @@ fn test_graph_matmul() {
 fn test_tensor_iteration() {
     let mem_size = tensor_overhead() * 10 + 1024;
     let ctx = GgmlContext::new(mem_size, true);
-    ctx.new_tensor_1d(llama_cpp_sys_4::GGML_TYPE_F32, 4).set_name("t1");
-    ctx.new_tensor_1d(llama_cpp_sys_4::GGML_TYPE_F32, 8).set_name("t2");
-    ctx.new_tensor_2d(llama_cpp_sys_4::GGML_TYPE_F16, 2, 3).set_name("t3");
+    ctx.new_tensor_1d(llama_cpp_sys_4::GGML_TYPE_F32, 4)
+        .set_name("t1");
+    ctx.new_tensor_1d(llama_cpp_sys_4::GGML_TYPE_F32, 8)
+        .set_name("t2");
+    ctx.new_tensor_2d(llama_cpp_sys_4::GGML_TYPE_F16, 2, 3)
+        .set_name("t3");
 
     let mut names = Vec::new();
     let mut t = ctx.first_tensor();

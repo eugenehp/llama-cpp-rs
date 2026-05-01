@@ -215,7 +215,7 @@ fn main() -> Result<()> {
         let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
 
         let last_index: i32 = (tokens_list.len() - 1) as i32;
-        for (i, token) in (0_i32..).zip(tokens_list.into_iter()) {
+        for (i, token) in (0_i32..).zip(tokens_list) {
             // llama_decode will output logits only for the last token of the prompt
             let is_last = i == last_index;
             batch.add(token, i, &[0], is_last)?;

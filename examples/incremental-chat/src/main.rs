@@ -91,7 +91,10 @@ struct Args {
     model: Model,
     #[arg(long, default_value_t = 512)]
     n_len: i32,
-    #[arg(long, default_value = "You are a helpful assistant. Be concise in your answers.")]
+    #[arg(
+        long,
+        default_value = "You are a helpful assistant. Be concise in your answers."
+    )]
     system_prompt: String,
     #[arg(long, default_value_t = 2)]
     keep_turns: usize,
@@ -111,11 +114,11 @@ struct Args {
     #[arg(long)]
     no_flash_attn: bool,
 
-    /// KV cache quantization type (f16, q8_0, q5_0, q4_0)
+    /// KV cache quantization type (f16, `q8_0`, `q5_0`, `q4_0`)
     #[arg(long, default_value = "f16", value_parser = parse_kv_type)]
     kv_type: GgmlType,
 
-    /// Disable TurboQuant attention rotation
+    /// Disable `TurboQuant` attention rotation
     #[arg(long)]
     no_turbo_quant: bool,
 
@@ -132,7 +135,9 @@ fn parse_kv_type(s: &str) -> Result<GgmlType, String> {
         "q5_1" => Ok(GgmlType::Q5_1),
         "q4_0" | "q4" => Ok(GgmlType::Q4_0),
         "q4_1" => Ok(GgmlType::Q4_1),
-        _ => Err(format!("unknown KV type '{s}', expected: f16, q8_0, q5_0, q5_1, q4_0, q4_1")),
+        _ => Err(format!(
+            "unknown KV type '{s}', expected: f16, q8_0, q5_0, q5_1, q4_0, q4_1"
+        )),
     }
 }
 
@@ -152,9 +157,14 @@ fn parse_key_val(s: &str) -> Result<(String, ParamOverrideValue)> {
 
 #[derive(clap::Subcommand, Debug, Clone)]
 enum Model {
-    Local { path: PathBuf },
+    Local {
+        path: PathBuf,
+    },
     #[clap(name = "hf-model")]
-    HuggingFace { repo: String, model: String },
+    HuggingFace {
+        repo: String,
+        model: String,
+    },
 }
 
 impl Model {
@@ -236,7 +246,7 @@ impl Conversation {
         let n_turns = self.turn_count();
         let evict = n_turns.saturating_sub(keep);
         if evict > 0 {
-            self.messages.drain(1..1 + evict * 2);
+            self.messages.drain(1..=(evict * 2));
         }
         let formatted = model.apply_chat_template(None, &self.messages, false)?;
         self.prefix_tokens = model.str_to_token(&formatted, AddBos::Always)?;
@@ -258,11 +268,7 @@ enum InputMsg {
 // Input thread with full line editor
 // ---------------------------------------------------------------------------
 
-fn input_thread(
-    tx: mpsc::Sender<InputMsg>,
-    debounce: Duration,
-    phase: Arc<AtomicBool>,
-) {
+fn input_thread(tx: mpsc::Sender<InputMsg>, debounce: Duration, phase: Arc<AtomicBool>) {
     let mut editor = LineEditor::new();
     let mut last_change = Instant::now();
     let mut pending_send = false;
@@ -286,10 +292,8 @@ fn input_thread(
                 let has_ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
                 match key.code {
-                    KeyCode::Char('c') if has_ctrl => {
-                        if tx.send(InputMsg::Interrupt).is_err() {
-                            break;
-                        }
+                    KeyCode::Char('c') if has_ctrl && tx.send(InputMsg::Interrupt).is_err() => {
+                        break;
                     }
                     KeyCode::Char('d') if has_ctrl => {
                         if editor.is_empty() {
@@ -307,15 +311,11 @@ fn input_thread(
                     _ if generating => {} // swallow during generation
 
                     // ── Cursor movement ────────────────────────────────
-                    KeyCode::Left => {
-                        if editor.move_left() {
-                            editor.redraw();
-                        }
+                    KeyCode::Left if editor.move_left() => {
+                        editor.redraw();
                     }
-                    KeyCode::Right => {
-                        if editor.move_right() {
-                            editor.redraw();
-                        }
+                    KeyCode::Right if editor.move_right() => {
+                        editor.redraw();
                     }
                     KeyCode::Home | KeyCode::Char('a') if has_ctrl || key.code == KeyCode::Home => {
                         editor.home();
@@ -327,40 +327,30 @@ fn input_thread(
                     }
 
                     // ── Deletion ───────────────────────────────────────
-                    KeyCode::Backspace => {
-                        if editor.backspace() {
-                            editor.redraw();
-                            last_change = Instant::now();
-                            pending_send = true;
-                        }
+                    KeyCode::Backspace if editor.backspace() => {
+                        editor.redraw();
+                        last_change = Instant::now();
+                        pending_send = true;
                     }
-                    KeyCode::Delete => {
-                        if editor.delete() {
-                            editor.redraw();
-                            last_change = Instant::now();
-                            pending_send = true;
-                        }
+                    KeyCode::Delete if editor.delete() => {
+                        editor.redraw();
+                        last_change = Instant::now();
+                        pending_send = true;
                     }
-                    KeyCode::Char('w') if has_ctrl => {
-                        if editor.delete_word_back() {
-                            editor.redraw();
-                            last_change = Instant::now();
-                            pending_send = true;
-                        }
+                    KeyCode::Char('w') if has_ctrl && editor.delete_word_back() => {
+                        editor.redraw();
+                        last_change = Instant::now();
+                        pending_send = true;
                     }
-                    KeyCode::Char('u') if has_ctrl => {
-                        if editor.clear_all() {
-                            editor.redraw();
-                            last_change = Instant::now();
-                            pending_send = true;
-                        }
+                    KeyCode::Char('u') if has_ctrl && editor.clear_all() => {
+                        editor.redraw();
+                        last_change = Instant::now();
+                        pending_send = true;
                     }
-                    KeyCode::Char('k') if has_ctrl => {
-                        if editor.kill_to_end() {
-                            editor.redraw();
-                            last_change = Instant::now();
-                            pending_send = true;
-                        }
+                    KeyCode::Char('k') if has_ctrl && editor.kill_to_end() => {
+                        editor.redraw();
+                        last_change = Instant::now();
+                        pending_send = true;
                     }
 
                     // ── Newline / Submit ────────────────────────────────
@@ -532,16 +522,18 @@ fn run() -> Result<()> {
                 Ok(cached_tokens) if cached_tokens == sys_tokens => {
                     eprintln!(
                         "{}",
-                        format!("[system prompt loaded from cache: {}]", cache_path.display())
-                            .bright_black()
+                        format!(
+                            "[system prompt loaded from cache: {}]",
+                            cache_path.display()
+                        )
+                        .bright_black()
                     );
                     true
                 }
                 _ => {
                     eprintln!(
                         "{}",
-                        "[session cache stale/incompatible — re-prefilling]"
-                            .bright_yellow()
+                        "[session cache stale/incompatible — re-prefilling]".bright_yellow()
                     );
                     false
                 }
@@ -638,11 +630,7 @@ fn run() -> Result<()> {
                             let user_part = &turn_tokens[conv.prefix_len()..];
                             match ip.prefill_speculative(&mut ctx, &mut batch, user_part) {
                                 Ok(n) if n > 0 => {
-                                    let s = format!(
-                                        " [pre {}/{}]",
-                                        ip.len(),
-                                        user_part.len()
-                                    );
+                                    let s = format!(" [pre {}/{}]", ip.len(), user_part.len());
                                     // Save cursor, print status, restore cursor
                                     eprint!("\x1b[s\x1b[999C{}\x1b[u", s.bright_black());
                                     let _ = io::stderr().flush();
@@ -689,7 +677,7 @@ fn run() -> Result<()> {
             if conv.turn_count() > 0 {
                 eprintln!(
                     "\r\n{}",
-                    format!("[ctx {}/{} — evicting, keeping last {}]", total_pos, n_ctx, keep_turns)
+                    format!("[ctx {total_pos}/{n_ctx} — evicting, keeping last {keep_turns}]")
                         .bright_yellow()
                 );
                 ctx.clear_kv_cache();
@@ -783,7 +771,7 @@ fn run() -> Result<()> {
         print!("\r\n");
 
         let tps = if elapsed.as_secs_f64() > 0.0 {
-            n_gen as f64 / elapsed.as_secs_f64()
+            f64::from(n_gen) / elapsed.as_secs_f64()
         } else {
             0.0
         };
@@ -801,8 +789,7 @@ fn run() -> Result<()> {
 
         // ── Update history ─────────────────────────────────────────────
         let user_msg = LlamaChatMessage::new("user".into(), user_text).context("user msg")?;
-        let asst_msg =
-            LlamaChatMessage::new("assistant".into(), response).context("asst msg")?;
+        let asst_msg = LlamaChatMessage::new("assistant".into(), response).context("asst msg")?;
         conv.push_turn(&model, user_msg, asst_msg, n_cur as usize)?;
         sampler = LlamaSampler::chain_simple([LlamaSampler::common(), LlamaSampler::greedy()]);
     }
