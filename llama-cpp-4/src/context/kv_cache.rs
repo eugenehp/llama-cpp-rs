@@ -94,7 +94,11 @@ impl LlamaContext<'_> {
             .map_err(KvCacheConversionError::P1TooLarge)?;
         #[cfg(feature = "mtp")]
         {
-            Ok(unsafe { llama_cpp_sys_4::llama_context_seq_rm(self.context.as_ptr(), src, p0, p1) })
+            Ok(
+                unsafe {
+                    llama_cpp_sys_4::llama_context_seq_rm(self.context.as_ptr(), src, p0, p1)
+                },
+            )
         }
         #[cfg(not(feature = "mtp"))]
         {

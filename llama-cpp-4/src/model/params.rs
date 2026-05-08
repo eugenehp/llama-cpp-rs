@@ -186,9 +186,8 @@ impl LlamaModelParams {
     #[cfg(feature = "mtp")]
     #[must_use]
     pub fn with_override_arch(mut self, override_arch: Option<&str>) -> Self {
-        self.override_arch = override_arch.map(|value| {
-            std::ffi::CString::new(value).expect("override_arch contains null bytes")
-        });
+        self.override_arch = override_arch
+            .map(|value| std::ffi::CString::new(value).expect("override_arch contains null bytes"));
         self.params.override_arch = self
             .override_arch
             .as_ref()
