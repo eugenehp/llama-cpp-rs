@@ -1,5 +1,6 @@
 use cmake::Config;
 use glob::glob;
+use patch_apply::{Line, Patch};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
@@ -144,6 +145,201 @@ fn resolve_patch_cmd() -> PathBuf {
     )
 }
 
+fn find_sequence(lines: &[&str], pattern: &[&str], start_at: usize) -> Option<usize> {
+    if pattern.is_empty() {
+        return Some(start_at.min(lines.len()));
+    }
+    if pattern.len() > lines.len() {
+        return None;
+    }
+
+    (start_at..=lines.len() - pattern.len()).find(|&i| lines[i..i + pattern.len()] == *pattern)
+}
+
+fn hunk_side_pattern<'a>(hunk: &'a patch_apply::Hunk<'a>, new_side: bool) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    for line in &hunk.lines {
+        match line {
+            Line::Context(s) => out.push(*s),
+            Line::Remove(s) if !new_side => out.push(*s),
+            Line::Add(s) if new_side => out.push(*s),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn patch_matches_side(lines: &[&str], patch: &Patch<'_>, new_side: bool) -> bool {
+    let mut cursor = 0usize;
+    for hunk in &patch.hunks {
+        let pattern = hunk_side_pattern(hunk, new_side);
+        let Some(pos) = find_sequence(lines, &pattern, cursor) else {
+            return false;
+        };
+        let consumed = if new_side {
+            hunk.new_range.count as usize
+        } else {
+            hunk.old_range.count as usize
+        };
+        cursor = pos.saturating_add(consumed);
+    }
+    true
+}
+
+fn reanchor_patch_to_old_side(lines: &[&str], patch: &mut Patch<'_>) -> bool {
+    let mut cursor = 0usize;
+    for hunk in &mut patch.hunks {
+        let pattern = hunk_side_pattern(hunk, false);
+        let Some(pos) = find_sequence(lines, &pattern, cursor) else {
+            return false;
+        };
+        hunk.old_range.start = pos as u64 + 1;
+        cursor = pos.saturating_add(hunk.old_range.count as usize);
+    }
+    true
+}
+
+fn strip_patch_path(path: &str, strip_components: usize) -> Option<PathBuf> {
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= strip_components {
+        return None;
+    }
+
+    let rel = PathBuf::from(parts[strip_components..].join("/"));
+    if rel.is_absolute() {
+        return None;
+    }
+    if rel.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(rel)
+}
+
+fn patch_target_path(dst: &Path, patch: &Patch<'_>) -> Result<PathBuf, String> {
+    let raw = if patch.new.path.as_ref() != "/dev/null" {
+        patch.new.path.as_ref()
+    } else {
+        patch.old.path.as_ref()
+    };
+
+    let rel = strip_patch_path(raw, 1)
+        .ok_or_else(|| format!("unsupported patch path after -p1 stripping: '{raw}'"))?;
+    Ok(dst.join(rel))
+}
+
+fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
+    for patch_path in entries {
+        println!(
+            "cargo:warning=Applying patch (rust): {}",
+            patch_path.display()
+        );
+
+        let patch_text = fs::read_to_string(patch_path)
+            .map_err(|e| format!("failed to read patch {}: {e}", patch_path.display()))?;
+        let patches = Patch::from_multiple(&patch_text)
+            .map_err(|e| format!("failed to parse patch {}: {e}", patch_path.display()))?;
+
+        for patch in patches {
+            let file_path = patch_target_path(dst, &patch)?;
+            let creates_file = patch.old.path.as_ref() == "/dev/null";
+            let deletes_file = patch.new.path.as_ref() == "/dev/null";
+
+            let current = match fs::read_to_string(&file_path) {
+                Ok(s) => s,
+                Err(_e) if creates_file => String::new(),
+                Err(e) => {
+                    return Err(format!(
+                        "failed to read target file {}: {e}",
+                        file_path.display()
+                    ));
+                }
+            };
+            let current_lines: Vec<&str> = current.lines().collect();
+
+            if patch_matches_side(&current_lines, &patch, true) {
+                println!(
+                    "cargo:warning=Patch already applied (rust): {}",
+                    file_path.display()
+                );
+                continue;
+            }
+
+            let mut anchored_patch = patch.clone();
+            if reanchor_patch_to_old_side(&current_lines, &mut anchored_patch) {
+                let updated = patch_apply::apply(current.clone(), anchored_patch);
+                if updated != current {
+                    if deletes_file {
+                        if let Err(e) = fs::remove_file(&file_path) {
+                            return Err(format!(
+                                "failed to delete patched file {}: {e}",
+                                file_path.display()
+                            ));
+                        }
+                    } else {
+                        if let Some(parent) = file_path.parent() {
+                            fs::create_dir_all(parent).map_err(|e| {
+                                format!(
+                                    "failed to create parent dir for {}: {e}",
+                                    file_path.display()
+                                )
+                            })?;
+                        }
+                        fs::write(&file_path, updated).map_err(|e| {
+                            format!("failed to write patched file {}: {e}", file_path.display())
+                        })?;
+                    }
+                }
+                continue;
+            }
+
+            return Err(format!(
+                "patch hunk mismatch for {} while applying {}",
+                file_path.display(),
+                patch_path.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_patches_via_cli(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
+    let patch_cmd = resolve_patch_cmd();
+    for patch in entries {
+        println!("cargo:warning=Applying patch (cli): {}", patch.display());
+        let status = Command::new(&patch_cmd)
+            .arg("-p1")
+            .arg("--forward")
+            .arg("--directory")
+            .arg(dst)
+            .arg("--input")
+            .arg(patch)
+            .status()
+            .map_err(|e| {
+                format!(
+                    "failed to run '{}' for {}: {e}",
+                    patch_cmd.display(),
+                    patch.display()
+                )
+            })?;
+        if !status.success() {
+            return Err(format!(
+                "patch command failed for {} with status {}",
+                patch.display(),
+                status
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Apply all `*.patch` files in `patches_dir` (sorted alphabetically) to `dst`.
 /// Uses the `patch -p1` command.
 /// Skips the patches directory entirely when it does not exist or is empty.
@@ -158,31 +354,27 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
         .filter(|p| p.extension().map(|e| e == "patch").unwrap_or(false))
         .collect();
     entries.sort();
-    let patch_cmd = resolve_patch_cmd();
-    for patch in &entries {
-        println!("cargo:warning=Applying patch: {}", patch.display());
-        let status = Command::new(&patch_cmd)
-            .arg("-p1")
-            .arg("--forward")
-            .arg("--directory")
-            .arg(dst)
-            .arg("--input")
-            .arg(patch)
-            .status()
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to run `{}` for {}: {e}",
-                    patch_cmd.display(),
-                    patch.display()
-                )
-            });
-        if !status.success() {
-            panic!(
-                "Patch {} failed to apply. The patch may need rebasing against the \
-                 current llama.cpp submodule commit.",
-                patch.display()
-            );
-        }
+    if entries.is_empty() {
+        return;
+    }
+
+    let engine = env::var("LLAMA_PATCH_ENGINE")
+        .map(|v| v.to_ascii_lowercase())
+        .unwrap_or_else(|_| "rust".to_string());
+
+    let res = match engine.as_str() {
+        "cli" => apply_patches_via_cli(&entries, dst),
+        "rust" => apply_patches_via_rust(&entries, dst),
+        other => Err(format!(
+            "unsupported LLAMA_PATCH_ENGINE='{other}', expected 'rust' or 'cli'"
+        )),
+    };
+
+    if let Err(err) = res {
+        panic!(
+            "Patch application failed using engine '{engine}': {err}. \
+             The patch may need rebasing against the current llama.cpp submodule commit."
+        );
     }
 }
 
@@ -229,31 +421,17 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
 }
 
 /// Copy a directory tree.  This runs on the *host*, so cfg!(unix/windows) is correct here.
-/// Copy a directory tree using hardlinks where possible (same-device),
-/// falling back to a regular copy.
-///
-/// Hardlinks are essentially instant (no data is duplicated) and the CMake
-/// build writes into its own `build/` subdirectory, so it never modifies the
-/// linked source files.
+/// Always perform a real copy. Using hardlinks is unsafe here because
+/// build-time patch application mutates files in the copied tree.
 fn copy_folder(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).expect("Failed to create dst directory");
     if cfg!(unix) {
-        // Try cp -rl (hardlink) first; fall back to cp -rf if the flag is not
-        // supported (e.g. older macOS cp, cross-device copies).
-        let status = std::process::Command::new("cp")
-            .arg("-rl")
+        std::process::Command::new("cp")
+            .arg("-rf")
             .arg(src)
             .arg(dst.parent().unwrap())
-            .status();
-        let ok = status.map(|s| s.success()).unwrap_or(false);
-        if !ok {
-            std::process::Command::new("cp")
-                .arg("-rf")
-                .arg(src)
-                .arg(dst.parent().unwrap())
-                .status()
-                .expect("Failed to execute cp command");
-        }
+            .status()
+            .expect("Failed to execute cp command");
     } else if cfg!(windows) {
         std::process::Command::new("robocopy.exe")
             .arg("/e")
@@ -1173,6 +1351,7 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_DIR");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
+    println!("cargo:rerun-if-env-changed=LLAMA_PATCH_ENGINE");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
 
