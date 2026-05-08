@@ -352,6 +352,15 @@ impl<'model> LlamaContext<'model> {
         unsafe { llama_cpp_sys_4::llama_n_seq_max(self.context.as_ptr()) }
     }
 
+    /// Get the number of recurrent-state snapshots per sequence.
+    ///
+    /// This is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    #[must_use]
+    pub fn n_rs_seq(&self) -> u32 {
+        unsafe { llama_cpp_sys_4::llama_n_rs_seq(self.context.as_ptr()) }
+    }
+
     /// Get the number of threads used for generation.
     #[must_use]
     pub fn n_threads(&self) -> i32 {
@@ -399,6 +408,18 @@ impl<'model> LlamaContext<'model> {
     pub fn set_warmup(&mut self, warmup: bool) {
         unsafe {
             llama_cpp_sys_4::llama_set_warmup(self.context.as_ptr(), warmup);
+        }
+    }
+
+    /// Attach or detach an MTP context used for speculative drafting.
+    ///
+    /// Pass `Some(&mtp_ctx)` to register an MTP context, or `None` to detach it.
+    /// This is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    pub fn set_mtp(&mut self, mtp_ctx: Option<&LlamaContext<'_>>) {
+        let ptr = mtp_ctx.map_or(std::ptr::null_mut(), |ctx| ctx.context.as_ptr());
+        unsafe {
+            llama_cpp_sys_4::llama_set_mtp(self.context.as_ptr(), ptr);
         }
     }
 

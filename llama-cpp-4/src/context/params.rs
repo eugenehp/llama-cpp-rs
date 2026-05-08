@@ -210,6 +210,25 @@ impl LlamaContextParams {
         self.context_params.n_ubatch
     }
 
+    /// Set the number of recurrent-state snapshots per sequence used for MTP rollback.
+    ///
+    /// This is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    #[must_use]
+    pub fn with_n_rs_seq(mut self, n_rs_seq: u32) -> Self {
+        self.context_params.n_rs_seq = n_rs_seq;
+        self
+    }
+
+    /// Get the number of recurrent-state snapshots per sequence used for MTP rollback.
+    ///
+    /// This is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    #[must_use]
+    pub fn n_rs_seq(&self) -> u32 {
+        self.context_params.n_rs_seq
+    }
+
     /// Set the `flash_attention` parameter
     ///
     /// # Examples

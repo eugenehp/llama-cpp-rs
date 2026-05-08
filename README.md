@@ -510,6 +510,7 @@ ctx.decode(&mut batch)?;
 | `native` | CPU with AVX2/NEON auto-detect | `--features native` |
 | `openmp` | Multi-core CPU (default on) | `--features openmp` |
 | `rpc` | Remote compute backend | `--features rpc` |
+| `mtp` | Apply MTP support patch (PR #22673) to vendored llama.cpp at build time | `--features mtp` |
 | `prebuilt` | All (build optimization) | `--features prebuilt` |
 
 ```bash

@@ -13,6 +13,8 @@ pub mod kv_overrides;
 pub struct LlamaModelParams {
     pub(crate) params: llama_cpp_sys_4::llama_model_params,
     kv_overrides: Vec<llama_cpp_sys_4::llama_model_kv_override>,
+    #[cfg(feature = "mtp")]
+    override_arch: Option<std::ffi::CString>,
 }
 
 impl Debug for LlamaModelParams {
@@ -174,6 +176,36 @@ impl LlamaModelParams {
         self.params.use_mlock = use_mlock;
         self
     }
+
+    /// Override model architecture string used when loading.
+    ///
+    /// This is primarily used by MTP to load the draft head architecture
+    /// from the same GGUF (for example `qwen35_mtp` / `qwen35moe_mtp`).
+    ///
+    /// This API is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    #[must_use]
+    pub fn with_override_arch(mut self, override_arch: Option<&str>) -> Self {
+        self.override_arch = override_arch.map(|value| {
+            std::ffi::CString::new(value).expect("override_arch contains null bytes")
+        });
+        self.params.override_arch = self
+            .override_arch
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr());
+        self
+    }
+
+    /// Get the currently configured model architecture override.
+    ///
+    /// This API is only available when built with the `mtp` feature.
+    #[cfg(feature = "mtp")]
+    #[must_use]
+    pub fn override_arch(&self) -> Option<&str> {
+        self.override_arch
+            .as_ref()
+            .and_then(|value| value.to_str().ok())
+    }
 }
 
 /// Default parameters for `LlamaModel`. (as defined in llama.cpp by `llama_model_default_params`)
@@ -202,6 +234,8 @@ impl Default for LlamaModelParams {
                     val_i64: 0,
                 },
             }],
+            #[cfg(feature = "mtp")]
+            override_arch: None,
         }
     }
 }

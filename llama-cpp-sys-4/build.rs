@@ -1001,15 +1001,30 @@ fn main() {
         copy_folder(&llama_src, &llama_dst);
 
         // Apply local patches (only those gated by active Cargo features).
+        let staged_dir = out_dir.join("patches-active");
+        std::fs::create_dir_all(&staged_dir).ok();
+        let mut staged_any = false;
+
         if cfg!(feature = "q1") {
             let q1_patch = patches_dir.join("0001-q1-quantization.patch");
             if q1_patch.exists() {
-                let single_dir = out_dir.join("patches-q1");
-                std::fs::create_dir_all(&single_dir).ok();
-                std::fs::copy(&q1_patch, single_dir.join("0001-q1-quantization.patch"))
+                std::fs::copy(&q1_patch, staged_dir.join("0001-q1-quantization.patch"))
                     .expect("failed to stage q1 patch");
-                apply_patches(&single_dir, &llama_dst);
+                staged_any = true;
             }
+        }
+
+        if cfg!(feature = "mtp") {
+            let mtp_patch = patches_dir.join("0002-mtp.patch");
+            if mtp_patch.exists() {
+                std::fs::copy(&mtp_patch, staged_dir.join("0002-mtp.patch"))
+                    .expect("failed to stage mtp patch");
+                staged_any = true;
+            }
+        }
+
+        if staged_any {
+            apply_patches(&staged_dir, &llama_dst);
         }
         std::fs::write(&sentinel, &current_version)
             .expect("failed to write source version sentinel");
