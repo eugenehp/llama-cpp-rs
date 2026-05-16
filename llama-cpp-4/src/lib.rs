@@ -37,6 +37,7 @@ pub mod ggml;
 pub mod llama_backend;
 pub mod llama_batch;
 pub mod model;
+pub mod mtp;
 pub mod quantize;
 pub mod sampling;
 pub mod token;

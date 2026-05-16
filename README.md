@@ -11,7 +11,9 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** c30e01225 (April 2026) — includes [TurboQuant (PR #21038)](#turboQuant--attention-rotation)
+**llama.cpp version:** 64b38b561 (May 2026) — includes
+[TurboQuant (PR #21038)](#turboQuant--attention-rotation) and
+[MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673).
 
 ---
 
@@ -28,6 +30,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `quantize` | [`examples/quantize/`](examples/quantize/) | Quantize a GGUF model with full typed API |
 | `turbo-quant` | [`examples/turbo-quant/`](examples/turbo-quant/) | TurboQuant demo — compare attn rotation on/off |
 | `incremental-chat` | [`examples/incremental-chat/`](examples/incremental-chat/) | Chat with incremental prefill — processes tokens while you type |
+| `mtp` | [`examples/mtp/`](examples/mtp/) | MTP draft-context setup demo (configures `LlamaContextType::Mtp` + `n_rs_seq`) |
 
 ---
 
@@ -331,6 +334,44 @@ cargo run -p turbo-quant -- \
 
 ---
 
+## MTP — multi-token-prediction speculative decoding
+
+[Upstream PR #22673](https://github.com/ggml-org/llama.cpp/pull/22673) added
+MTP draft heads to llama.cpp. From Rust, two contexts on the same model give
+you a target + MTP draft pair:
+
+```rust
+use llama_cpp_4::context::params::{LlamaContextParams, LlamaContextType};
+
+let target = model.new_context(&backend, LlamaContextParams::default())?;
+let draft  = model.new_context(
+    &backend,
+    LlamaContextParams::default()
+        .with_ctx_type(LlamaContextType::Mtp)
+        .with_n_rs_seq(4),
+)?;
+```
+
+A runnable demo lives in [`examples/mtp/`](examples/mtp/). Without
+`--predict` it just builds the two contexts (smoke test); with `--predict N`
+it drives the full speculative-decode loop from Rust via
+[`llama_cpp_4::mtp::MtpSession`](llama-cpp-4/src/mtp.rs) (a safe wrapper
+around upstream's `common_speculative_*` MTP path via a small C++ shim in
+[`llama-cpp-sys-4/mtp_shim/`](llama-cpp-sys-4/mtp_shim/)):
+
+```bash
+cargo run --release -p mtp --features metal -- \
+    --predict 64 --prompt "The capital of France is" \
+    hf-model froggeric/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ2_M-mtp.gguf
+```
+
+Verified on Apple M4 Pro / Metal: ~94% draft acceptance, ~12 tok/s on the
+IQ2_M quant. For an alternative end-to-end benchmark against upstream's
+`llama-server` (`--spec-type draft-mtp`), see
+[`scripts/bench-mtp.sh`](scripts/bench-mtp.sh) and [MTP.md](MTP.md).
+
+---
+
 ## Incremental prefill
 
 The `incremental-chat` example demonstrates **incremental prefill** — decoding
@@ -510,7 +551,6 @@ ctx.decode(&mut batch)?;
 | `native` | CPU with AVX2/NEON auto-detect | `--features native` |
 | `openmp` | Multi-core CPU (default on) | `--features openmp` |
 | `rpc` | Remote compute backend | `--features rpc` |
-| `mtp` | Apply MTP support patch (PR #22673) to vendored llama.cpp at build time | `--features mtp` |
 | `prebuilt` | All (build optimization) | `--features prebuilt` |
 
 ```bash

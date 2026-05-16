@@ -1793,7 +1793,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.2.54"
+version = "0.2.56"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.2.54"
+version = "0.2.56"
 dependencies = [
  "bindgen",
  "cc",
@@ -1907,6 +1907,17 @@ version = "0.2.23"
 dependencies = [
  "anyhow",
  "clap",
+ "llama-cpp-4",
+]
+
+[[package]]
+name = "mtp"
+version = "0.2.23"
+dependencies = [
+ "anyhow",
+ "clap",
+ "encoding_rs",
+ "hf-hub",
  "llama-cpp-4",
 ]
 

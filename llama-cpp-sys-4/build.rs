@@ -1192,15 +1192,6 @@ fn main() {
             }
         }
 
-        if cfg!(feature = "mtp") {
-            let mtp_patch = patches_dir.join("0002-mtp.patch");
-            if mtp_patch.exists() {
-                std::fs::copy(&mtp_patch, staged_dir.join("0002-mtp.patch"))
-                    .expect("failed to stage mtp patch");
-                staged_any = true;
-            }
-        }
-
         if staged_any {
             apply_patches(&staged_dir, &llama_dst);
         }
@@ -1264,6 +1255,10 @@ fn main() {
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("src").display()))
         .clang_arg(format!("-I{}", llama_dst.join("common").display()))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("mtp_shim").display()
+        ))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
         // Do not derive PartialEq on types that contain function-pointer fields.
@@ -1286,6 +1281,9 @@ fn main() {
         .allowlist_function("llama_.*")
         .allowlist_function("llama_lora_.*")
         .allowlist_type("llama_.*")
+        .allowlist_function("mtp_session_.*")
+        .allowlist_type("mtp_session")
+        .opaque_type("mtp_session")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")
         .allowlist_function("common_fit_params")
@@ -2166,6 +2164,31 @@ fn main() {
             );
             println!("cargo:rustc-link-lib=static=llama-common-base");
         }
+    }
+
+    // ── MTP shim ─────────────────────────────────────────────────────────────
+    // Compile our C++ shim that exposes upstream's common_speculative_* MTP
+    // path with stable C linkage. Build as a static archive that links against
+    // the cmake-built llama-common (already linked above).
+    let shim_dir = Path::new(&manifest_dir).join("mtp_shim");
+    let mtp_shim_src = shim_dir.join("mtp_shim.cpp");
+    if mtp_shim_src.exists() {
+        cc::Build::new()
+            .cpp(true)
+            .std("c++17")
+            .file(&mtp_shim_src)
+            .include(&shim_dir)
+            .include(llama_dst.join("include"))
+            .include(llama_dst.join("ggml/include"))
+            .include(llama_dst.join("src"))
+            .include(llama_dst.join("common"))
+            .warnings(false)
+            .compile("mtp_shim");
+        println!("cargo:rerun-if-changed={}", mtp_shim_src.display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            shim_dir.join("mtp_shim.h").display()
+        );
     }
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).

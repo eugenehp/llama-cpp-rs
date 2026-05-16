@@ -2,6 +2,31 @@
 use std::fmt::Debug;
 use std::num::NonZeroU32;
 
+/// A rusty wrapper around `llama_context_type`.
+#[repr(u32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LlamaContextType {
+    /// Default context (standard inference).
+    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT,
+    /// Multi-token-prediction draft context, used as the draft side of speculative decoding.
+    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP,
+}
+
+impl From<llama_cpp_sys_4::llama_context_type> for LlamaContextType {
+    fn from(value: llama_cpp_sys_4::llama_context_type) -> Self {
+        match value {
+            llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP => Self::Mtp,
+            _ => Self::Default,
+        }
+    }
+}
+
+impl From<LlamaContextType> for llama_cpp_sys_4::llama_context_type {
+    fn from(value: LlamaContextType) -> Self {
+        value as Self
+    }
+}
+
 /// A rusty wrapper around `rope_scaling_type`.
 #[repr(i8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -210,10 +235,21 @@ impl LlamaContextParams {
         self.context_params.n_ubatch
     }
 
+    /// Set the context type (e.g. [`LlamaContextType::Mtp`] to load this context as a
+    /// multi-token-prediction draft head used by upstream's `draft-mtp` speculative decoder).
+    #[must_use]
+    pub fn with_ctx_type(mut self, ctx_type: LlamaContextType) -> Self {
+        self.context_params.ctx_type = ctx_type.into();
+        self
+    }
+
+    /// Get the configured context type.
+    #[must_use]
+    pub fn ctx_type(&self) -> LlamaContextType {
+        self.context_params.ctx_type.into()
+    }
+
     /// Set the number of recurrent-state snapshots per sequence used for MTP rollback.
-    ///
-    /// This is only available when built with the `mtp` feature.
-    #[cfg(feature = "mtp")]
     #[must_use]
     pub fn with_n_rs_seq(mut self, n_rs_seq: u32) -> Self {
         self.context_params.n_rs_seq = n_rs_seq;
@@ -221,9 +257,6 @@ impl LlamaContextParams {
     }
 
     /// Get the number of recurrent-state snapshots per sequence used for MTP rollback.
-    ///
-    /// This is only available when built with the `mtp` feature.
-    #[cfg(feature = "mtp")]
     #[must_use]
     pub fn n_rs_seq(&self) -> u32 {
         self.context_params.n_rs_seq

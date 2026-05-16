@@ -1,0 +1,19 @@
+[package]
+name = "mtp"
+version = "0.2.23"
+edition = "2021"
+description = "Example: MTP (multi-token prediction) draft context setup for llama-cpp-4"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.2.56" }
+hf-hub = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+encoding_rs = { workspace = true }
+
+[features]
+cuda = ["llama-cpp-4/cuda"]
+metal = ["llama-cpp-4/metal"]
+vulkan = ["llama-cpp-4/vulkan"]

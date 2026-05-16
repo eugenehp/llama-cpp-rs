@@ -65,7 +65,7 @@ kill_server
 
 # ---- BASELINE (no MTP) ----
 echo ""
-echo ">> Starting baseline server (no --spec-type mtp) ..."
+echo ">> Starting baseline server (no --spec-type draft-mtp) ..."
 "$SERVER" -m "$BASE_MODEL" -ngl 99 -c $CTX -np 1 --no-webui --no-warmup \
   --port $PORT --host 127.0.0.1 2>/tmp/bench-base.log &
 BASE_PID=$!
@@ -78,9 +78,9 @@ kill_server
 
 # ---- MTP ----
 echo ""
-echo ">> Starting MTP server (--spec-type mtp --spec-draft-n-max $SPEC_DRAFT_N_MAX) ..."
+echo ">> Starting MTP server (--spec-type draft-mtp --spec-draft-n-max $SPEC_DRAFT_N_MAX) ..."
 "$SERVER" -m "$MTP_MODEL" -ngl 99 -c $CTX -np 1 --no-webui --no-warmup \
-  --spec-type mtp --spec-draft-n-max "$SPEC_DRAFT_N_MAX" \
+  --spec-type draft-mtp --spec-draft-n-max "$SPEC_DRAFT_N_MAX" \
   --port $PORT --host 127.0.0.1 2>/tmp/bench-mtp.log &
 MTP_PID=$!
 wait_server

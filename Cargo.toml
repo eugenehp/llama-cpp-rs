@@ -21,6 +21,7 @@ members = [
     "examples/tts",
     "examples/turbo-quant",
     "examples/incremental-chat",
+    "examples/mtp",
 ]
 
 [workspace.dependencies]

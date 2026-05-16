@@ -4,6 +4,7 @@
 #include "llama.h"
 #include "common.h"
 #include "fit.h"
+#include "mtp_shim.h"
 
 #ifdef RPC_SUPPORT
 #include "ggml-rpc.h"
