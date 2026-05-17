@@ -3,27 +3,31 @@ use std::fmt::Debug;
 use std::num::NonZeroU32;
 
 /// A rusty wrapper around `llama_context_type`.
+//
+// Cast the sys constants to `u32` so the discriminants compile on both clang
+// (where bindgen emits `c_uint`) and MSVC (where it emits `c_int`).
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LlamaContextType {
     /// Default context (standard inference).
-    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT,
+    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT as u32,
     /// Multi-token-prediction draft context, used as the draft side of speculative decoding.
-    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP,
+    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP as u32,
 }
 
 impl From<llama_cpp_sys_4::llama_context_type> for LlamaContextType {
     fn from(value: llama_cpp_sys_4::llama_context_type) -> Self {
-        match value {
-            llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP => Self::Mtp,
-            _ => Self::Default,
+        if value == llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP {
+            Self::Mtp
+        } else {
+            Self::Default
         }
     }
 }
 
 impl From<LlamaContextType> for llama_cpp_sys_4::llama_context_type {
     fn from(value: LlamaContextType) -> Self {
-        value as Self
+        value as u32 as Self
     }
 }
 
