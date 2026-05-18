@@ -174,7 +174,6 @@ impl LlamaModelParams {
         self.params.use_mlock = use_mlock;
         self
     }
-
 }
 
 /// Default parameters for `LlamaModel`. (as defined in llama.cpp by `llama_model_default_params`)

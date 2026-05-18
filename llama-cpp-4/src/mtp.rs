@@ -175,9 +175,8 @@ impl MtpSession {
     /// Returns [`MtpSessionError::Process`] if upstream rejects the batch
     /// (most often: the batch carries `embd` directly rather than tokens).
     pub fn process(&mut self, batch: &LlamaBatch) -> Result<(), MtpSessionError> {
-        let ok = unsafe {
-            llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &batch.llama_batch)
-        };
+        let ok =
+            unsafe { llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &batch.llama_batch) };
         if ok {
             Ok(())
         } else {

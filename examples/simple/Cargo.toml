@@ -1,6 +1,6 @@
 [package]
 name = "simple"
-version = "0.2.23"
+version = "0.2.59"
 edition = "2021"
 description = "Example: simple for llama-cpp-4"
 license = "MIT OR Apache-2.0"

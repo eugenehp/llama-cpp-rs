@@ -65,9 +65,14 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug, Clone)]
 enum Model {
-    Local { path: PathBuf },
+    Local {
+        path: PathBuf,
+    },
     #[clap(name = "hf-model")]
-    HuggingFace { repo: String, file: String },
+    HuggingFace {
+        repo: String,
+        file: String,
+    },
 }
 
 impl Model {
@@ -182,7 +187,9 @@ fn run_speculative(
         batch.add(tok, i as i32, &[0], true)?;
     }
     target_ctx.decode(&mut batch).context("prefill failed")?;
-    session.process(&batch).context("MTP process(prefill) failed")?;
+    session
+        .process(&batch)
+        .context("MTP process(prefill) failed")?;
     session.begin(0, &tokens)?;
 
     // Sample the first token from the prefill.

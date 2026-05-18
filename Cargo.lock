@@ -924,7 +924,7 @@ checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
 name = "embeddings"
-version = "0.2.23"
+version = "0.2.59"
 dependencies = [
  "anyhow",
  "clap",
@@ -1793,7 +1793,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.2.57"
+version = "0.2.59"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.2.57"
+version = "0.2.59"
 dependencies = [
  "bindgen",
  "cc",
@@ -2799,7 +2799,7 @@ checksum = "703d5c7ef118737c72f1af64ad2f6f8c5e1921f818cdcb97b8fe6fc69bf66214"
 
 [[package]]
 name = "simple"
-version = "0.2.23"
+version = "0.2.59"
 dependencies = [
  "anyhow",
  "clap",
