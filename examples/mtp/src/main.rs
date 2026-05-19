@@ -179,12 +179,13 @@ fn run_speculative(
     let n_batch_max = target_ctx.n_batch() as usize;
     let prefill_capacity = tokens.len().max(n_batch_max);
     let mut batch = LlamaBatch::new(prefill_capacity, 1);
-    // MTP requires logits=true on every prompt position so that pre-norm
-    // embeddings can be extracted for the draft context (see
-    // `get_embeddings_pre_norm_ith: invalid pre-norm embeddings id N, reason:
-    // batch.logits[N] != true` in upstream).
+    // MtpSession::new configures the target context with pre-norm extraction
+    // in unmasked mode (upstream PR #23198), so pre-norm rows are written for
+    // every prompt token regardless of batch.logits. Only the final position
+    // needs logits=true — that's what the first sample reads from.
+    let last_idx = tokens.len() - 1;
     for (i, tok) in tokens.iter().copied().enumerate() {
-        batch.add(tok, i as i32, &[0], true)?;
+        batch.add(tok, i as i32, &[0], i == last_idx)?;
     }
     target_ctx.decode(&mut batch).context("prefill failed")?;
     session

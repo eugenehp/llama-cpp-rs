@@ -446,6 +446,65 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
+    /// Toggle extraction of pre-norm embeddings — the hidden state right
+    /// before the final output norm, used by MTP draft heads (upstream
+    /// llama.cpp PR #23198).
+    ///
+    /// If `masked` is `true`, pre-norm rows are extracted only for tokens
+    /// whose `batch.logits[i]` is non-zero. If `masked` is `false`, rows are
+    /// extracted for every token in the batch regardless of `batch.logits` —
+    /// callers can then leave `batch.logits[i] = false` on prompt-fill
+    /// positions and avoid copying the full logits row for each one.
+    ///
+    /// `MtpSession::new` already sets this up (unmasked on the target,
+    /// masked on the draft). Callers normally don't need to invoke this
+    /// directly.
+    pub fn set_embeddings_pre_norm(&mut self, value: bool, masked: bool) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_embeddings_pre_norm(self.context.as_ptr(), value, masked);
+        }
+    }
+
+    /// Get the full pre-norm embeddings buffer for the last decoded batch.
+    ///
+    /// Returns `None` when pre-norm embeddings are disabled or the buffer
+    /// hasn't been populated. The length of the returned slice is
+    /// `n_embd * <number of pre-norm rows>` — interpretation of the row
+    /// count depends on whether the setter was called with `masked=true`
+    /// (one row per sampled token) or `masked=false` (one row per batch
+    /// token). Use [`get_embeddings_pre_norm_ith`](Self::get_embeddings_pre_norm_ith)
+    /// when you only need a single row.
+    #[must_use]
+    pub fn get_embeddings_pre_norm(&self) -> Option<&[f32]> {
+        let n_embd =
+            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
+        unsafe {
+            let p = llama_cpp_sys_4::llama_get_embeddings_pre_norm(self.context.as_ptr());
+            if p.is_null() {
+                None
+            } else {
+                Some(slice::from_raw_parts(p, n_embd))
+            }
+        }
+    }
+
+    /// Get the pre-norm embedding row for the `i`th output position of the
+    /// last decoded batch. Returns `None` if upstream rejects the index
+    /// (e.g. masked mode with `batch.logits[i] == 0`, or out of range).
+    #[must_use]
+    pub fn get_embeddings_pre_norm_ith(&self, i: i32) -> Option<&[f32]> {
+        let n_embd =
+            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
+        unsafe {
+            let p = llama_cpp_sys_4::llama_get_embeddings_pre_norm_ith(self.context.as_ptr(), i);
+            if p.is_null() {
+                None
+            } else {
+                Some(slice::from_raw_parts(p, n_embd))
+            }
+        }
+    }
+
     /// Reset the timings for the context.
     pub fn reset_timings(&mut self) {
         unsafe { llama_cpp_sys_4::ggml_time_init() }

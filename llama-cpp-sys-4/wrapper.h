@@ -6,6 +6,11 @@
 #include "fit.h"
 #include "mtp_shim.h"
 
+// llama-ext.h lives in src/ but exports LLAMA_API entry points (pre-norm
+// embeddings setter/getters, memory-breakdown, etc). Pull it in so bindgen
+// emits the corresponding extern fns.
+#include "llama-ext.h"
+
 #ifdef RPC_SUPPORT
 #include "ggml-rpc.h"
 #endif
