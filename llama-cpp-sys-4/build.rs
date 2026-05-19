@@ -1192,6 +1192,18 @@ fn main() {
             }
         }
 
+        if cfg!(feature = "vulkan") {
+            let spirv_patch = patches_dir.join("0002-vulkan-spirv-headers-sdk.patch");
+            if spirv_patch.exists() {
+                std::fs::copy(
+                    &spirv_patch,
+                    staged_dir.join("0002-vulkan-spirv-headers-sdk.patch"),
+                )
+                .expect("failed to stage vulkan SPIRV-Headers patch");
+                staged_any = true;
+            }
+        }
+
         if staged_any {
             apply_patches(&staged_dir, &llama_dst);
         }

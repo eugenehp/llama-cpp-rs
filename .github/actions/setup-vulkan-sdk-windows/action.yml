@@ -1,0 +1,29 @@
+name: Setup Vulkan SDK (Windows)
+description: Install LunarG Vulkan SDK via Chocolatey and export VULKAN_SDK for CMake/Cargo
+
+runs:
+  using: composite
+  steps:
+    - name: Install Vulkan SDK
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        choco install vulkan-sdk --yes --no-progress
+        $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory |
+          Sort-Object Name -Descending |
+          Select-Object -First 1
+        if (-not $sdk) {
+          throw 'Vulkan SDK not found under C:\VulkanSDK after installation'
+        }
+        $bin = Join-Path $sdk.FullName 'Bin'
+        $spirvConfig = Join-Path $sdk.FullName 'SPIRV-Headers\SPIRV-HeadersConfig.cmake'
+        if (-not (Test-Path $spirvConfig)) {
+          throw "SPIRV-Headers CMake package not found at $spirvConfig (SDK may be incomplete)"
+        }
+        if (-not (Test-Path (Join-Path $bin 'glslc.exe'))) {
+          throw "glslc.exe not found in $bin"
+        }
+        "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        Write-Host "VULKAN_SDK=$($sdk.FullName)"
+        & (Join-Path $bin 'glslc.exe') --version

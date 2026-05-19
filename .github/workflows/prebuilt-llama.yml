@@ -14,10 +14,29 @@ on:
         description: Existing tag to upload assets to (workflow_dispatch only)
         required: false
         default: ""
-      library_type:
-        description: Type of libraries to build (static, dynamic, or both)
+      platform:
+        description: OS to build (tag pushes always build all)
         type: choice
-        default: "static"
+        default: all
+        options:
+          - all
+          - linux
+          - windows
+          - macos
+      variant:
+        description: Backend variant (tag pushes always build all)
+        type: choice
+        default: all
+        options:
+          - all
+          - cpu
+          - vulkan
+          - blas
+          - metal
+      library_type:
+        description: Library linkage (tag pushes always build static and dynamic)
+        type: choice
+        default: static
         options:
           - static
           - dynamic
@@ -30,49 +49,37 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  plan:
+    name: Plan prebuilt matrix
+    runs-on: ubuntu-latest
+    outputs:
+      build_linux: ${{ steps.filter.outputs.build_linux }}
+      build_windows: ${{ steps.filter.outputs.build_windows }}
+      build_macos: ${{ steps.filter.outputs.build_macos }}
+      linux_matrix: ${{ steps.filter.outputs.linux_matrix }}
+      windows_matrix: ${{ steps.filter.outputs.windows_matrix }}
+      macos_matrix: ${{ steps.filter.outputs.macos_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Filter matrix
+        id: filter
+        env:
+          MATRIX_JSON: ${{ github.workspace }}/.github/prebuilt-matrix.json
+          PLATFORM: ${{ inputs.platform || 'all' }}
+          VARIANT: ${{ inputs.variant || 'all' }}
+          LIBRARY_TYPE: ${{ inputs.library_type || 'both' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: python3 .github/scripts/filter-prebuilt-matrix.py
+
   linux-prebuilt:
     name: Linux prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
+    needs: plan
+    if: needs.plan.outputs.build_linux == 'true'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: cpu
-            suffix: cpu
-            features: "mtmd"
-            vulkan: false
-            blas: false
-            library_type: static
-          - label: cpu
-            suffix: cpu
-            features: "mtmd"
-            vulkan: false
-            blas: false
-            library_type: dynamic
-          - label: vulkan
-            suffix: vulkan
-            features: vulkan,mtmd
-            vulkan: true
-            blas: false
-            library_type: static
-          - label: vulkan
-            suffix: vulkan
-            features: vulkan,mtmd
-            vulkan: true
-            blas: false
-            library_type: dynamic
-          - label: blas
-            suffix: blas
-            features: blas,mtmd
-            vulkan: false
-            blas: true
-            library_type: static
-          - label: blas
-            suffix: blas
-            features: blas,mtmd
-            vulkan: false
-            blas: true
-            library_type: dynamic
+        include: ${{ fromJSON(needs.plan.outputs.linux_matrix) }}
     env:
       TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
@@ -113,48 +120,28 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v2
+          shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
           cache-targets: false
           cache-on-failure: false
 
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash
-        env:
-          RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: |
           set -euo pipefail
           LIBRARY_TYPE="${{ matrix.library_type }}"
-          
-          # Build based on library type
+
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
-            # Build only dynamic library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
-            fi
-          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
-            # Build only static library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }},dynamic-link"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
           fi
 
       - name: Collect prebuilt libraries
@@ -165,25 +152,19 @@ jobs:
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
           LIBRARY_TYPE="${{ matrix.library_type }}"
 
-          echo "::group::All .a/.so/.dylib under target/"
-          find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
-          echo "::endgroup::"
-
-          # Collect any llama/ggml static/shared libraries from anywhere in target/
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
               libllama*|libggml*|libcommon*|libmtmd*)
-                # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)
-                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
-                      cp -f "$f" "$ROOT/lib/$base" 
+                    if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base"
                     fi
                     ;;
                   *.a)
-                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
-                      cp -f "$f" "$ROOT/lib/$base" 
+                    if [[ "$LIBRARY_TYPE" == "static" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base"
                     fi
                     ;;
                 esac
@@ -191,8 +172,12 @@ jobs:
             esac
           done < <(find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) -print0)
 
-          echo "Collected $(find "$ROOT/lib" -type f | wc -l) libraries"
-          ls -la "$ROOT/lib/" || true
+          COUNT="$(find "$ROOT/lib" -type f 2>/dev/null | wc -l | tr -d ' ')"
+          if [[ "$COUNT" -lt 1 ]]; then
+            echo "::error::No libraries collected for ${ASSET_NAME}"
+            find target -type f \( -name 'lib*.a' -o -name 'lib*.so' \) | head -40 || true
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
@@ -207,48 +192,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}"
-          
-          # Check if release exists
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            # Create release if it doesn't exist
-            echo "Creating release $TAG_NAME"
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Prebuilt artifacts for $TAG_NAME"
           fi
-          
-          # Upload asset
           gh release upload "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   windows-prebuilt:
     name: Windows prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
+    needs: plan
+    if: needs.plan.outputs.build_windows == 'true'
     runs-on: windows-latest
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: x64 cpu
-            target: x86_64-pc-windows-msvc
-            suffix: cpu
-            features: "mtmd"
-            vulkan: false
-            library_type: static
-          - label: x64 cpu
-            target: x86_64-pc-windows-msvc
-            suffix: cpu
-            features: "mtmd"
-            vulkan: false
-            library_type: dynamic
-          - label: x64 vulkan
-            target: x86_64-pc-windows-msvc
-            suffix: vulkan
-            features: vulkan,mtmd
-            vulkan: true
-            library_type: static
-          - label: x64 vulkan
-            target: x86_64-pc-windows-msvc
-            suffix: vulkan
-            features: vulkan,mtmd
-            vulkan: true
-            library_type: dynamic
+        include: ${{ fromJSON(needs.plan.outputs.windows_matrix) }}
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
@@ -281,56 +239,32 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v2
+          shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
           cache-targets: false
           cache-on-failure: false
 
-      - name: Install Vulkan SDK
+      - name: Setup Vulkan SDK
         if: matrix.vulkan
-        shell: powershell
-        run: |
-          choco install vulkan-sdk --yes --no-progress
-          $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $sdk) { throw 'Vulkan SDK not found' }
-          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "$($sdk.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        uses: ./.github/actions/setup-vulkan-sdk-windows
 
       - name: Build llama-cpp-4 (prebuilt target)
         shell: bash
         run: |
           set -euo pipefail
           LIBRARY_TYPE="${{ matrix.library_type }}"
-          
-          # Build based on library type
+
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
-            # Build only dynamic library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
-            fi
-          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
-            # Build only static library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }},dynamic-link"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
           fi
 
       - name: Collect prebuilt libraries
@@ -341,32 +275,32 @@ jobs:
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
           LIBRARY_TYPE="${{ matrix.library_type }}"
 
-          echo "::group::All .lib/.dll under target/"
-          find target -type f \( -name '*.lib' -o -name '*.dll' \) 2>/dev/null | head -80
-          echo "::endgroup::"
-
-          # Collect llama/ggml libs from anywhere in target/
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
               llama*|ggml*|common*|mtmd*)
                 case "$base" in
                   *.lib)
-                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
-                      cp -f "$f" "$ROOT/lib/$base" 
+                    if [[ "$LIBRARY_TYPE" == "static" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base"
                     fi
                     ;;
                   *.dll)
-                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
-                      cp -f "$f" "$ROOT/bin/$base" 
+                    if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+                      cp -f "$f" "$ROOT/bin/$base"
                     fi
                     ;;
-                esac ;;
+                esac
+                ;;
             esac
           done < <(find target -type f \( -name '*.lib' -o -name '*.dll' \) -print0)
 
-          echo "Collected $(find "$ROOT" -type f -not -name 'metadata.json' | wc -l) files"
-          ls -la "$ROOT/lib/" "$ROOT/bin/" 2>/dev/null || true
+          COUNT="$(find "$ROOT" -type f ! -name 'metadata.json' 2>/dev/null | wc -l | tr -d ' ')"
+          if [[ "$COUNT" -lt 1 ]]; then
+            echo "::error::No libraries collected for ${ASSET_NAME}"
+            find target -type f \( -name '*.lib' -o -name '*.dll' \) | head -40 || true
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
@@ -381,44 +315,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}"
-          
-          # Check if release exists
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            # Create release if it doesn't exist
-            echo "Creating release $TAG_NAME"
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Prebuilt artifacts for $TAG_NAME"
           fi
-          
-          # Upload asset
           gh release upload "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" --clobber
 
   macos-prebuilt:
     name: macOS prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
+    needs: plan
+    if: needs.plan.outputs.build_macos == 'true'
     runs-on: macos-26
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: arm64 cpu
-            target: aarch64-apple-darwin
-            suffix: cpu
-            features: "mtmd"
-            library_type: static
-          - label: arm64 cpu
-            target: aarch64-apple-darwin
-            suffix: cpu
-            features: "mtmd"
-            library_type: dynamic
-          - label: arm64 metal
-            target: aarch64-apple-darwin
-            suffix: metal
-            features: metal,mtmd
-            library_type: static
-          - label: arm64 metal
-            target: aarch64-apple-darwin
-            suffix: metal
-            features: metal,mtmd
-            library_type: dynamic
+        include: ${{ fromJSON(needs.plan.outputs.macos_matrix) }}
     env:
       TARGET_TRIPLE: ${{ matrix.target }}
     steps:
@@ -441,7 +351,7 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-v2
+          shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
           cache-targets: false
           cache-on-failure: false
 
@@ -450,37 +360,19 @@ jobs:
         run: |
           set -euo pipefail
           LIBRARY_TYPE="${{ matrix.library_type }}"
-          
-          # Build based on library type
+
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
-            # Build only dynamic library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }},dynamic-link"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "dynamic-link"
-            fi
-          elif [[ "$LIBRARY_TYPE" == "static" ]]; then
-            # Build only static library
-            if [[ -n "${{ matrix.features }}" ]]; then
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features \
-                --features "${{ matrix.features }}"
-            else
-              cargo build -p llama-cpp-4 \
-                --release \
-                --target "${TARGET_TRIPLE}" \
-                --no-default-features
-            fi
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }},dynamic-link"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
           fi
 
       - name: Collect prebuilt libraries
@@ -491,25 +383,19 @@ jobs:
           mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
           LIBRARY_TYPE="${{ matrix.library_type }}"
 
-          echo "::group::All .a/.so/.dylib under target/"
-          find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) 2>/dev/null | head -80
-          echo "::endgroup::"
-
-          # Collect any llama/ggml static/shared libraries from anywhere in target/
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
               libllama*|libggml*|libcommon*|libmtmd*)
-                # Separate static and dynamic libraries
                 case "$base" in
                   *.so|*.dylib)
-                    if [[ "$LIBRARY_TYPE" == "dynamic"   ]]; then
-                      cp -f "$f" "$ROOT/lib/$base" 
+                    if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base"
                     fi
                     ;;
                   *.a)
-                    if [[ "$LIBRARY_TYPE" == "static"   ]]; then
-                      cp -f "$f" "$ROOT/lib/$base" 
+                    if [[ "$LIBRARY_TYPE" == "static" ]]; then
+                      cp -f "$f" "$ROOT/lib/$base"
                     fi
                     ;;
                 esac
@@ -517,8 +403,11 @@ jobs:
             esac
           done < <(find target -type f \( -name 'lib*.a' -o -name 'lib*.so' -o -name 'lib*.dylib' \) -print0)
 
-          echo "Collected $(find "$ROOT/lib" -type f | wc -l) libraries"
-          ls -la "$ROOT/lib/" || true
+          COUNT="$(find "$ROOT/lib" -type f 2>/dev/null | wc -l | tr -d ' ')"
+          if [[ "$COUNT" -lt 1 ]]; then
+            echo "::error::No libraries collected for ${ASSET_NAME}"
+            exit 1
+          fi
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
@@ -533,13 +422,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}"
-          
-          # Check if release exists
           if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
-            # Create release if it doesn't exist
-            echo "Creating release $TAG_NAME"
             gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Prebuilt artifacts for $TAG_NAME"
           fi
-          
-          # Upload asset
           gh release upload "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" --clobber

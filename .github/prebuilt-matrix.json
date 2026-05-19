@@ -1,0 +1,116 @@
+{
+  "linux": [
+    {
+      "label": "cpu",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "blas": false,
+      "library_type": "static"
+    },
+    {
+      "label": "cpu",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "blas": false,
+      "library_type": "dynamic"
+    },
+    {
+      "label": "vulkan",
+      "suffix": "vulkan",
+      "features": "vulkan,mtmd",
+      "vulkan": true,
+      "blas": false,
+      "library_type": "static"
+    },
+    {
+      "label": "vulkan",
+      "suffix": "vulkan",
+      "features": "vulkan,mtmd",
+      "vulkan": true,
+      "blas": false,
+      "library_type": "dynamic"
+    },
+    {
+      "label": "blas",
+      "suffix": "blas",
+      "features": "blas,mtmd",
+      "vulkan": false,
+      "blas": true,
+      "library_type": "static"
+    },
+    {
+      "label": "blas",
+      "suffix": "blas",
+      "features": "blas,mtmd",
+      "vulkan": false,
+      "blas": true,
+      "library_type": "dynamic"
+    }
+  ],
+  "windows": [
+    {
+      "label": "x64 cpu",
+      "target": "x86_64-pc-windows-msvc",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "library_type": "static"
+    },
+    {
+      "label": "x64 cpu",
+      "target": "x86_64-pc-windows-msvc",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "library_type": "dynamic"
+    },
+    {
+      "label": "x64 vulkan",
+      "target": "x86_64-pc-windows-msvc",
+      "suffix": "vulkan",
+      "features": "vulkan,mtmd",
+      "vulkan": true,
+      "library_type": "static"
+    },
+    {
+      "label": "x64 vulkan",
+      "target": "x86_64-pc-windows-msvc",
+      "suffix": "vulkan",
+      "features": "vulkan,mtmd",
+      "vulkan": true,
+      "library_type": "dynamic"
+    }
+  ],
+  "macos": [
+    {
+      "label": "arm64 cpu",
+      "target": "aarch64-apple-darwin",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "library_type": "static"
+    },
+    {
+      "label": "arm64 cpu",
+      "target": "aarch64-apple-darwin",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "library_type": "dynamic"
+    },
+    {
+      "label": "arm64 metal",
+      "target": "aarch64-apple-darwin",
+      "suffix": "metal",
+      "features": "metal,mtmd",
+      "library_type": "static"
+    },
+    {
+      "label": "arm64 metal",
+      "target": "aarch64-apple-darwin",
+      "suffix": "metal",
+      "features": "metal,mtmd",
+      "library_type": "dynamic"
+    }
+  ]
+}

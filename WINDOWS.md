@@ -77,6 +77,23 @@ If you see:
 
 then the Vulkan SDK is not installed correctly. The build script tries to find it automatically, but if that fails, ensure `VULKAN_SDK` is set and `glslc` is on your `PATH`.
 
+## Prebuilt release artifacts (Vulkan)
+
+On each `v*` tag, CI builds and uploads Windows Vulkan prebuilts (static and dynamic) to the GitHub release:
+
+- `llama-prebuilt-windows-x86_64-pc-windows-msvc-vulkan-static.tar.gz`
+- `llama-prebuilt-windows-x86_64-pc-windows-msvc-vulkan-dynamic.tar.gz`
+
+Extract and point `LLAMA_PREBUILT_DIR` at the unpacked directory:
+
+```powershell
+tar -xzf llama-prebuilt-windows-x86_64-pc-windows-msvc-vulkan-static.tar.gz -C .\prebuilt
+$env:LLAMA_PREBUILT_DIR = (Resolve-Path .\prebuilt).Path
+cargo build --features vulkan
+```
+
+To rebuild only Windows Vulkan prebuilts manually, run **Build prebuilt llama artifacts** (`workflow_dispatch`) with `platform=windows`, `variant=vulkan`, and `library_type=static` or `dynamic`.
+
 ## CI check
 
 The repository CI includes a Windows Vulkan build check in:
