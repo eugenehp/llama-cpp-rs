@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] - 2026-05-19
+
+### Changed
+- **llama.cpp**: bumped vendored submodule to `b28a2f372` (includes MTP clean-up
+  [#23269](https://github.com/ggml-org/llama.cpp/pull/23269)).
+- **MTP draft API**: `MtpSession::new_with_config` and [`MtpSessionConfig`]
+  expose `n_min` and `p_min`; upstream default `p_min` is now `0.0`.
+- **CI**: Linux dynamic prebuilt collection now includes versioned `.so` files
+  and symlinks.
+
+### Added
+- [`MtpSession::need_embd_pre_norm`], [`MtpSession::print_stats`],
+  [`MtpSession::config`], [`MtpSession::n_min`], [`MtpSession::p_min`].
+- `examples/mtp`: `--p-min` CLI flag; session stats printed after generation.
+
+[`MtpSessionConfig`]: llama-cpp-4/src/mtp.rs
+[`MtpSession::need_embd_pre_norm`]: llama-cpp-4/src/mtp.rs
+[`MtpSession::print_stats`]: llama-cpp-4/src/mtp.rs
+[`MtpSession::config`]: llama-cpp-4/src/mtp.rs
+[`MtpSession::n_min`]: llama-cpp-4/src/mtp.rs
+[`MtpSession::p_min`]: llama-cpp-4/src/mtp.rs
+
 ## [0.2.56] - 2026-05-16
 
 ### Changed

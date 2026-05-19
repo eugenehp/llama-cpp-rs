@@ -30,7 +30,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `quantize` | [`examples/quantize/`](examples/quantize/) | Quantize a GGUF model with full typed API |
 | `turbo-quant` | [`examples/turbo-quant/`](examples/turbo-quant/) | TurboQuant demo — compare attn rotation on/off |
 | `incremental-chat` | [`examples/incremental-chat/`](examples/incremental-chat/) | Chat with incremental prefill — processes tokens while you type |
-| `mtp` | [`examples/mtp/`](examples/mtp/) | MTP draft-context setup demo (configures `LlamaContextType::Mtp` + `n_rs_seq`) |
+| `mtp` | [`examples/mtp/`](examples/mtp/) | MTP speculative decoding via `MtpSession` (`--predict`, `--p-min`, draft loop) |
 
 ---
 
@@ -337,38 +337,106 @@ cargo run -p turbo-quant -- \
 ## MTP — multi-token-prediction speculative decoding
 
 [Upstream PR #22673](https://github.com/ggml-org/llama.cpp/pull/22673) added
-MTP draft heads to llama.cpp. From Rust, two contexts on the same model give
-you a target + MTP draft pair:
+MTP draft heads to llama.cpp. The Rust API lives in
+[`llama_cpp_4::mtp`](llama-cpp-4/src/mtp.rs): build a target + draft context
+pair, wrap them in [`MtpSession`](llama-cpp-4/src/mtp.rs), and drive the
+verify/accept loop from Rust.
+
+### 1. Context setup
+
+Both contexts come from the **same MTP-capable GGUF**. The draft context must
+use [`LlamaContextType::Mtp`](llama-cpp-4/src/context/params.rs) and
+`n_rs_seq >= n_draft_max` (rollback snapshots for speculative verification):
 
 ```rust
 use llama_cpp_4::context::params::{LlamaContextParams, LlamaContextType};
 
+let n_draft_max = 3;
+
 let target = model.new_context(&backend, LlamaContextParams::default())?;
-let draft  = model.new_context(
+let draft = model.new_context(
     &backend,
     LlamaContextParams::default()
         .with_ctx_type(LlamaContextType::Mtp)
-        .with_n_rs_seq(4),
+        .with_n_rs_seq(n_draft_max.max(4)), // headroom for rollback
 )?;
 ```
 
-A runnable demo lives in [`examples/mtp/`](examples/mtp/). Without
-`--predict` it just builds the two contexts (smoke test); with `--predict N`
-it drives the full speculative-decode loop from Rust via
-[`llama_cpp_4::mtp::MtpSession`](llama-cpp-4/src/mtp.rs) (a safe wrapper
-around upstream's `common_speculative_*` MTP path via a small C++ shim in
-[`llama-cpp-sys-4/mtp_shim/`](llama-cpp-sys-4/mtp_shim/)):
+### 2. Session config and creation
+
+[`MtpSessionConfig`](llama-cpp-4/src/mtp.rs) maps to upstream
+`common_params_speculative_draft`:
+
+| Field | Meaning | Typical value |
+|---|---|---|
+| `n_seq` | Parallel sequences | `1` |
+| `n_draft_max` | Max tokens drafted per round | `1`–`3` (model-dependent) |
+| `p_min` | Drop draft tokens below this probability | `0.0` (upstream default since #23269) |
+| `n_min` | Minimum drafts to propose | `0` |
+
+```rust
+use llama_cpp_4::mtp::{MtpSession, MtpSessionConfig};
+
+// Shorthand (defaults: n_min=0, p_min=0.0)
+let mut session = MtpSession::new(&target, &draft, 1, n_draft_max)?;
+
+// Full control
+let config = MtpSessionConfig::new(1, n_draft_max)
+    .with_p_min(0.0)
+    .with_n_min(0);
+let mut session = MtpSession::new_with_config(&target, &draft, config)?;
+
+assert!(session.need_embd_pre_norm()); // MTP needs pre-norm hidden states
+assert!(!session.need_embd());         // post-norm embeddings not used
+```
+
+Upstream configures pre-norm extraction on both contexts during session init;
+you normally do **not** need to call
+[`LlamaContext::set_embeddings_pre_norm`](llama-cpp-4/src/context.rs) yourself.
+
+### 3. Speculative decode loop (outline)
+
+After every `target.decode(batch)`:
+
+1. `session.process(&batch)?` — sync MTP with the target batch
+2. `session.draft(seq_id, n_past, last_token)?` — propose draft tokens
+3. Verify drafts on the target (your sampler / argmax logic)
+4. `session.accept(seq_id, n_accepted)?` — update draft recurrent state
+5. `session.print_stats()` — log upstream draft/accept counters (optional)
+
+See [`examples/mtp/src/main.rs`](examples/mtp/src/main.rs) for a complete
+working loop with timing and acceptance reporting.
+
+### 4. CLI examples
+
+Smoke test (build contexts only):
 
 ```bash
 cargo run --release -p mtp --features metal -- \
-    --predict 64 --prompt "The capital of France is" \
     hf-model froggeric/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ2_M-mtp.gguf
 ```
 
-Verified on Apple M4 Pro / Metal: ~94% draft acceptance, ~12 tok/s on the
-IQ2_M quant. For an alternative end-to-end benchmark against upstream's
-`llama-server` (`--spec-type draft-mtp`), see
-[`scripts/bench-mtp.sh`](scripts/bench-mtp.sh) and [MTP.md](MTP.md).
+Full generation with draft tuning:
+
+```bash
+cargo run --release -p mtp --features metal -- \
+    --predict 64 \
+    --n-draft-max 1 \
+    --p-min 0.0 \
+    --prompt "The capital of France is" \
+    hf-model froggeric/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ2_M-mtp.gguf
+```
+
+Use `--features cuda` or `--features vulkan` on other platforms instead of
+`metal`.
+
+### 5. Benchmarks and tuning
+
+Draft depth is quant- and model-sensitive. See [MTP.md](MTP.md) for measured
+throughput on Apple Silicon and notes on upstream #23269 sampling changes.
+
+For comparison against upstream `llama-server --spec-type draft-mtp`, use
+[`scripts/bench-mtp.sh`](scripts/bench-mtp.sh).
 
 ---
 
@@ -693,7 +761,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.2.18},
+  version   = {0.3.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

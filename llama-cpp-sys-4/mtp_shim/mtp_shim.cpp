@@ -15,16 +15,20 @@ struct mtp_session {
     // Per-seq result buffer the draft() call writes into.
     std::vector<llama_tokens> results;
 
-    uint32_t n_seq      = 0;
+    uint32_t n_seq       = 0;
     int32_t  n_draft_max = 0;
+    int32_t  n_min       = 0;
+    float    p_min       = 0.0f;
 };
 
 extern "C" mtp_session * mtp_session_new(
-        llama_context * ctx_tgt,
-        llama_context * ctx_dft,
-        uint32_t        n_seq,
-        int32_t         n_draft_max) {
-    if (ctx_tgt == nullptr || ctx_dft == nullptr || n_seq == 0 || n_draft_max <= 0) {
+        llama_context *             ctx_tgt,
+        llama_context *             ctx_dft,
+        const mtp_session_config * config) {
+    if (ctx_tgt == nullptr || ctx_dft == nullptr || config == nullptr) {
+        return nullptr;
+    }
+    if (config->n_seq == 0 || config->n_draft_max <= 0) {
         return nullptr;
     }
 
@@ -32,20 +36,23 @@ extern "C" mtp_session * mtp_session_new(
     sparams.types         = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
     sparams.draft.ctx_tgt = ctx_tgt;
     sparams.draft.ctx_dft = ctx_dft;
-    sparams.draft.n_max   = n_draft_max;
-    sparams.draft.n_min   = 0;
+    sparams.draft.n_max   = config->n_draft_max;
+    sparams.draft.n_min   = config->n_min;
+    sparams.draft.p_min   = config->p_min;
 
-    common_speculative * raw = common_speculative_init(sparams, n_seq);
+    common_speculative * raw = common_speculative_init(sparams, config->n_seq);
     if (raw == nullptr) {
         return nullptr;
     }
 
     auto * s = new mtp_session;
     s->spec.reset(raw);
-    s->prompts.resize(n_seq);
-    s->results.resize(n_seq);
-    s->n_seq       = n_seq;
-    s->n_draft_max = n_draft_max;
+    s->prompts.resize(config->n_seq);
+    s->results.resize(config->n_seq);
+    s->n_seq       = config->n_seq;
+    s->n_draft_max = config->n_draft_max;
+    s->n_min       = config->n_min;
+    s->p_min       = config->p_min;
     return s;
 }
 
@@ -58,6 +65,13 @@ extern "C" bool mtp_session_need_embd(const mtp_session * s) {
         return false;
     }
     return common_speculative_need_embd(s->spec.get());
+}
+
+extern "C" bool mtp_session_need_embd_pre_norm(const mtp_session * s) {
+    if (s == nullptr) {
+        return false;
+    }
+    return common_speculative_need_embd_pre_norm(s->spec.get());
 }
 
 extern "C" void mtp_session_begin(
@@ -102,9 +116,6 @@ extern "C" void mtp_session_draft(
         return;
     }
 
-    // Initialise per-seq draft params. The upstream API takes a reference
-    // returned by `common_speculative_get_draft_params`, which is owned by
-    // the inner impl — we just configure it in place.
     auto & dp = common_speculative_get_draft_params(s->spec.get(), seq_id);
     auto & result = s->results[seq_id];
     result.clear();
@@ -134,6 +145,13 @@ extern "C" void mtp_session_accept(
         return;
     }
     common_speculative_accept(s->spec.get(), seq_id, n_accepted);
+}
+
+extern "C" void mtp_session_print_stats(const mtp_session * s) {
+    if (s == nullptr) {
+        return;
+    }
+    common_speculative_print_stats(s->spec.get());
 }
 
 extern "C" int32_t mtp_session_n_max(const mtp_session * s) {

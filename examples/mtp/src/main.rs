@@ -2,20 +2,48 @@
 //!
 //! Pairs a target context with an MTP draft context and drives the full
 //! speculative-decode loop from Rust via [`llama_cpp_4::mtp::MtpSession`],
-//! which is a safe wrapper around upstream's `common_speculative_*` MTP
-//! implementation (PR #22673).
+//! which wraps upstream's `common_speculative_impl_draft_mtp` (PR #22673).
 //!
-//! Without `--predict`, the example just builds both contexts and reports
-//! their configuration (useful as a connectivity smoke test on any MTP GGUF).
-//! With `--predict N`, it generates up to `N` tokens through the draft loop
-//! and reports how many drafts were accepted.
+//! # Modes
 //!
-//! # Verified invocation
+//! - **Smoke test** (default): builds target + draft contexts and prints
+//!   `need_embd_pre_norm` / session config. Useful on any MTP GGUF.
+//! - **Generation** (`--predict N`): runs prefill, draft/verify/accept loop,
+//!   reports acceptance rate and tok/s.
+//!
+//! # CLI flags
+//!
+//! | Flag | Default | Meaning |
+//! |---|---|---|
+//! | `--n-draft-max` | `3` | [`MtpSessionConfig::n_draft_max`] |
+//! | `--p-min` | `0.0` | [`MtpSessionConfig::p_min`] (upstream default since #23269) |
+//! | `--n-rs-seq` | `4` | Recurrent rollback snapshots (`>= n-draft-max`) |
+//! | `--predict` | — | Enable generation loop |
+//! | `--prompt` | `"The capital of France is"` | Prompt when `--predict` is set |
+//!
+//! # Examples
+//!
+//! Smoke test from Hugging Face:
 //!
 //! ```sh
 //! cargo run --release -p mtp --features metal -- \
-//!     --predict 64 --prompt "The capital of France is" \
 //!     hf-model froggeric/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ2_M-mtp.gguf
+//! ```
+//!
+//! Generate 64 tokens with `n_draft_max=1` (often faster than 3 on Q4_K_M):
+//!
+//! ```sh
+//! cargo run --release -p mtp --features metal -- \
+//!     --predict 64 --n-draft-max 1 --p-min 0.0 \
+//!     --prompt "The capital of France is" \
+//!     hf-model froggeric/Qwen3.6-27B-MTP-GGUF Qwen3.6-27B-IQ2_M-mtp.gguf
+//! ```
+//!
+//! Local GGUF path:
+//!
+//! ```sh
+//! cargo run --release -p mtp --features metal -- \
+//!     --predict 32 /path/to/model-mtp.gguf
 //! ```
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
@@ -28,7 +56,7 @@ use llama_cpp_4::llama_backend::LlamaBackend;
 use llama_cpp_4::llama_batch::LlamaBatch;
 use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::{AddBos, LlamaModel, Special};
-use llama_cpp_4::mtp::MtpSession;
+use llama_cpp_4::mtp::{MtpSession, MtpSessionConfig};
 use llama_cpp_4::sampling::LlamaSampler;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -45,6 +73,10 @@ struct Args {
     /// Qwen3.6 MTP and reports that as the sweet spot.
     #[arg(long, default_value_t = 3)]
     n_draft_max: i32,
+
+    /// Minimum draft-token probability; drafts below this are dropped (upstream default 0.0).
+    #[arg(long, default_value_t = 0.0)]
+    p_min: f32,
 
     /// Number of recurrent-state snapshots per sequence (must be >= n_draft_max).
     #[arg(long, default_value_t = 4)]
@@ -137,11 +169,14 @@ fn main() -> Result<()> {
     );
 
     let mut draft_ctx = draft_ctx;
-    let mut session = MtpSession::new(&target_ctx, &draft_ctx, 1, args.n_draft_max)?;
+    let session_config = MtpSessionConfig::new(1, args.n_draft_max).with_p_min(args.p_min);
+    let mut session = MtpSession::new_with_config(&target_ctx, &draft_ctx, session_config)?;
     println!(
-        "MTP session: n_draft_max={}, need_embd={}",
+        "MTP session: n_draft_max={}, p_min={}, need_embd={}, need_embd_pre_norm={}",
         session.n_draft_max(),
-        session.need_embd()
+        session.p_min(),
+        session.need_embd(),
+        session.need_embd_pre_norm()
     );
 
     let Some(n_predict) = args.predict else {
@@ -179,10 +214,10 @@ fn run_speculative(
     let n_batch_max = target_ctx.n_batch() as usize;
     let prefill_capacity = tokens.len().max(n_batch_max);
     let mut batch = LlamaBatch::new(prefill_capacity, 1);
-    // MtpSession::new configures the target context with pre-norm extraction
-    // in unmasked mode (upstream PR #23198), so pre-norm rows are written for
-    // every prompt token regardless of batch.logits. Only the final position
-    // needs logits=true — that's what the first sample reads from.
+    // Session init configures pre-norm extraction on both contexts (upstream
+    // PR #23198), so pre-norm rows are written for every prompt token regardless
+    // of batch.logits. Only the final position needs logits=true — that's what
+    // the first sample reads from.
     let last_idx = tokens.len() - 1;
     for (i, tok) in tokens.iter().copied().enumerate() {
         batch.add(tok, i as i32, &[0], i == last_idx)?;
@@ -340,5 +375,6 @@ fn run_speculative(
         n_accepted_total,
         100.0 * acceptance
     );
+    session.print_stats();
     Ok(())
 }

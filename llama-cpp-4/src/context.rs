@@ -456,9 +456,9 @@ impl<'model> LlamaContext<'model> {
     /// callers can then leave `batch.logits[i] = false` on prompt-fill
     /// positions and avoid copying the full logits row for each one.
     ///
-    /// `MtpSession::new` already sets this up (unmasked on the target,
-    /// masked on the draft). Callers normally don't need to invoke this
-    /// directly.
+    /// Upstream's MTP session init configures pre-norm extraction on the target
+    /// and draft contexts automatically. Call this manually only for custom
+    /// speculative setups.
     pub fn set_embeddings_pre_norm(&mut self, value: bool, masked: bool) {
         unsafe {
             llama_cpp_sys_4::llama_set_embeddings_pre_norm(self.context.as_ptr(), value, masked);

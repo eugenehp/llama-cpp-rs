@@ -1,4 +1,16 @@
-//! exposing common llama cpp structures like `CommonParams`
+//! Exposes a small subset of llama.cpp `common/` helpers and parameter structs.
+//!
+//! ## Upstream `common_init_from_params`
+//!
+//! llama.cpp's [`common_init_from_params`](https://github.com/ggml-org/llama.cpp/blob/master/common/common.h)
+//! loads a model and context (and samplers) from a parsed CLI-style
+//! [`common_params`](https://github.com/ggml-org/llama.cpp/blob/master/common/common.h).
+//! Its second argument, `model_only`, skips context creation when `true` (used
+//! by tests that construct contexts manually).
+//!
+//! This crate does not wrap the full C++ `common_params` tree. The Rust
+//! equivalent of `model_only = true` is [`crate::model::LlamaModel::load_from_file`]
+//! followed by [`crate::model::LlamaModel::new_context`] when you need inference.
 pub use llama_cpp_sys_4::common::*;
 
 /// Struct containing common parameters for processing.

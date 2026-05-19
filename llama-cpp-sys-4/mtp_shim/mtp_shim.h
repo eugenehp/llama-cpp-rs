@@ -19,27 +19,36 @@ extern "C" {
 
 struct mtp_session;
 
+struct mtp_session_config {
+    uint32_t n_seq;
+    int32_t  n_draft_max;
+    int32_t  n_min;
+    float    p_min;
+};
+
 // Initialise an MTP draft session that pairs `ctx_tgt` (the target context,
 // `LLAMA_CONTEXT_TYPE_DEFAULT`) with `ctx_dft` (the draft context, built with
 // `LLAMA_CONTEXT_TYPE_MTP`). Both must be from the same MTP-capable model.
 //
-// `n_seq` is the number of concurrent sequences the session will track
-// (usually 1 for a single conversation). `n_draft_max` caps the number of
-// tokens drafted per round.
+// `config` must be non-null with `n_seq > 0` and `n_draft_max > 0`.
+// `n_min` and `p_min` map to `common_params_speculative_draft` (upstream
+// defaults: 0 and 0.0).
 //
 // Returns nullptr on failure (e.g. when the model lacks MTP heads).
 struct mtp_session * mtp_session_new(
-        struct llama_context * ctx_tgt,
-        struct llama_context * ctx_dft,
-        uint32_t n_seq,
-        int32_t n_draft_max);
+        struct llama_context *              ctx_tgt,
+        struct llama_context *              ctx_dft,
+        const struct mtp_session_config *   config);
 
 void mtp_session_free(struct mtp_session * s);
 
-// Returns true if MTP requires embeddings to be extractable from the target
-// context — callers should propagate this to `llama_set_embeddings(...)` /
-// the pre-norm embeddings setter before any decode.
+// True when any speculative backend needs post-norm embeddings on the target
+// context (`llama_set_embeddings`). MTP returns false.
 bool mtp_session_need_embd(const struct mtp_session * s);
+
+// True when any speculative backend needs pre-norm hidden states on the target
+// context (`llama_set_embeddings_pre_norm`). MTP returns true.
+bool mtp_session_need_embd_pre_norm(const struct mtp_session * s);
 
 // Optional: call once per fresh generation. `prompt` is the prompt-token array
 // already decoded into the target context (used by ngram-style speculators;
@@ -57,7 +66,7 @@ void mtp_session_begin(
 // `batch` must be the exact same `llama_batch` that was passed to
 // `llama_decode(ctx_tgt, batch)`.
 bool mtp_session_process(
-        struct mtp_session *      s,
+        struct mtp_session *       s,
         const struct llama_batch * batch);
 
 // Generate up to `n_draft_max` draft tokens for sequence `seq_id`, starting
@@ -84,8 +93,11 @@ void mtp_session_accept(
         int32_t              seq_id,
         uint16_t             n_accepted);
 
-// Get/set the configured maximum draft length (mirrors
-// `common_params_speculative_draft.n_max`).
+// Log speculative-decoding statistics via llama.cpp's LOG_INF (draft/accept
+// counts and timings). Requires a log callback if you want to capture output.
+void mtp_session_print_stats(const struct mtp_session * s);
+
+// Configured maximum draft length (`common_params_speculative_draft.n_max`).
 int32_t mtp_session_n_max(const struct mtp_session * s);
 
 #ifdef __cplusplus

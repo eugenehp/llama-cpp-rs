@@ -1325,6 +1325,7 @@ fn main() {
         .allowlist_type("llama_.*")
         .allowlist_function("mtp_session_.*")
         .allowlist_type("mtp_session")
+        .allowlist_type("mtp_session_config")
         .opaque_type("mtp_session")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")

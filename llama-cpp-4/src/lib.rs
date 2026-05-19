@@ -11,6 +11,7 @@
 //! - [chat](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/chat)
 //! - [embeddings](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/embeddings)
 //! - [server](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/server)
+//! - [mtp](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/mtp) — MTP speculative decoding via [`crate::mtp::MtpSession`]
 //!
 //! # Feature Flags
 //!

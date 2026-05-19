@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).  
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** b8533 · **Crate version:** 0.2.13
+**llama.cpp version:** b8533 · **Crate version:** 0.3.0
 
 ---
 
@@ -15,12 +15,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.2.13"
+llama-cpp-4 = "0.3.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.2.13", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.2.13", features = ["metal"] }
-# llama-cpp-4 = { version = "0.2.13", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.3.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.3.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.3.0", features = ["vulkan"] }
 ```
 
 ---

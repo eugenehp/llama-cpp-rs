@@ -11,7 +11,8 @@ use std::num::NonZeroU32;
 pub enum LlamaContextType {
     /// Default context (standard inference).
     Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT as u32,
-    /// Multi-token-prediction draft context, used as the draft side of speculative decoding.
+    /// Multi-token-prediction draft context, used as the draft side of
+    /// speculative decoding. Pair with [`crate::mtp::MtpSession`].
     Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP as u32,
 }
 
@@ -239,8 +240,8 @@ impl LlamaContextParams {
         self.context_params.n_ubatch
     }
 
-    /// Set the context type (e.g. [`LlamaContextType::Mtp`] to load this context as a
-    /// multi-token-prediction draft head used by upstream's `draft-mtp` speculative decoder).
+    /// Set the context type (e.g. [`LlamaContextType::Mtp`] for the draft context in
+    /// [`crate::mtp::MtpSession`]).
     #[must_use]
     pub fn with_ctx_type(mut self, ctx_type: LlamaContextType) -> Self {
         self.context_params.ctx_type = ctx_type.into();
@@ -253,7 +254,10 @@ impl LlamaContextParams {
         self.context_params.ctx_type.into()
     }
 
-    /// Set the number of recurrent-state snapshots per sequence used for MTP rollback.
+    /// Set the number of recurrent-state snapshots per sequence (MTP rollback).
+    ///
+    /// Must be `>=` [`MtpSessionConfig::n_draft_max`](crate::mtp::MtpSessionConfig::n_draft_max)
+    /// on the draft context. See [`crate::mtp`].
     #[must_use]
     pub fn with_n_rs_seq(mut self, n_rs_seq: u32) -> Self {
         self.context_params.n_rs_seq = n_rs_seq;
