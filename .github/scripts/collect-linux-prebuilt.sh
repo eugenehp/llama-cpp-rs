@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Collect llama/ggml prebuilt artifacts on Linux CI.
-# Static .a files live under target/**/llama-cmake-cache/*/lib/ after install.
+# Static .a files live under target/llama-cmake-cache/*/lib/ after install.
 # Dynamic builds emit versioned sonames (libllama.so.0.0.N) and symlinks
-# (libllama.so -> libllama.so.0); plain `find -type f -name 'lib*.so'` misses both.
+# (libllama.so -> libllama.so.0) under the cmake install prefix. Cargo also
+# hard-links top-level .so names into target/**/deps/; when the soname version
+# changes those deps entries can be stale broken symlinks — skip them and
+# collect from the cmake lib tree instead.
 
 set -euo pipefail
 
@@ -19,6 +22,16 @@ is_llama_lib_name() {
   esac
 }
 
+copy_if_new() {
+  local src="$1"
+  local base="$2"
+  local dest="$ROOT/lib/$base"
+  if [[ -e "$dest" ]]; then
+    return 0
+  fi
+  cp -a "$src" "$dest"
+}
+
 collect_static() {
   local search_root="$1"
   [[ -d "$search_root" ]] || return 0
@@ -27,7 +40,7 @@ collect_static() {
     local base
     base="$(basename "$f")"
     if is_llama_lib_name "$base" && [[ "$base" == *.a ]]; then
-      cp -f "$f" "$ROOT/lib/$base"
+      copy_if_new "$f" "$base"
     fi
   done < <(find "$search_root" -type f -name 'lib*.a' -print0 2>/dev/null)
 }
@@ -45,7 +58,11 @@ collect_dynamic() {
     fi
     case "$base" in
       *.so|*.so.*)
-        cp -f "$f" "$ROOT/lib/$base"
+        # Skip broken symlinks left in target/**/deps from prior builds.
+        if [[ ! -e "$f" ]]; then
+          continue
+        fi
+        copy_if_new "$f" "$base"
         ;;
     esac
   done < <(
@@ -57,24 +74,27 @@ collect_dynamic() {
 if [[ "$LIBRARY_TYPE" == "static" ]]; then
   collect_static target
 elif [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+  # Prefer cmake install prefix (authoritative for soname chains).
+  while IFS= read -r -d '' libdir; do
+    collect_dynamic "$libdir"
+  done < <(find target/llama-cmake-cache -type d \( -name lib -o -name lib64 \) -print0 2>/dev/null)
+  # Fallback: cargo target tree (release/deps hard links).
   collect_dynamic target
 else
   echo "::error::Unknown library_type=$LIBRARY_TYPE (expected static or dynamic)"
   exit 1
 fi
 
-COUNT="$(find "$ROOT/lib" -type f 2>/dev/null | wc -l | tr -d ' ')"
-# Symlinks copied into ROOT/lib count as files only when they are regular files;
-# also count symlinks we intentionally ship.
-if [[ "$COUNT" -lt 1 ]]; then
-  COUNT="$(find "$ROOT/lib" \( -type f -o -type l \) 2>/dev/null | wc -l | tr -d ' ')"
-fi
+COUNT="$(find "$ROOT/lib" \( -type f -o -type l \) 2>/dev/null | wc -l | tr -d ' ')"
 
 echo "Collected $COUNT file(s) for library_type=$LIBRARY_TYPE"
 ls -la "$ROOT/lib/" 2>/dev/null || true
 
 if [[ "$COUNT" -lt 1 ]]; then
   echo "::error::No libraries collected (library_type=$LIBRARY_TYPE)"
+  echo "::group::Debug: cmake install lib dirs"
+  find target/llama-cmake-cache -type d \( -name lib -o -name lib64 \) 2>/dev/null | head -20 || true
+  echo "::endgroup::"
   echo "::group::Debug: sample shared libs under target"
   find target \( -type f -o -type l \) \
     \( -name 'libllama*.so' -o -name 'libllama*.so.*' -o -name 'libggml*.so*' \) \
