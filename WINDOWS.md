@@ -69,13 +69,23 @@ cargo build
 cargo build --features vulkan
 ```
 
-## Common Vulkan error
+## Common Vulkan errors
 
 If you see:
 
 - `Could NOT find Vulkan (missing: Vulkan_LIBRARY Vulkan_INCLUDE_DIR glslc)`
 
 then the Vulkan SDK is not installed correctly. The build script tries to find it automatically, but if that fails, ensure `VULKAN_SDK` is set and `glslc` is on your `PATH`.
+
+If CMake fails with `Could NOT find SPIRV-Headers`, the LunarG SDK install is incomplete or stale. Reinstall the SDK, then set (PowerShell):
+
+```powershell
+$env:VULKAN_SDK = 'C:\VulkanSDK\<version>'
+$env:CMAKE_PREFIX_PATH = $env:VULKAN_SDK
+$env:SPIRV-Headers_DIR = Join-Path $env:VULKAN_SDK 'SPIRV-Headers'
+```
+
+The build script passes `SPIRV-Headers_DIR` and `CMAKE_PREFIX_PATH` to CMake automatically when it detects the SDK; the variables above are only needed when overriding detection.
 
 ## Prebuilt release artifacts (Vulkan)
 

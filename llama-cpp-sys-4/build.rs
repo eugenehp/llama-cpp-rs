@@ -747,6 +747,36 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Compile the MTP C++ shim (stable C linkage for `mtp_session_*`).
+///
+/// Required on both the CMake and prebuilt paths: prebuilt tarballs ship
+/// llama/ggml/common libs only; `mtp_shim` is always built from source here
+/// against the vendored llama.cpp headers so it matches the crate revision.
+fn compile_mtp_shim(manifest_dir: &Path, llama_dst: &Path) {
+    let shim_dir = manifest_dir.join("mtp_shim");
+    let mtp_shim_src = shim_dir.join("mtp_shim.cpp");
+    if !mtp_shim_src.exists() {
+        return;
+    }
+
+    cc::Build::new()
+        .cpp(true)
+        .std("c++17")
+        .file(&mtp_shim_src)
+        .include(&shim_dir)
+        .include(llama_dst.join("include"))
+        .include(llama_dst.join("ggml/include"))
+        .include(llama_dst.join("src"))
+        .include(llama_dst.join("common"))
+        .warnings(false)
+        .compile("mtp_shim");
+    println!("cargo:rerun-if-changed={}", mtp_shim_src.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        shim_dir.join("mtp_shim.h").display()
+    );
+}
+
 fn apple_vulkan_available() -> bool {
     let has_glslc = command_exists("glslc");
 
@@ -1488,6 +1518,7 @@ fn main() {
                 }
             }
 
+            compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
             return;
         }
         panic!(
@@ -1915,6 +1946,18 @@ fn main() {
             if let Some(glslc) = find_glslc(&vulkan_path) {
                 config.define("Vulkan_GLSLC_EXECUTABLE", glslc.to_str().unwrap());
             }
+            // ggml-vulkan uses find_package(SPIRV-Headers CONFIG). The LunarG
+            // SDK ships SPIRV-HeadersConfig.cmake under SPIRV-Headers/; point
+            // CMake at it explicitly (same as macOS ci/run.sh) so source builds
+            // work without a system spirv-headers package.
+            let spirv_headers_dir = vulkan_path.join("SPIRV-Headers");
+            if spirv_headers_dir.join("SPIRV-HeadersConfig.cmake").exists() {
+                config.define(
+                    "SPIRV-Headers_DIR",
+                    spirv_headers_dir.to_str().unwrap(),
+                );
+            }
+            config.define("CMAKE_PREFIX_PATH", vulkan_path.to_str().unwrap());
         }
 
         if target.contains("linux") {
@@ -2178,30 +2221,7 @@ fn main() {
         }
     }
 
-    // ── MTP shim ─────────────────────────────────────────────────────────────
-    // Compile our C++ shim that exposes upstream's common_speculative_* MTP
-    // path with stable C linkage. Build as a static archive that links against
-    // the cmake-built llama-common (already linked above).
-    let shim_dir = Path::new(&manifest_dir).join("mtp_shim");
-    let mtp_shim_src = shim_dir.join("mtp_shim.cpp");
-    if mtp_shim_src.exists() {
-        cc::Build::new()
-            .cpp(true)
-            .std("c++17")
-            .file(&mtp_shim_src)
-            .include(&shim_dir)
-            .include(llama_dst.join("include"))
-            .include(llama_dst.join("ggml/include"))
-            .include(llama_dst.join("src"))
-            .include(llama_dst.join("common"))
-            .warnings(false)
-            .compile("mtp_shim");
-        println!("cargo:rerun-if-changed={}", mtp_shim_src.display());
-        println!(
-            "cargo:rerun-if-changed={}",
-            shim_dir.join("mtp_shim.h").display()
-        );
-    }
+    compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
     // This can happen even without the "openmp" feature because cmake's FindOpenMP

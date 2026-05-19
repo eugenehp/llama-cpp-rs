@@ -120,7 +120,7 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
+          shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
           cache-targets: false
           cache-on-failure: false
 
@@ -239,7 +239,7 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
+          shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
           cache-targets: false
           cache-on-failure: false
 
@@ -324,7 +324,7 @@ jobs:
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
-          shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v3
+          shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
           cache-targets: false
           cache-on-failure: false
 

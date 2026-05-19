@@ -1,6 +1,6 @@
 [package]
 name = "embeddings"
-version = "0.2.60"
+version = "0.2.61"
 edition = "2021"
 description = "Example: embeddings for llama-cpp-4"
 license = "MIT OR Apache-2.0"
