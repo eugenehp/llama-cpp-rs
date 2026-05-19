@@ -1,29 +1,41 @@
 name: Setup Vulkan SDK (Windows)
-description: Install LunarG Vulkan SDK via Chocolatey and export VULKAN_SDK for CMake/Cargo
+description: Install LunarG Vulkan SDK and export VULKAN_SDK for CMake/Cargo
+
+inputs:
+  version:
+    description: LunarG SDK version (e.g. 1.4.313.2)
+    required: false
+    default: "1.4.313.2"
 
 runs:
   using: composite
   steps:
     - name: Install Vulkan SDK
       shell: pwsh
+      env:
+        VULKAN_VERSION: ${{ inputs.version }}
       run: |
         $ErrorActionPreference = 'Stop'
-        choco install vulkan-sdk --yes --no-progress
-        $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory |
-          Sort-Object Name -Descending |
-          Select-Object -First 1
-        if (-not $sdk) {
-          throw 'Vulkan SDK not found under C:\VulkanSDK after installation'
+        $installer = Join-Path $env:RUNNER_TEMP 'VulkanSDK-Installer.exe'
+        $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+        Write-Host "Downloading $url"
+        curl.exe -fsSL --retry 5 --retry-delay 5 -o $installer $url
+        & $installer --accept-licenses --default-answer --confirm-command install
+        $sdk = "C:\VulkanSDK\$env:VULKAN_VERSION"
+        if (-not (Test-Path $sdk)) {
+          throw "Vulkan SDK not found at $sdk after installation"
         }
-        $bin = Join-Path $sdk.FullName 'Bin'
-        $spirvConfig = Join-Path $sdk.FullName 'SPIRV-Headers\SPIRV-HeadersConfig.cmake'
-        if (-not (Test-Path $spirvConfig)) {
-          throw "SPIRV-Headers CMake package not found at $spirvConfig (SDK may be incomplete)"
-        }
+        $bin = Join-Path $sdk 'Bin'
         if (-not (Test-Path (Join-Path $bin 'glslc.exe'))) {
           throw "glslc.exe not found in $bin"
         }
-        "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        $spirvConfig = Join-Path $sdk 'SPIRV-Headers\SPIRV-HeadersConfig.cmake'
+        if (Test-Path $spirvConfig) {
+          Write-Host "SPIRV-Headers CMake package: $spirvConfig"
+        } else {
+          Write-Host "::warning::SPIRV-HeadersConfig.cmake not at $spirvConfig; relying on VULKAN_SDK CMAKE_PREFIX_PATH"
+        }
+        "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        Write-Host "VULKAN_SDK=$($sdk.FullName)"
+        Write-Host "VULKAN_SDK=$sdk"
         & (Join-Path $bin 'glslc.exe') --version
