@@ -272,35 +272,8 @@ jobs:
         run: |
           set -euo pipefail
           ROOT="$RUNNER_TEMP/prebuilt"
-          mkdir -p "$ROOT/lib" "$ROOT/lib64" "$ROOT/bin"
           LIBRARY_TYPE="${{ matrix.library_type }}"
-
-          while IFS= read -r -d '' f; do
-            base="$(basename "$f")"
-            case "$base" in
-              llama*|ggml*|common*|mtmd*)
-                case "$base" in
-                  *.lib)
-                    if [[ "$LIBRARY_TYPE" == "static" ]]; then
-                      cp -f "$f" "$ROOT/lib/$base"
-                    fi
-                    ;;
-                  *.dll)
-                    if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
-                      cp -f "$f" "$ROOT/bin/$base"
-                    fi
-                    ;;
-                esac
-                ;;
-            esac
-          done < <(find target -type f \( -name '*.lib' -o -name '*.dll' \) -print0)
-
-          COUNT="$(find "$ROOT" -type f ! -name 'metadata.json' 2>/dev/null | wc -l | tr -d ' ')"
-          if [[ "$COUNT" -lt 1 ]]; then
-            echo "::error::No libraries collected for ${ASSET_NAME}"
-            find target -type f \( -name '*.lib' -o -name '*.dll' \) | head -40 || true
-            exit 1
-          fi
+          bash .github/scripts/collect-windows-prebuilt.sh "$ROOT" "$LIBRARY_TYPE"
 
           cat > "$ROOT/metadata.json" <<EOF
           {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
