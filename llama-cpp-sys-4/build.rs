@@ -1010,6 +1010,33 @@ fn find_vulkan_sdk_windows() -> Option<PathBuf> {
     None
 }
 
+/// Find the GCC library directory containing libgomp.a.
+/// Tries `gcc --print-file-name=libgomp.a` first, then common versioned paths.
+fn find_libgomp_lib_dir() -> Option<String> {
+    // Ask GCC directly where it keeps its static libs.
+    if let Ok(out) = Command::new("gcc")
+        .arg("--print-file-name=libgomp.a")
+        .output()
+    {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                if parent != std::path::Path::new("") {
+                    return Some(parent.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    // Fallback: probe common Debian/Ubuntu GCC paths.
+    for version in ["16","15","14", "13", "12", "11"] {
+        let p = format!("/usr/lib/gcc/x86_64-linux-gnu/{}", version);
+        if std::path::Path::new(&p).join("libgomp.a").exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 #[cfg(feature = "prebuilt")]
 /// Setup prebuilt artifacts by automatically setting LLAMA_PREBUILT_DIR
 /// if the prebuilt feature is enabled
@@ -1088,6 +1115,9 @@ fn main() {
     let profile = env::var("LLAMA_LIB_PROFILE").unwrap_or("Release".to_string());
     let static_crt = env::var("LLAMA_STATIC_CRT")
         .map(|v| v == "1")
+        .unwrap_or(false);
+    let crt_static = env::var("CARGO_CFG_TARGET_FEATURE")
+        .map(|f| f.contains("crt-static"))
         .unwrap_or(false);
 
     // ── Windows MAX_PATH workaround ──────────────────────────────────────────
@@ -2236,7 +2266,15 @@ fn main() {
     if (cfg!(feature = "openmp") || openmp_enabled_in_cmake)
         && (target.contains("gnu") || target.contains("musl"))
     {
-        println!("cargo:rustc-link-lib=gomp");
+        if crt_static && target.contains("linux") {
+            // Add GCC lib dir so the linker can find libgomp.a
+            if let Some(gcc_lib) = find_libgomp_lib_dir() {
+                println!("cargo:rustc-link-search=native={}", gcc_lib);
+            }
+            println!("cargo:rustc-link-lib=static=gomp");
+        } else {
+            println!("cargo:rustc-link-lib=gomp");
+        }
     }
 
     // Removed: Rust already links the appropriate CRT. Explicitly linking
@@ -2258,7 +2296,11 @@ fn main() {
 
     // Linux libstdc++
     if target.contains("linux") {
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        if crt_static {
+            println!("cargo:rustc-link-lib=static=stdc++");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
     }
 
     // Windows MinGW (GCC-based, not MSVC): link the C++ and threading runtimes.
