@@ -1028,7 +1028,7 @@ fn find_libgomp_lib_dir() -> Option<String> {
         }
     }
     // Fallback: probe common Debian/Ubuntu GCC paths.
-    for version in ["16","15","14", "13", "12", "11"] {
+    for version in ["16", "15", "14", "13", "12", "11"] {
         let p = format!("/usr/lib/gcc/x86_64-linux-gnu/{}", version);
         if std::path::Path::new(&p).join("libgomp.a").exists() {
             return Some(p);
@@ -1654,6 +1654,9 @@ fn main() {
     config.define("LLAMA_BUILD_TESTS", "OFF");
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
+    // The OUT_DIR copy is a top-level CMake project (LLAMA_STANDALONE=ON), so
+    // LLAMA_BUILD_APP defaults ON upstream; we only need the library.
+    config.define("LLAMA_BUILD_APP", "OFF");
 
     // Disable expensive CMake tests and checks for faster builds
     config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");
@@ -1681,6 +1684,7 @@ fn main() {
         config.define("LLAMA_BUILD_COMMON", "ON");
     } else {
         config.define("LLAMA_BUILD_TOOLS", "OFF");
+        config.define("LLAMA_BUILD_COMMON", "OFF");
     }
 
     config.define(
@@ -1983,10 +1987,7 @@ fn main() {
             // work without a system spirv-headers package.
             let spirv_headers_dir = vulkan_path.join("SPIRV-Headers");
             if spirv_headers_dir.join("SPIRV-HeadersConfig.cmake").exists() {
-                config.define(
-                    "SPIRV-Headers_DIR",
-                    spirv_headers_dir.to_str().unwrap(),
-                );
+                config.define("SPIRV-Headers_DIR", spirv_headers_dir.to_str().unwrap());
             }
             config.define("CMAKE_PREFIX_PATH", vulkan_path.to_str().unwrap());
         }

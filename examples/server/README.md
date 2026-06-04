@@ -1,16 +1,24 @@
 # openai-server
 
-An OpenAI-compatible HTTP server backed by `llama-cpp-4`.
+An OpenAI-compatible HTTP server backed by `llama-cpp-4`. For a quick overview
+see the [root README server section](../../README.md#openai-compatible-server).
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET`  | `/health` | Liveness check — `{"status":"ok"}` |
+| `GET`  | `/health`, `/v1/health` | Liveness check — `{"status":"ok"}` |
 | `GET`  | `/v1/models` | List loaded model with context/embedding dimensions |
-| `POST` | `/v1/chat/completions` | Chat completion · streaming · tool calling |
-| `POST` | `/v1/completions` | Raw text completion · streaming |
-| `POST` | `/v1/embeddings` | Dense embedding vectors (L2-normalised) |
+| `POST` | `/v1/chat/completions`, `/chat/completions` | Chat completion · streaming · tool calling |
+| `POST` | `/v1/completions`, `/completions` | Raw text completion · streaming |
+| `POST` | `/v1/embeddings`, `/embeddings` | Dense embedding vectors (L2-normalised) |
+| `POST` | `/tokenize` | Tokenize text (llama.cpp-compatible) |
+| `POST` | `/detokenize` | Detokenize token ids |
+| `POST` | `/v1/files` | Upload image/audio for multimodal (`--mmproj`) |
+| `GET`  | `/v1/files` | List uploaded files |
+| `GET`  | `/v1/files/{id}` | File metadata |
+| `GET`  | `/v1/files/{id}/content` | Download file bytes |
+| `DELETE` | `/v1/files/{id}` | Delete uploaded file |
 
 ---
 
@@ -67,8 +75,67 @@ In non-interactive mode (piped / CI) the best quant is auto-selected:
 --port <PORT>            Port [default: 8080]
 --n-gpu-layers <N>       GPU layers to offload (0 = CPU only) [default: 0]
 -c, --ctx-size <N>       Context length override
---api-key <KEY>          Require Authorization: Bearer <KEY> on all requests
+--api-key <KEY>          Require Authorization: Bearer <KEY> on protected routes
 --parallel <N>           Max concurrent inferences [default: 1]
+--print-path             Resolve model path and exit (for scripts/CI)
+--mmproj <FILE>          Multimodal projector GGUF (requires `--features mtmd`)
+--mmproj-n-threads <N>   Encoder thread count [default: 4]
+--no-mmproj-gpu          Keep mmproj on CPU
+```
+
+---
+
+## Authentication
+
+When `--api-key` is set, send `Authorization: Bearer <key>` on all routes **except**
+`GET /health` and `GET /v1/health` (always public).
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer mysecret" \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"hi"}]}'
+```
+
+---
+
+## Multimodal (`mtmd` feature)
+
+Build and run with `--features mtmd`. If `--mmproj` is omitted, the server scans
+the model directory for `mmproj-*.gguf` (same directory as the main GGUF).
+
+1. Upload an image: `POST /v1/files` (`multipart/form-data`, field `file`).
+2. Chat with an `image_url` or file reference in `messages` (see `tools.rs` normaliser).
+
+Requires a vision-capable model + matching mmproj. Without `--mmproj`, image parts
+in requests are ignored (warning logged).
+
+---
+
+## Upstream compatibility
+
+Route names and `/tokenize` / `/detokenize` bodies follow
+[llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server).
+This crate does **not** implement upstream-only endpoints such as
+`/v1/responses`, `/v1/messages`, `/rerank`, `/slots`, or `/props` — use
+`llama-server` from the vendored submodule for those.
+
+---
+
+## Testing
+
+```bash
+# Unit tests (no model)
+cargo test -p openai-server
+
+# Integration tests (spawns server; needs a GGUF)
+LLAMA_TEST_MODEL=/path/to/model.gguf \
+  cargo test -p openai-server --test integration -- --nocapture
+
+# Or download via the server's HF helper:
+LLAMA_TEST_HF_REPO=bartowski/Llama-3.2-1B-Instruct-GGUF \
+  LLAMA_TEST_HF_QUANT=Q4_K_M \
+  cargo test -p openai-server --test integration -- --nocapture
 ```
 
 ---
@@ -216,6 +283,24 @@ Returns L2-normalised float32 vectors. Batch inputs are processed sequentially.
 
 ---
 
+## Tokenize / detokenize
+
+Compatible with [llama.cpp server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) helpers:
+
+```bash
+curl http://127.0.0.1:8080/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{"content": "Hello world", "add_special": false}'
+
+curl http://127.0.0.1:8080/detokenize \
+  -H "Content-Type: application/json" \
+  -d '{"tokens": [1, 2, 3]}'
+```
+
+Optional: `"with_pieces": true` on `/tokenize` returns `[{"id": N, "piece": "..."}, ...]`.
+
+---
+
 ## Supported request fields
 
 ### `/v1/chat/completions` and `/v1/completions`
@@ -223,7 +308,7 @@ Returns L2-normalised float32 vectors. Batch inputs are processed sequentially.
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `messages` / `prompt` | — | — | Required |
-| `max_tokens` | integer | 1024 | |
+| `max_tokens` | integer | 1024 | Alias: `max_completion_tokens` |
 | `temperature` | float | 1.0 | 0 = greedy |
 | `top_p` | float | 1.0 | Nucleus sampling |
 | `top_k` | integer | 0 | 0 = disabled |
@@ -241,3 +326,17 @@ Returns L2-normalised float32 vectors. Batch inputs are processed sequentially.
 |-------|------|-------|
 | `input` | string \| string[] | Required |
 | `model` | string | Ignored (one model loaded) |
+
+### `/tokenize`
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `content` | string | — | Required (empty → `{"tokens":[]}`) |
+| `add_special` | bool | `false` | Maps to BOS handling in `str_to_token` |
+| `with_pieces` | bool | `false` | Return `[{"id", "piece"}, ...]` |
+
+### `/detokenize`
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `tokens` | integer[] | Token ids to decode |

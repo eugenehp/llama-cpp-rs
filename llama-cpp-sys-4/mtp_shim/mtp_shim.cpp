@@ -71,7 +71,7 @@ extern "C" bool mtp_session_need_embd_pre_norm(const mtp_session * s) {
     if (s == nullptr) {
         return false;
     }
-    return common_speculative_need_embd_pre_norm(s->spec.get());
+    return common_speculative_need_embd_nextn(s->spec.get());
 }
 
 extern "C" void mtp_session_begin(

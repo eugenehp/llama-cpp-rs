@@ -11,9 +11,10 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** 64b38b561 (May 2026) — includes
-[TurboQuant (PR #21038)](#turboQuant--attention-rotation) and
-[MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673).
+**llama.cpp version:** `94a220cd6` (Jun 2026) — includes
+[TurboQuant (PR #21038)](#turboQuant--attention-rotation),
+[MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673), and
+upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ---
 
@@ -25,7 +26,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | `chat` | [`examples/chat/`](examples/chat/) | Interactive multi-turn chat REPL |
 | `embeddings` | [`examples/embeddings/`](examples/embeddings/) | Batch embedding with cosine similarity |
 | `split-model-example` | [`examples/split_model/`](examples/split_model/) | Load sharded / split GGUF files |
-| `openai-server` | [`examples/server/`](examples/server/) | OpenAI-compatible HTTP server with streaming and tool calling |
+| `openai-server` | [`examples/server/`](examples/server/) | OpenAI-compatible HTTP server — chat, completions, embeddings, tools, files (mtmd), tokenize |
 | `mtmd` | [`examples/mtmd/`](examples/mtmd/) | Multimodal (vision / audio) inference (requires `--features mtmd`) |
 | `quantize` | [`examples/quantize/`](examples/quantize/) | Quantize a GGUF model with full typed API |
 | `turbo-quant` | [`examples/turbo-quant/`](examples/turbo-quant/) | TurboQuant demo — compare attn rotation on/off |
@@ -55,6 +56,21 @@ cargo run -p chat -- \
 cargo run -p openai-server -- \
     hf-model bartowski/Llama-3.2-3B-Instruct-GGUF Llama-3.2-3B-Instruct-Q4_K_M.gguf
 ```
+
+Full REST API reference: [`examples/server/README.md`](examples/server/README.md).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health`, `/v1/health` | Liveness (no auth) |
+| GET | `/v1/models` | Loaded model metadata |
+| POST | `/v1/chat/completions`, `/chat/completions` | Chat · streaming · tools |
+| POST | `/v1/completions`, `/completions` | Raw completion · streaming |
+| POST | `/v1/embeddings`, `/embeddings` | L2-normalised embeddings |
+| POST | `/tokenize`, `/detokenize` | [llama.cpp-compatible](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) token helpers |
+| POST/GET/DELETE | `/v1/files/...` | File store for multimodal (`--features mtmd`, `--mmproj`) |
+
+Legacy paths without `/v1` mirror upstream [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server).
+Not implemented here (use upstream server instead): `/v1/responses`, `/v1/messages`, `/rerank`, `/slots`, `/props`.
 
 ### Using prebuilt native libraries (skip CMake compile)
 
@@ -133,7 +149,7 @@ When fully implemented, the prebuilt feature will automatically:
 - `blas`   → CPU acceleration (Linux/macOS/Windows)
 
 ```bash
-# Chat completion
+# Chat completion (max_completion_tokens is also accepted)
 curl http://127.0.0.1:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Hello!"}], "max_tokens":128}'
@@ -147,7 +163,14 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 curl http://127.0.0.1:8080/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"input": ["Hello world", "Bonjour le monde"]}'
+
+# Tokenize / detokenize (llama.cpp server-compatible)
+curl http://127.0.0.1:8080/tokenize \
+  -H "Content-Type: application/json" \
+  -d '{"content":"Hello","add_special":false}'
 ```
+
+With `--api-key`, pass `Authorization: Bearer <key>` on every route except `/health` and `/v1/health`.
 
 ### Text generation (library)
 
@@ -386,11 +409,13 @@ let config = MtpSessionConfig::new(1, n_draft_max)
     .with_n_min(0);
 let mut session = MtpSession::new_with_config(&target, &draft, config)?;
 
-assert!(session.need_embd_pre_norm()); // MTP needs pre-norm hidden states
-assert!(!session.need_embd());         // post-norm embeddings not used
+assert!(session.need_embd_pre_norm()); // MTP: next-n embeddings (upstream name)
+assert!(!session.need_embd());         // post-norm / seq embeddings not used
 ```
 
-Upstream configures pre-norm extraction on both contexts during session init;
+The Rust API still uses `*_pre_norm` names; upstream renamed the C API to
+`llama_set_embeddings_nextn` / `common_speculative_need_embd_nextn`.
+Upstream configures next-n extraction on both contexts during session init;
 you normally do **not** need to call
 [`LlamaContext::set_embeddings_pre_norm`](llama-cpp-4/src/context.rs) yourself.
 
@@ -724,6 +749,11 @@ cargo build          # build.rs regenerates bindings automatically
 
 ### Via the OpenAI-compatible server
 
+Build with `--features mtmd`. The server auto-detects `mmproj-*.gguf` next to the
+model, or accept `--mmproj PATH`. Upload images via `POST /v1/files`, then reference
+them in chat messages (`image_url` / `image_file` parts — see
+[`examples/server/README.md`](examples/server/README.md)).
+
 ```shell
 cargo run -p openai-server --features mtmd --release -- \
     hf-model unsloth/Qwen3.5-27B-GGUF Qwen3.5-27B-Q4_0
@@ -761,7 +791,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.3.0},
+  version   = {0.3.1},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

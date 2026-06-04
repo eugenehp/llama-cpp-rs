@@ -446,9 +446,9 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
-    /// Toggle extraction of pre-norm embeddings — the hidden state right
-    /// before the final output norm, used by MTP draft heads (upstream
-    /// llama.cpp PR #23198).
+    /// Toggle extraction of next-n embeddings (Rust name: pre-norm) — hidden
+    /// states used by MTP draft heads. Upstream C API: `llama_set_embeddings_nextn`
+    /// (llama.cpp PR #23198 and later renames).
     ///
     /// If `masked` is `true`, pre-norm rows are extracted only for tokens
     /// whose `batch.logits[i]` is non-zero. If `masked` is `false`, rows are
@@ -461,7 +461,7 @@ impl<'model> LlamaContext<'model> {
     /// speculative setups.
     pub fn set_embeddings_pre_norm(&mut self, value: bool, masked: bool) {
         unsafe {
-            llama_cpp_sys_4::llama_set_embeddings_pre_norm(self.context.as_ptr(), value, masked);
+            llama_cpp_sys_4::llama_set_embeddings_nextn(self.context.as_ptr(), value, masked);
         }
     }
 
@@ -479,7 +479,7 @@ impl<'model> LlamaContext<'model> {
         let n_embd =
             usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
         unsafe {
-            let p = llama_cpp_sys_4::llama_get_embeddings_pre_norm(self.context.as_ptr());
+            let p = llama_cpp_sys_4::llama_get_embeddings_nextn(self.context.as_ptr());
             if p.is_null() {
                 None
             } else {
@@ -496,7 +496,7 @@ impl<'model> LlamaContext<'model> {
         let n_embd =
             usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
         unsafe {
-            let p = llama_cpp_sys_4::llama_get_embeddings_pre_norm_ith(self.context.as_ptr(), i);
+            let p = llama_cpp_sys_4::llama_get_embeddings_nextn_ith(self.context.as_ptr(), i);
             if p.is_null() {
                 None
             } else {

@@ -259,6 +259,14 @@ fn health_check() {
     eprintln!("[✓] GET /health");
 }
 
+#[test]
+fn health_check_v1() {
+    let Some(base) = server_url() else { return };
+    let body = get_json(&base, "/v1/health");
+    assert_eq!(body["status"], "ok");
+    eprintln!("[✓] GET /v1/health");
+}
+
 // ---------------------------------------------------------------------------
 // GET /v1/models
 // ---------------------------------------------------------------------------
@@ -884,4 +892,42 @@ fn invalid_temperature_returns_400() {
         .expect("request failed");
     assert_eq!(resp.status().as_u16(), 400);
     eprintln!("[✓] negative temperature → 400");
+}
+
+// ---------------------------------------------------------------------------
+// POST /tokenize  +  POST /detokenize
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tokenize_detokenize_roundtrip() {
+    let Some(base) = server_url() else { return };
+    let text = "Hello, tokenizer!";
+    let tok = post_json(
+        &base,
+        "/tokenize",
+        json!({"content": text, "add_special": false}),
+        200,
+    );
+    let tokens = tok["tokens"].as_array().expect("tokens array");
+    assert!(!tokens.is_empty());
+    let detok = post_json(&base, "/detokenize", json!({"tokens": tokens}), 200);
+    assert_eq!(detok["content"].as_str().unwrap_or(""), text);
+    eprintln!("[✓] POST /tokenize + /detokenize roundtrip");
+}
+
+#[test]
+fn max_completion_tokens_alias() {
+    let Some(base) = server_url() else { return };
+    let body = post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"Say hi"}],
+            "max_completion_tokens": 4,
+            "temperature": 0
+        }),
+        200,
+    );
+    assert!(body["usage"]["completion_tokens"].as_u64().unwrap_or(0) <= 4);
+    eprintln!("[✓] max_completion_tokens accepted");
 }

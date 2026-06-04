@@ -72,12 +72,12 @@
 //!
 //! | Method | MTP typical value | Meaning |
 //! |---|---|---|
-//! | [`MtpSession::need_embd_pre_norm`] | `true` | Pre-norm hidden states required |
-//! | [`MtpSession::need_embd`] | `false` | Post-norm embeddings not used |
+//! | [`MtpSession::need_embd_pre_norm`] | `true` | Next-n hidden states (upstream name) |
+//! | [`MtpSession::need_embd`] | `false` | Post-norm / seq embeddings not used |
 //!
-//! Session construction configures pre-norm extraction on both contexts
-//! automatically; manual [`LlamaContext::set_embeddings_pre_norm`] is rarely
-//! needed.
+//! Rust keeps `*_pre_norm` names; upstream C API uses `*_nextn` since the Jun 2026
+//! llama.cpp bump. Session init configures extraction on both contexts automatically;
+//! manual [`LlamaContext::set_embeddings_pre_norm`] is rarely needed.
 
 use std::ptr::NonNull;
 

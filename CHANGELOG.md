@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+## [0.3.1] - 2026-06-04
+
+### Changed
+- **llama.cpp**: vendored submodule `b28a2f372` → `94a220cd6` (master, 2026-06-04;
+  ~250 commits). Notable upstream: unified Gemma 4 FPE fix
+  ([#24088](https://github.com/ggml-org/llama.cpp/pull/24088)), `LLAMA_BUILD_APP`
+  unified binary, embedding API rename to **next-n**
+  (`llama_set_embeddings_nextn`, `common_speculative_need_embd_nextn`).
+- **Bindings** (`llama-cpp-4`): `LlamaContext` embedding getters/setters call upstream
+  `llama_*_nextn` FFI; Rust method names stay `*_pre_norm` for compatibility.
+- **`llama-cpp-sys-4` build** (`build.rs`): set `LLAMA_BUILD_APP=OFF` always; set
+  `LLAMA_BUILD_COMMON=OFF` when the `mtmd` feature is disabled so the OUT_DIR CMake
+  copy builds library targets only (fixes build failure after the submodule bump).
+- **`mtp_shim`**: `mtp_session_need_embd_pre_norm` delegates to
+  `common_speculative_need_embd_nextn`.
+
+### Added
+- **`openai-server`** ([`examples/server/README.md`](examples/server/README.md)):
+  - `GET /v1/health` (alias of `/health`, both public when `--api-key` is set)
+  - Legacy llama.cpp paths: `/chat/completions`, `/completions`, `/embeddings`
+  - `POST /tokenize`, `POST /detokenize` (same JSON shape as upstream server)
+  - `max_completion_tokens` accepted as an alias for `max_tokens` on chat/completion routes
+  - Integration tests: `/v1/health`, tokenize/detokenize roundtrip, `max_completion_tokens`
+- **Docs**: server endpoint tables and MTP next-n naming notes in root `README.md`,
+  `llama-cpp-4/README.md`, `llama-cpp-sys-4/README.md`, and rustdoc on `mtp` / `context`.
+
+### Fixed
+- **`openai-server`**: compile against regenerated bindings after the llama.cpp bump
+  (`llama_get_embeddings_nextn` / related symbols).
+
 ## [0.3.0] - 2026-05-19
 
 ### Changed

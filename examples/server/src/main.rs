@@ -9,6 +9,12 @@
 //! | POST   | `/v1/chat/completions`  | Chat (streaming + non-streaming) |
 //! | POST   | `/v1/completions`       | Raw text completion (streaming)  |
 //! | POST   | `/v1/embeddings`        | Dense embeddings                 |
+//! | POST   | `/v1/files`             | Upload files (multimodal, mtmd)  |
+//! | POST   | `/tokenize`             | Tokenize text (llama.cpp compat) |
+//! | POST   | `/detokenize`           | Detokenize token ids             |
+//!
+//! Legacy paths without `/v1` (`/completions`, `/embeddings`, `/chat/completions`)
+//! are also registered for llama.cpp server compatibility.
 //!
 //! # Usage
 //!
@@ -56,6 +62,7 @@ use llama_cpp_4::{
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel, Special},
     sampling::LlamaSampler,
+    token::LlamaToken,
 };
 use serde_json::{json, Value};
 use std::{
@@ -594,6 +601,25 @@ fn check_auth(req: &HttpRequest, state: &AppState) -> Option<HttpError> {
 // Request parsing
 // ---------------------------------------------------------------------------
 
+/// OpenAI uses `max_tokens`; newer clients may send `max_completion_tokens`.
+fn parse_max_tokens(req: &Value) -> Result<u32, HttpError> {
+    let raw = req
+        .get("max_completion_tokens")
+        .or_else(|| req.get("max_tokens"));
+    match raw {
+        None | Some(Value::Null) => Ok(1024),
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| bad_request("'max_tokens' must be a positive integer"))?;
+            if n == 0 {
+                return Err(bad_request("'max_tokens' must be > 0"));
+            }
+            u32::try_from(n).map_err(|_| bad_request("'max_tokens' is too large"))
+        }
+    }
+}
+
 fn parse_stop_sequences(req: &Value) -> Result<Vec<String>, HttpError> {
     match req.get("stop") {
         None | Some(Value::Null) => Ok(Vec::new()),
@@ -661,13 +687,7 @@ impl InferenceParams {
             return Err(bad_request("'top_k' must be >= 0"));
         }
         let seed = req.get("seed").and_then(Value::as_u64).unwrap_or(0) as u32;
-        let max_tokens = req
-            .get("max_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(1024) as u32;
-        if max_tokens == 0 {
-            return Err(bad_request("'max_tokens' must be > 0"));
-        }
+        let max_tokens = parse_max_tokens(req)?;
         let grammar = match req.get("grammar") {
             Some(Value::String(s)) => Some(s.clone()),
             Some(Value::Null) | None => None,
@@ -1279,8 +1299,8 @@ async fn chat_completions(
         if top_k < 0 {
             return error_response(bad_request("'top_k' must be >= 0"));
         }
-        if parsed.get("max_tokens").and_then(Value::as_u64) == Some(0) {
-            return error_response(bad_request("'max_tokens' must be > 0"));
+        if let Err(e) = parse_max_tokens(&parsed) {
+            return error_response(e);
         }
         if matches!(
             parsed.get("grammar"),
@@ -2117,6 +2137,136 @@ async fn health() -> HttpResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Tokenize / detokenize  (llama.cpp server-compatible)
+// ---------------------------------------------------------------------------
+
+/// `POST /tokenize` — tokenize a string.
+///
+/// Body: `{ "content": "...", "add_special": false, "with_pieces": false }`
+async fn tokenize_handler(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let content = match body.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Null) | None => {
+            return HttpResponse::Ok()
+                .content_type("application/json")
+                .body(json!({"tokens": []}).to_string());
+        }
+        _ => return error_response(bad_request("'content' must be a string")),
+    };
+    let add_special = body
+        .get("add_special")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let with_pieces = body
+        .get("with_pieces")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let add_bos = if add_special {
+        AddBos::Always
+    } else {
+        AddBos::Never
+    };
+
+    let permit = state.inference_semaphore.clone().acquire_owned().await;
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let tokens = state2
+            .model
+            .str_to_token(&content, add_bos)
+            .map_err(|e| bad_request(format!("tokenize failed: {e}")))?;
+        let tokens_json: Value = if with_pieces {
+            Value::Array(
+                tokens
+                    .iter()
+                    .map(|tok| {
+                        let piece = state2
+                            .model
+                            .token_to_str(*tok, Special::Plaintext)
+                            .unwrap_or_default();
+                        json!({"id": tok.0, "piece": piece})
+                    })
+                    .collect(),
+            )
+        } else {
+            Value::Array(tokens.iter().map(|tok| json!(tok.0)).collect())
+        };
+        Ok(tokens_json)
+    })
+    .await;
+
+    let tokens_json = match result {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => return error_response(e),
+        Err(e) => return error_response(internal_error(format!("task join: {e}"))),
+    };
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(json!({"tokens": tokens_json}).to_string())
+}
+
+/// `POST /detokenize` — detokenize token ids.
+///
+/// Body: `{ "tokens": [1, 2, 3] }`
+async fn detokenize_handler(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    body: web::Json<Value>,
+) -> HttpResponse {
+    if let Some(err) = check_auth(&req, &state) {
+        return error_response(err);
+    }
+    let arr = match body.get("tokens") {
+        Some(Value::Array(a)) => a,
+        Some(Value::Null) | None => {
+            return HttpResponse::Ok()
+                .content_type("application/json")
+                .body(json!({"content": ""}).to_string());
+        }
+        _ => return error_response(bad_request("'tokens' must be an array of integers")),
+    };
+    let mut token_ids = Vec::with_capacity(arr.len());
+    for v in arr {
+        let Some(raw) = v.as_u64() else {
+            return error_response(bad_request("each token must be a non-negative integer"));
+        };
+        let Ok(id) = i32::try_from(raw) else {
+            return error_response(bad_request("token id does not fit in i32"));
+        };
+        token_ids.push(LlamaToken(id));
+    }
+
+    let permit = state.inference_semaphore.clone().acquire_owned().await;
+    let state2 = state.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        state2
+            .model
+            .detokenize(&token_ids, false, true)
+            .map_err(|e| bad_request(format!("detokenize failed: {e}")))
+    })
+    .await;
+
+    let content = match result {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return error_response(e),
+        Err(e) => return error_response(internal_error(format!("task join: {e}"))),
+    };
+
+    HttpResponse::Ok()
+        .content_type("application/json")
+        .body(json!({"content": content}).to_string())
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -2268,11 +2418,12 @@ async fn main() -> std::io::Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     tracing::info!("Listening on http://{addr}  (parallel={parallel})");
     tracing::info!("Endpoints:");
-    tracing::info!("  GET    /health");
+    tracing::info!("  GET    /health  /v1/health");
     tracing::info!("  GET    /v1/models");
-    tracing::info!("  POST   /v1/chat/completions  (streaming supported)");
-    tracing::info!("  POST   /v1/completions       (streaming supported)");
-    tracing::info!("  POST   /v1/embeddings");
+    tracing::info!("  POST   /v1/chat/completions  /chat/completions  (streaming)");
+    tracing::info!("  POST   /v1/completions       /completions       (streaming)");
+    tracing::info!("  POST   /v1/embeddings        /embeddings");
+    tracing::info!("  POST   /tokenize  /detokenize");
     tracing::info!("  POST   /v1/files             (upload image/audio for multimodal)");
     tracing::info!("  GET    /v1/files             (list uploaded files)");
     tracing::info!("  GET    /v1/files/{{id}}        (file metadata)");
@@ -2291,10 +2442,16 @@ async fn main() -> std::io::Result<()> {
                 .into()
             }))
             .route("/health", web::get().to(health))
+            .route("/v1/health", web::get().to(health))
             .route("/v1/models", web::get().to(list_models))
             .route("/v1/chat/completions", web::post().to(chat_completions))
+            .route("/chat/completions", web::post().to(chat_completions))
             .route("/v1/completions", web::post().to(completions))
+            .route("/completions", web::post().to(completions))
             .route("/v1/embeddings", web::post().to(embeddings))
+            .route("/embeddings", web::post().to(embeddings))
+            .route("/tokenize", web::post().to(tokenize_handler))
+            .route("/detokenize", web::post().to(detokenize_handler))
             // File store
             .route("/v1/files", web::post().to(upload_file))
             .route("/v1/files", web::get().to(list_files))
