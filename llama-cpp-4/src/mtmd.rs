@@ -93,6 +93,16 @@ pub enum MtmdError {
     /// `mtmd_helper_eval_chunks` (or single-chunk variant) returned a non-zero code.
     #[error("eval error: code {0}")]
     EvalError(i32),
+
+    /// A video stream could not be opened. Common causes: the build lacks
+    /// video support (`MTMD_VIDEO` was OFF), `ffmpeg`/`ffprobe` is not on
+    /// `PATH`, or the file is unreadable.
+    #[error("failed to open video stream (null return from mtmd_helper_video_init)")]
+    VideoInitFailed,
+
+    /// `mtmd_helper_video_read_next` returned an error code (`-2`).
+    #[error("video read error: code {0}")]
+    VideoReadError(i32),
 }
 
 /// A convenience `Result` alias for this module.
@@ -324,6 +334,31 @@ impl MtmdContext {
     #[must_use]
     pub fn supports_audio(&self) -> bool {
         unsafe { sys::mtmd_support_audio(self.ptr.as_ptr()) }
+    }
+
+    /// Returns `true` if this build and model support video input.
+    ///
+    /// Video support additionally requires `ffmpeg`/`ffprobe` to be available
+    /// at runtime (see [`MtmdVideo`]). Wraps `mtmd_helper_support_video`.
+    #[must_use]
+    pub fn supports_video(&self) -> bool {
+        unsafe { sys::mtmd_helper_support_video(self.ptr.as_ptr()) }
+    }
+
+    /// Returns the media marker string configured for *this* context.
+    ///
+    /// Unlike [`default_marker`](Self::default_marker) (the library-wide
+    /// default), this reflects any override passed via
+    /// [`MtmdContextParams::media_marker`]. Wraps `mtmd_get_marker`.
+    #[must_use]
+    pub fn marker(&self) -> &str {
+        let ptr = unsafe { sys::mtmd_get_marker(self.ptr.as_ptr()) };
+        if ptr.is_null() {
+            return Self::default_marker();
+        }
+        unsafe { CStr::from_ptr(ptr) }
+            .to_str()
+            .unwrap_or_else(|_| Self::default_marker())
     }
 
     /// Returns the audio sample rate in Hz (e.g. 16 000 for Whisper), or
@@ -578,6 +613,9 @@ impl MtmdContext {
                 seq_id,
                 n_batch,
                 new_n_past,
+                // No post-decode callback; preserves prior single-shot behavior.
+                None,
+                std::ptr::null_mut(),
             )
         };
         if ret != 0 {
@@ -726,6 +764,21 @@ impl MtmdBitmap {
         Ok(Self { ptr })
     }
 
+    /// Build an `MtmdBitmap` from a `mtmd_helper_bitmap_wrapper`, taking
+    /// ownership of the `bitmap` and freeing any `video_ctx`.
+    ///
+    /// The `from_file`/`from_buf` constructors only support image/audio input.
+    /// When the input is a video the helper returns a non-null `video_ctx`
+    /// (an open ffmpeg stream) which is not representable as an `MtmdBitmap`;
+    /// we free it here to avoid leaking it. Use [`MtmdVideo`] for video input.
+    fn from_wrapper(wrapper: sys::mtmd_helper_bitmap_wrapper) -> Result<Self> {
+        if !wrapper.video_ctx.is_null() {
+            unsafe { sys::mtmd_helper_video_free(wrapper.video_ctx) };
+        }
+        let ptr = NonNull::new(wrapper.bitmap).ok_or(MtmdError::BitmapCreateFailed)?;
+        Ok(Self { ptr })
+    }
+
     /// Load a bitmap from a file (image or audio).
     ///
     /// Supported image formats: JPEG, PNG, BMP, GIF, and others handled by
@@ -738,10 +791,12 @@ impl MtmdBitmap {
         let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
         let c_path = CString::new(path)?;
 
-        let ptr =
-            unsafe { sys::mtmd_helper_bitmap_init_from_file(ctx.ptr.as_ptr(), c_path.as_ptr()) };
-        let ptr = NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?;
-        Ok(Self { ptr })
+        // `placeholder = false`: load the real bitmap data (not a token-count
+        // placeholder). For image/audio the returned `video_ctx` is always null.
+        let wrapper = unsafe {
+            sys::mtmd_helper_bitmap_init_from_file(ctx.ptr.as_ptr(), c_path.as_ptr(), false)
+        };
+        Self::from_wrapper(wrapper)
     }
 
     /// Load a bitmap from an in-memory buffer containing a file.
@@ -752,11 +807,12 @@ impl MtmdBitmap {
     ///
     /// Returns [`MtmdError::BitmapCreateFailed`] if decoding fails.
     pub fn from_buf(ctx: &MtmdContext, buf: &[u8]) -> Result<Self> {
-        let ptr = unsafe {
-            sys::mtmd_helper_bitmap_init_from_buf(ctx.ptr.as_ptr(), buf.as_ptr(), buf.len())
+        // `placeholder = false`: load the real bitmap data (not a token-count
+        // placeholder). For image/audio the returned `video_ctx` is always null.
+        let wrapper = unsafe {
+            sys::mtmd_helper_bitmap_init_from_buf(ctx.ptr.as_ptr(), buf.as_ptr(), buf.len(), false)
         };
-        let ptr = NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?;
-        Ok(Self { ptr })
+        Self::from_wrapper(wrapper)
     }
 
     // ── Getters ───────────────────────────────────────────────────────────
@@ -817,6 +873,250 @@ impl MtmdBitmap {
         let cs = CString::new(id)?;
         unsafe { sys::mtmd_bitmap_set_id(self.ptr.as_ptr(), cs.as_ptr()) };
         Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Video input
+// ─────────────────────────────────────────────────────────────────────────────
+
+// `free()` from libc — used to release the heap-allocated text returned by
+// `mtmd_helper_video_read_next` (the C side allocates it with strdup/malloc and
+// documents that the caller must release it with `free()`).
+extern "C" {
+    fn free(ptr: *mut std::os::raw::c_void);
+}
+
+/// Parameters controlling how a [`MtmdVideo`] stream is opened and sampled.
+///
+/// Obtain a default-initialised instance via [`MtmdVideoParams::default()`]
+/// (which mirrors `mtmd_helper_video_init_params_default`: ~4 fps, native
+/// `ffmpeg`/`ffprobe` from `PATH`, and a 5 s timestamp interval) and tweak it
+/// with the builder methods.
+pub struct MtmdVideoParams {
+    params: sys::mtmd_helper_video_init_params,
+    // Keeps the `ffmpeg_bin_dir` C string alive for as long as `params`
+    // borrows it via a raw pointer.
+    ffmpeg_bin_dir: Option<CString>,
+}
+
+impl std::fmt::Debug for MtmdVideoParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdVideoParams")
+            .field("fps_target", &self.params.fps_target)
+            .field("timestamp_interval_ms", &self.params.timestamp_interval_ms)
+            .field("ffmpeg_bin_dir", &self.ffmpeg_bin_dir)
+            .finish()
+    }
+}
+
+impl Default for MtmdVideoParams {
+    fn default() -> Self {
+        let params = unsafe { sys::mtmd_helper_video_init_params_default() };
+        Self {
+            params,
+            ffmpeg_bin_dir: None,
+        }
+    }
+}
+
+impl MtmdVideoParams {
+    /// Desired output frame rate. Values `<= 0` mean "use the video's native
+    /// fps" (the default is ~4 fps).
+    #[must_use]
+    pub fn fps_target(mut self, fps: f32) -> Self {
+        self.params.fps_target = fps;
+        self
+    }
+
+    /// Interval, in milliseconds, between inserted timestamp text chunks (e.g.
+    /// `"[10m50.5s]"`). Values `<= 0` disable timestamps (default 5000 ms).
+    #[must_use]
+    pub fn timestamp_interval_ms(mut self, ms: i64) -> Self {
+        self.params.timestamp_interval_ms = ms;
+        self
+    }
+
+    /// Directory containing the `ffmpeg`/`ffprobe` binaries. Pass `None` to
+    /// search `PATH` (the default).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dir` contains an interior NUL byte.
+    pub fn ffmpeg_bin_dir(mut self, dir: Option<&str>) -> Result<Self> {
+        match dir {
+            None => {
+                self.params.ffmpeg_bin_dir = std::ptr::null();
+                self.ffmpeg_bin_dir = None;
+            }
+            Some(d) => {
+                let cs = CString::new(d)?;
+                self.params.ffmpeg_bin_dir = cs.as_ptr();
+                // Store the owner so the pointer above stays valid.
+                self.ffmpeg_bin_dir = Some(cs);
+            }
+        }
+        Ok(self)
+    }
+}
+
+/// Metadata describing an open [`MtmdVideo`] stream.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MtmdVideoInfo {
+    /// Frame width in pixels.
+    pub width: u32,
+    /// Frame height in pixels.
+    pub height: u32,
+    /// Effective frames-per-second (the `fps_target` if set, else native fps).
+    pub fps: f32,
+    /// Estimated total frame count at the effective fps (`-1` if unknown).
+    pub n_frames: i32,
+}
+
+/// One item read from a [`MtmdVideo`] stream by [`MtmdVideo::read_next`].
+#[derive(Debug)]
+pub enum MtmdVideoItem {
+    /// A decoded video frame, ready to be tokenized like any other image
+    /// [`MtmdBitmap`].
+    Frame(MtmdBitmap),
+    /// A timestamp text marker (e.g. `"[10m50.5s]"`) to be inserted into the
+    /// prompt between frames.
+    Text(String),
+}
+
+/// An open video stream, decoded frame-by-frame via `ffmpeg`.
+///
+/// The notion of "video" exists only at the helper level — it is decoded into
+/// a sequence of image [frames](MtmdVideoItem::Frame) and timestamp
+/// [text markers](MtmdVideoItem::Text) which are then fed through the normal
+/// multimodal pipeline.
+///
+/// Requires a build with video support (see [`MtmdContext::supports_video`])
+/// and `ffmpeg`/`ffprobe` available at runtime.
+///
+/// # Example
+///
+/// ```no_run
+/// # #[cfg(feature = "mtmd")]
+/// # fn run(mtmd_ctx: &llama_cpp_4::mtmd::MtmdContext) -> Result<(), llama_cpp_4::mtmd::MtmdError> {
+/// use std::path::Path;
+/// use llama_cpp_4::mtmd::{MtmdVideo, MtmdVideoParams, MtmdVideoItem};
+///
+/// let mut video = MtmdVideo::from_file(mtmd_ctx, Path::new("clip.mp4"),
+///                                      &MtmdVideoParams::default())?;
+/// while let Some(item) = video.read_next()? {
+///     match item {
+///         MtmdVideoItem::Frame(bitmap) => { /* tokenize the frame */ }
+///         MtmdVideoItem::Text(ts)      => { /* insert the timestamp marker */ }
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct MtmdVideo {
+    ptr: NonNull<sys::mtmd_helper_video>,
+}
+
+impl std::fmt::Debug for MtmdVideo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdVideo").field("info", &self.info()).finish()
+    }
+}
+
+impl Drop for MtmdVideo {
+    fn drop(&mut self) {
+        unsafe { sys::mtmd_helper_video_free(self.ptr.as_ptr()) }
+    }
+}
+
+impl MtmdVideo {
+    /// Open a video file for frame-by-frame decoding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::VideoInitFailed`] if the stream cannot be opened
+    /// (no video support compiled in, `ffprobe` not found, file unreadable,
+    /// …), or [`MtmdError::InvalidPath`] / [`MtmdError::PathNotUtf8`] for a bad
+    /// path.
+    pub fn from_file(
+        ctx: &MtmdContext,
+        path: impl AsRef<Path>,
+        params: &MtmdVideoParams,
+    ) -> Result<Self> {
+        let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
+        let c_path = CString::new(path)?;
+        let ptr = unsafe {
+            sys::mtmd_helper_video_init(ctx.ptr.as_ptr(), c_path.as_ptr(), params.params)
+        };
+        let ptr = NonNull::new(ptr).ok_or(MtmdError::VideoInitFailed)?;
+        Ok(Self { ptr })
+    }
+
+    /// Open a video from an in-memory buffer. The buffer is copied internally,
+    /// so it need not outlive this call.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::VideoInitFailed`] if the stream cannot be opened.
+    pub fn from_buf(ctx: &MtmdContext, buf: &[u8], params: &MtmdVideoParams) -> Result<Self> {
+        let ptr = unsafe {
+            sys::mtmd_helper_video_init_from_buf(
+                ctx.ptr.as_ptr(),
+                buf.as_ptr(),
+                buf.len(),
+                params.params,
+            )
+        };
+        let ptr = NonNull::new(ptr).ok_or(MtmdError::VideoInitFailed)?;
+        Ok(Self { ptr })
+    }
+
+    /// Return metadata (resolution, effective fps, estimated frame count) for
+    /// this stream.
+    #[must_use]
+    pub fn info(&self) -> MtmdVideoInfo {
+        let info = unsafe { sys::mtmd_helper_video_get_info(self.ptr.as_ptr()) };
+        MtmdVideoInfo {
+            width: info.width,
+            height: info.height,
+            fps: info.fps,
+            n_frames: info.n_frames,
+        }
+    }
+
+    /// Read the next item from the stream.
+    ///
+    /// Returns `Ok(Some(item))` for each frame or timestamp marker, and
+    /// `Ok(None)` once the end of the stream is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::VideoReadError`] on a decode error.
+    pub fn read_next(&mut self) -> Result<Option<MtmdVideoItem>> {
+        let mut out_bitmap: *mut sys::mtmd_bitmap = std::ptr::null_mut();
+        let mut out_text: *mut std::os::raw::c_char = std::ptr::null_mut();
+        let ret = unsafe {
+            sys::mtmd_helper_video_read_next(self.ptr.as_ptr(), &raw mut out_bitmap, &raw mut out_text)
+        };
+        match ret {
+            0 => {
+                if let Some(ptr) = NonNull::new(out_bitmap) {
+                    Ok(Some(MtmdVideoItem::Frame(MtmdBitmap { ptr })))
+                } else if !out_text.is_null() {
+                    let text = unsafe { CStr::from_ptr(out_text) }
+                        .to_string_lossy()
+                        .into_owned();
+                    // The C side allocated this with strdup/malloc; release it.
+                    unsafe { free(out_text.cast()) };
+                    Ok(Some(MtmdVideoItem::Text(text)))
+                } else {
+                    // Success but nothing produced — treat as end of stream.
+                    Ok(None)
+                }
+            }
+            -1 => Ok(None), // EOF
+            other => Err(MtmdError::VideoReadError(other)),
+        }
     }
 }
 

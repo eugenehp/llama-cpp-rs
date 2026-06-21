@@ -1,8 +1,8 @@
 [package]
-name = "perplexity"
+name = "eagle"
 version = "0.3.2"
 edition = "2021"
-description = "Example: perplexity for llama-cpp-4"
+description = "Example: EAGLE-3 speculative decoding (target + draft model) for llama-cpp-4"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -15,7 +15,3 @@ anyhow = { workspace = true }
 cuda = ["llama-cpp-4/cuda"]
 metal = ["llama-cpp-4/metal"]
 vulkan = ["llama-cpp-4/vulkan"]
-native = ["llama-cpp-4/native"]
-
-[lints]
-workspace = true

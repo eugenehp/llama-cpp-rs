@@ -19,22 +19,44 @@ extern "C" {
 
 struct mtp_session;
 
+// Which draft-model speculative strategy the session drives. Both map to an
+// upstream `common_speculative_type`; they share the identical session
+// lifecycle (begin/process/draft/accept) but differ in how the draft context
+// must be built (see `mtp_session_new`).
+enum mtp_spec_type {
+    // Multi-token prediction. `ctx_dft` is built from the *same* model as
+    // `ctx_tgt`, with `LLAMA_CONTEXT_TYPE_MTP`. Value 0 keeps the original
+    // (pre-EAGLE3) ABI: a zero-initialised config selects MTP.
+    MTP_SPEC_TYPE_MTP    = 0,
+    // EAGLE-3. `ctx_dft` is built from a *separate* EAGLE-3 draft model (one
+    // exposing 3 target-extract layers), with `LLAMA_CONTEXT_TYPE_DEFAULT`.
+    MTP_SPEC_TYPE_EAGLE3 = 1,
+};
+
 struct mtp_session_config {
     uint32_t n_seq;
     int32_t  n_draft_max;
     int32_t  n_min;
     float    p_min;
+    // One of `enum mtp_spec_type`. 0 (= MTP_SPEC_TYPE_MTP) preserves the
+    // original behaviour for existing callers.
+    int32_t  spec_type;
 };
 
-// Initialise an MTP draft session that pairs `ctx_tgt` (the target context,
-// `LLAMA_CONTEXT_TYPE_DEFAULT`) with `ctx_dft` (the draft context, built with
-// `LLAMA_CONTEXT_TYPE_MTP`). Both must be from the same MTP-capable model.
+// Initialise a draft session that pairs `ctx_tgt` (the target context,
+// `LLAMA_CONTEXT_TYPE_DEFAULT`) with `ctx_dft` (the draft context). The draft
+// context depends on `config->spec_type`:
+//   - MTP_SPEC_TYPE_MTP:    `ctx_dft` from the *same* MTP-capable model, built
+//                           with `LLAMA_CONTEXT_TYPE_MTP`.
+//   - MTP_SPEC_TYPE_EAGLE3: `ctx_dft` from a *separate* EAGLE-3 draft model,
+//                           built with `LLAMA_CONTEXT_TYPE_DEFAULT`.
 //
 // `config` must be non-null with `n_seq > 0` and `n_draft_max > 0`.
 // `n_min` and `p_min` map to `common_params_speculative_draft` (upstream
 // defaults: 0 and 0.0).
 //
-// Returns nullptr on failure (e.g. when the model lacks MTP heads).
+// Returns nullptr on failure (e.g. when the model lacks the required draft
+// heads / extract layers, or `spec_type` is unknown).
 struct mtp_session * mtp_session_new(
         struct llama_context *              ctx_tgt,
         struct llama_context *              ctx_dft,

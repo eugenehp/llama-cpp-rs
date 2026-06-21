@@ -12,6 +12,7 @@
 //! - [embeddings](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/embeddings)
 //! - [server](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/server)
 //! - [mtp](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/mtp) — MTP speculative decoding via [`crate::mtp::MtpSession`]
+//! - [eagle](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/eagle) — EAGLE-3 speculative decoding via [`crate::eagle::Eagle3Session`]
 //!
 //! # Feature Flags
 //!
@@ -33,6 +34,7 @@ use std::string::FromUtf8Error;
 
 pub mod common;
 pub mod context;
+pub mod eagle;
 #[cfg(feature = "ggml")]
 pub mod ggml;
 pub mod llama_backend;

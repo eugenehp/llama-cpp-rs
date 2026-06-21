@@ -1356,6 +1356,12 @@ fn main() {
         .allowlist_function("mtp_session_.*")
         .allowlist_type("mtp_session")
         .allowlist_type("mtp_session_config")
+        // Speculative strategy selector for the shim (MTP vs EAGLE3). The
+        // `mtp_session_config.spec_type` field is a plain int, so the enum is
+        // not reachable transitively — allowlist it explicitly so its
+        // constants are emitted.
+        .allowlist_type("mtp_spec_type")
+        .allowlist_item("MTP_SPEC_TYPE_.*")
         .opaque_type("mtp_session")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")

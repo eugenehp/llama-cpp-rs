@@ -32,8 +32,15 @@ extern "C" mtp_session * mtp_session_new(
         return nullptr;
     }
 
+    common_speculative_type spec_type;
+    switch (config->spec_type) {
+        case MTP_SPEC_TYPE_MTP:    spec_type = COMMON_SPECULATIVE_TYPE_DRAFT_MTP;    break;
+        case MTP_SPEC_TYPE_EAGLE3: spec_type = COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3; break;
+        default:                   return nullptr; // unknown spec_type
+    }
+
     common_params_speculative sparams;
-    sparams.types         = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    sparams.types         = { spec_type };
     sparams.draft.ctx_tgt = ctx_tgt;
     sparams.draft.ctx_dft = ctx_dft;
     sparams.draft.n_max   = config->n_draft_max;

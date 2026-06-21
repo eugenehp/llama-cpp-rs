@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## [0.3.2] - 2026-06-20
+
+### Changed
+- **llama.cpp**: vendored submodule `94a220cd6` → `c57607016` (master, 2026-06-21;
+  [PR #256](https://github.com/eugenehp/llama-cpp-rs/pull/256)). The public `llama.h`
+  C API is unchanged; the `mtmd` helper API was reworked (see below).
+
+### Added
+- **EAGLE-3 speculative decoding** (`llama-cpp-4`): new [`eagle::Eagle3Session`]
+  driving upstream `COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3`. Pairs a target context
+  with a separate EAGLE-3 draft-model context. The `mtp_shim` is generalised with a
+  `spec_type` selector shared by MTP and EAGLE-3 (`MtpSession` is unchanged).
+- **`examples/eagle`** (+ README) and weight-fetch scripts: runnable EAGLE-3 demo plus
+  `scripts/setup-eagle3.sh` (one command: bootstraps a convert env, then downloads +
+  converts a target/draft pairing to GGUF) over `scripts/fetch-eagle3.sh` (download +
+  convert). Defaults to the open Qwen3-8B + `RedHatAI/Qwen3-8B-speculator.eagle3`.
+  Verified end-to-end on Apple M4 Pro (Metal): coherent generation at ~53% draft
+  acceptance.
+- **mtmd video input** (`llama-cpp-4`, `mtmd` feature): [`mtmd::MtmdVideo`] (+
+  `MtmdVideoParams`, `MtmdVideoInfo`, `MtmdVideoItem`) wrapping the new
+  `mtmd_helper_video_*` API for frame-by-frame decoding via ffmpeg. Plus
+  `MtmdContext::supports_video()` and `MtmdContext::marker()` (per-context marker).
+
+### Fixed
+- **mtmd bindings** (`llama-cpp-4`): adapt to the reworked `mtmd` helper API —
+  `mtmd_helper_bitmap_init_from_file`/`_from_buf` now take a `placeholder` flag and
+  return a `mtmd_helper_bitmap_wrapper`; `mtmd_helper_decode_image_chunk` takes a
+  post-decode callback. `MtmdBitmap::from_file`/`from_buf` also no longer leak the
+  `video_ctx` returned for video inputs.
+
 ## [0.3.1] - 2026-06-04
 
 ### Changed

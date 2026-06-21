@@ -12,4 +12,8 @@ target/
 # GGML models
 *.gguf
 
+# Local model downloads + conversion env (see scripts/fetch-eagle3.sh)
+/models/
+/.venv-convert/
+
 .DS_Store

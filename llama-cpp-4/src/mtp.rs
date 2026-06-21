@@ -256,6 +256,7 @@ impl MtpSession {
             n_draft_max: config.n_draft_max,
             n_min: config.n_min,
             p_min: config.p_min,
+            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP as i32,
         };
 
         let raw = unsafe {
