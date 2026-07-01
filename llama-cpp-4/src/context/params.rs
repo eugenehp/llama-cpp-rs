@@ -177,6 +177,31 @@ impl LlamaContextParams {
     pub fn n_ctx(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.context_params.n_ctx)
     }
+    
+    /// Set the maximum number of independent sequence states in the context.
+    ///
+    /// This maps to llama.cpp's `llama_context_params.n_seq_max` and must match
+    /// the highest sequence id used by batched decoding.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default()
+    ///     .with_n_seq_max(16);
+    /// assert_eq!(params.n_seq_max(), 16);
+    /// ```
+    #[must_use]
+    pub fn with_n_seq_max(mut self, n_seq_max: u32) -> Self {
+        self.context_params.n_seq_max = n_seq_max.max(1);
+        self
+    }
+
+    /// Get the maximum number of independent sequence states in the context.
+    #[must_use]
+    pub fn n_seq_max(&self) -> u32 {
+        self.context_params.n_seq_max
+    }
 
     /// Set the `n_batch`
     ///
