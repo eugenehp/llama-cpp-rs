@@ -39,7 +39,8 @@
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
 )]
 
 mod line_editor;
@@ -63,16 +64,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
 use hf_hub::api::sync::ApiBuilder;
 
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::LlamaModel;
-use llama_cpp_4::model::{AddBos, LlamaChatMessage, Special};
-use llama_cpp_4::quantize::GgmlType;
-use llama_cpp_4::sampling::LlamaSampler;
-use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::prelude::*;
 
 use line_editor::LineEditor;
 use prefill::IncrementalPrefill;
@@ -268,7 +260,8 @@ enum InputMsg {
 // Input thread with full line editor
 // ---------------------------------------------------------------------------
 
-fn input_thread(tx: mpsc::Sender<InputMsg>, debounce: Duration, phase: Arc<AtomicBool>) {
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+fn input_thread(tx: &mpsc::Sender<InputMsg>, debounce: Duration, phase: &AtomicBool) {
     let mut editor = LineEditor::new();
     let mut last_change = Instant::now();
     let mut pending_send = false;
@@ -492,7 +485,11 @@ fn run() -> Result<()> {
     let n_ctx_size = ctx_size.or_else(|| NonZeroU32::new(4096));
     let mut ctx_params = LlamaContextParams::default()
         .with_n_ctx(n_ctx_size)
-        .with_flash_attention(!no_flash_attn)
+        .with_flash_attn_type(if no_flash_attn {
+            LlamaFlashAttnType::Disabled
+        } else {
+            LlamaFlashAttnType::Enabled
+        })
         .with_cache_type_k(kv_type)
         .with_cache_type_v(kv_type)
         .with_attn_rot_disabled(no_turbo_quant);
@@ -511,7 +508,7 @@ fn run() -> Result<()> {
     // ── System prompt (with optional session caching) ──────────────────
     let sys_msg = LlamaChatMessage::new("system".into(), system_prompt.clone())
         .context("invalid system prompt")?;
-    let sys_formatted = model.apply_chat_template(None, &[sys_msg.clone()], false)?;
+    let sys_formatted = model.apply_chat_template(None, std::slice::from_ref(&sys_msg), false)?;
     let sys_tokens = model.str_to_token(&sys_formatted, AddBos::Always)?;
     let mut batch = LlamaBatch::new(BATCH_SIZE, 1);
 
@@ -595,7 +592,7 @@ fn run() -> Result<()> {
     let debounce = Duration::from_millis(debounce_ms);
     let phase = Arc::new(AtomicBool::new(false));
     let phase_clone = Arc::clone(&phase);
-    thread::spawn(move || input_thread(tx, debounce, phase_clone));
+    thread::spawn(move || input_thread(&tx, debounce, &phase_clone));
 
     println!(
         "{}",
@@ -616,9 +613,8 @@ fn run() -> Result<()> {
 
         // ── Input loop ─────────────────────────────────────────────────
         let user_text = 'input: loop {
-            let msg = match rx.recv() {
-                Ok(m) => m,
-                Err(_) => break 'input None,
+            let Ok(msg) = rx.recv() else {
+                break 'input None;
             };
             let msg = drain_latest(&rx).unwrap_or(msg);
 

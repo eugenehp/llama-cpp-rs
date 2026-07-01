@@ -14,14 +14,7 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
 
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::context::LlamaContext;
-use llama_cpp_4::ggml_time_us;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::LlamaModel;
-use llama_cpp_4::model::{AddBos, Special};
+use llama_cpp_4::prelude::*;
 
 #[derive(clap::Parser, Debug, Clone)]
 struct Args {

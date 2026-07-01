@@ -10,13 +10,13 @@ use llama_cpp_sys_4::{
     llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init,
     llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_free,
     llama_sampler_get_seed, llama_sampler_init_adaptive_p, llama_sampler_init_dist,
-    llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy,
-    llama_sampler_init_grammar_lazy_patterns, llama_sampler_init_greedy, llama_sampler_init_infill,
-    llama_sampler_init_logit_bias, llama_sampler_init_min_p, llama_sampler_init_mirostat,
-    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
-    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_n_sigma,
-    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
-    llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
+    llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy_patterns,
+    llama_sampler_init_greedy, llama_sampler_init_infill, llama_sampler_init_logit_bias,
+    llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2,
+    llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext,
+    llama_sampler_init_top_k, llama_sampler_init_top_n_sigma, llama_sampler_init_top_p,
+    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_name, llama_sampler_reset,
+    llama_sampler_sample,
 };
 
 use crate::context::LlamaContext;
@@ -714,48 +714,6 @@ impl LlamaSampler {
         let sampler = unsafe { llama_sampler_chain_remove(self.sampler.as_ptr(), i) };
         Self {
             sampler: NonNull::new(sampler).expect("chain_remove returned null"),
-        }
-    }
-
-    /// Grammar sampler with lazy activation.
-    ///
-    /// The grammar is only activated when one of the trigger words or trigger tokens is encountered.
-    ///
-    /// # Panics
-    /// - If `grammar_str` or `grammar_root` contain null bytes.
-    /// - If any trigger word contains null bytes.
-    /// - If llama.cpp returns a null pointer.
-    #[must_use]
-    #[deprecated(note = "use grammar_lazy_patterns instead")]
-    pub fn grammar_lazy(
-        model: &LlamaModel,
-        grammar_str: &str,
-        grammar_root: &str,
-        trigger_words: &[&str],
-        trigger_tokens: &[LlamaToken],
-    ) -> Self {
-        let grammar_str = CString::new(grammar_str).unwrap();
-        let grammar_root = CString::new(grammar_root).unwrap();
-        let trigger_cstrings: Vec<CString> = trigger_words
-            .iter()
-            .map(|w| CString::new(*w).unwrap())
-            .collect();
-        let mut trigger_ptrs: Vec<*const c_char> =
-            trigger_cstrings.iter().map(|s| s.as_ptr()).collect();
-
-        let sampler = unsafe {
-            llama_sampler_init_grammar_lazy(
-                model.get_vocab().vocab.as_ref(),
-                grammar_str.as_ptr(),
-                grammar_root.as_ptr(),
-                trigger_ptrs.as_mut_ptr(),
-                trigger_ptrs.len(),
-                trigger_tokens.as_ptr().cast(),
-                trigger_tokens.len(),
-            )
-        };
-        Self {
-            sampler: NonNull::new(sampler).unwrap(),
         }
     }
 

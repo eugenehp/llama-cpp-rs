@@ -6,10 +6,16 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `94a220cd6` · **Crate version:** 0.3.1
+**llama.cpp version:** `4fc4ec5 (b9859)` · **Crate version:** 0.4.0
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
+
+For application code, start with:
+
+```rust
+use llama_cpp_4::prelude::*;
+```
 
 ---
 
@@ -34,6 +40,35 @@ use that crate instead — it provides a safe API over these raw bindings.
 | `native` | `-march=native` — tune for the build machine's CPU |
 | `rpc` | Remote compute backend |
 | `dynamic-link` | Link against a pre-installed shared `libllama` instead of building from source |
+| `prebuilt` | Download precompiled libs from GitHub releases (see below) |
+
+---
+
+## Prebuilt libraries
+
+Skip the CMake compile by enabling `prebuilt` or setting `LLAMA_PREBUILT_DIR`:
+
+```bash
+# Automatic download + cache (falls back to local compile if no release asset)
+cargo build -p llama-cpp-sys-4 --features prebuilt
+
+# Prefetch manually, then build
+./scripts/fetch-prebuilt.sh
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.4.0/llama-prebuilt-...
+cargo build -p llama-cpp-sys-4
+```
+
+Release assets are named `llama-prebuilt-{linux|macos|windows}-{target}-{cpu|vulkan|blas|metal}-{static|dynamic}.tar.gz`
+and published by `.github/workflows/prebuilt-llama.yml` on version tags.
+
+| Variable | Purpose |
+|---|---|
+| `LLAMA_PREBUILT_DIR` | Local directory with `lib/` (or `lib64/`, `bin/`) |
+| `LLAMA_PREBUILT_TAG` | Release tag (default: `v{CARGO_PKG_VERSION}`) |
+| `LLAMA_PREBUILT_OFF` | `1` disables auto-download |
+| `LLAMA_PREBUILT_SHARED` | Force dynamic linking when using `LLAMA_PREBUILT_DIR` |
+
+`cuda`, `hip`, `webgpu`, `opencl`, and `q1` have no published prebuilts yet — those builds always compile locally.
 
 ---
 

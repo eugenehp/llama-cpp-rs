@@ -10,10 +10,10 @@
 //! cargo run -p fit-params -- -m model.gguf --min-ctx 1024
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::Parser;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use std::ffi::CString;
+use llama_cpp_4::prelude::*;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 #[derive(clap::Parser, Debug)]
@@ -31,63 +31,30 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    let _backend = LlamaBackend::init()?;
+    let backend = LlamaBackend::init()?;
 
-    let c_path = CString::new(
-        args.model
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("invalid path"))?,
-    )?;
+    let result = fit_params(
+        &backend,
+        &args.model,
+        FitParams::default().with_n_ctx_min(args.min_ctx),
+    )
+    .map_err(|e| match e {
+        FitParamsError::InvalidPath => anyhow::anyhow!("invalid model path"),
+        FitParamsError::CouldNotFit => anyhow::anyhow!("could not fit parameters to device memory"),
+        FitParamsError::Failed => anyhow::anyhow!("parameter fitting failed"),
+    })?;
 
-    let mut mparams = unsafe { llama_cpp_sys_4::llama_model_default_params() };
-    let mut cparams = unsafe { llama_cpp_sys_4::llama_context_default_params() };
+    let n_ctx = result.context_params.n_ctx().map_or(0, NonZeroU32::get);
+    print!("-c {n_ctx} -ngl {}", result.model_params.n_gpu_layers());
 
-    let nd = llama_cpp_4::max_devices();
-    let mut tensor_split = vec![0.0_f32; nd];
-
-    let ntbo = llama_cpp_4::max_tensor_buft_overrides();
-    let mut tensor_buft_overrides = vec![
-        llama_cpp_sys_4::llama_model_tensor_buft_override {
-            pattern: std::ptr::null(),
-            buft: std::ptr::null_mut(),
-        };
-        ntbo + 1
-    ];
-
-    let mut margins = vec![0_usize; nd + 1];
-
-    let status = unsafe {
-        llama_cpp_4::params_fit(
-            c_path.as_ptr(),
-            &raw mut mparams,
-            &raw mut cparams,
-            tensor_split.as_mut_ptr(),
-            tensor_buft_overrides.as_mut_ptr(),
-            margins.as_mut_ptr(),
-            args.min_ctx,
-            llama_cpp_sys_4::GGML_LOG_LEVEL_ERROR,
-        )
-    };
-
-    if status != llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_SUCCESS {
-        bail!("params_fit failed (status={status})");
-    }
-
-    // Print fitted parameters
-    print!("-c {} -ngl {}", cparams.n_ctx, mparams.n_gpu_layers);
-
-    // Print tensor split if multi-device
-    let mut nd_active = nd;
-    while nd_active > 1 && tensor_split[nd_active - 1] == 0.0 {
-        nd_active -= 1;
-    }
-    if nd_active > 1 {
+    let splits = result.active_tensor_split();
+    if splits.len() > 1 {
         print!(" -ts ");
-        for (i, &split) in tensor_split[..nd_active].iter().enumerate() {
+        for (i, &split) in splits.iter().enumerate() {
             if i > 0 {
                 print!(",");
             }
-            print!("{}", split as u32);
+            print!("{:.0}", split.max(0.0));
         }
     }
 

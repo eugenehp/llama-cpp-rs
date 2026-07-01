@@ -1,88 +1,129 @@
-//! Capture intermediate tensor outputs during decode via the `cb_eval` callback.
+//! Capture intermediate tensor outputs during [`crate::LlamaContext::decode`].
 //!
-//! During `llama_decode`, llama.cpp evaluates a computation graph where each
-//! tensor node has a name (e.g. `"l_out-13"` for layer 13's output,
-//! `"attn_norm-5"` for layer 5's attention norm, `"result_norm"` for the
-//! final norm output).
+//! llama.cpp builds a computation graph for each forward pass. Every node has a
+//! string name — for transformer blocks the layer output is typically
+//! `"l_out-{N}"` (e.g. `"l_out-13"`), attention norms are `"attn_norm-{N}"`, and
+//! the final norm is `"result_norm"`.
 //!
-//! The `cb_eval` callback is invoked for every tensor node:
-//! - **Ask phase** (`ask = true`):  return `true` to request this tensor's data.
-//! - **Data phase** (`ask = false`): the tensor data is computed and available
-//!   to copy out via `ggml_backend_tensor_get()`.
+//! The graph evaluation callback (`cb_eval`) runs in two phases for each node:
 //!
-//! [`TensorCapture`] provides a safe, reusable wrapper around this mechanism.
+//! | Phase | `ask` | Behaviour |
+//! |---|---|---|
+//! | Ask | `true` | Return `true` to request a copy of this tensor's data. |
+//! | Data | `false` | Tensor is computed; data is copied via `ggml_backend_tensor_get`. |
+//!
+//! [`TensorCapture`] implements that callback and stores matching tensors in a
+//! [`HashMap`] you can read after `decode()` finishes.
+//!
+//! # Typical use cases
+//!
+//! - **Layer probing** — inspect hidden states at specific depths.
+//! - **EAGLE / distillation** — read draft-model anchor layers (see `examples/eagle`).
+//! - **Debugging** — dump norms or attention outputs with [`TensorCapture::for_prefix`].
+//!
+//! # Setup
+//!
+//! 1. Build a [`TensorCapture`] with the filter you need ([`TensorCapture::for_layers`]
+//!    is the common case).
+//! 2. Pass it to [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture). The capture must
+//!    **outlive** the [`LlamaContext`](crate::LlamaContext).
+//! 3. Run [`LlamaContext::decode`](crate::LlamaContext::decode) as usual.
+//! 4. Read [`CapturedTensor`] values via [`TensorCapture::get_layer`],
+//!    [`TensorCapture::get`], or [`TensorCapture::iter`].
+//!
+//! Call [`TensorCapture::clear`](crate::TensorCapture::clear) before reusing the same capture on another batch.
 //!
 //! # Example
 //!
-//! ```rust,ignore
-//! use llama_cpp_4::context::params::LlamaContextParams;
-//! use llama_cpp_4::context::tensor_capture::TensorCapture;
+//! ```no_run
+//! use llama_cpp_4::prelude::*;
+//! use std::num::NonZeroU32;
 //!
-//! // Capture layers 13, 20, 27
-//! let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
+//! fn main() {
+//!     let backend = LlamaBackend::init().unwrap();
+//!     let model = LlamaModel::load_from_file(
+//!         &backend,
+//!         "model.gguf",
+//!         &LlamaModelParams::default(),
+//!     )
+//!     .unwrap();
 //!
-//! let ctx_params = LlamaContextParams::default()
-//!     .with_n_ctx(Some(NonZeroU32::new(2048).unwrap()))
-//!     .with_embeddings(true)
-//!     .with_tensor_capture(&mut capture);
+//!     let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
+//!     let ctx_params = LlamaContextParams::default()
+//!         .with_n_ctx(NonZeroU32::new(512))
+//!         .with_tensor_capture(&mut capture);
+//!     let mut ctx = model.new_context(&backend, ctx_params).unwrap();
 //!
-//! let mut ctx = model.new_context(&backend, ctx_params)?;
-//! // ... add tokens to batch ...
-//! ctx.decode(&mut batch)?;
+//!     let tokens = model.str_to_token("Hello", AddBos::Always).unwrap();
+//!     let mut batch = LlamaBatch::new(512, 1);
+//!     for (i, &tok) in tokens.iter().enumerate() {
+//!         batch
+//!             .add(tok, i as i32, &[0], i == tokens.len() - 1)
+//!             .unwrap();
+//!     }
+//!     ctx.decode(&mut batch).unwrap();
 //!
-//! // Read captured hidden states
-//! for &layer in &[13, 20, 27] {
-//!     if let Some(info) = capture.get(layer) {
-//!         println!("Layer {}: shape [{}, {}]", layer, info.n_embd, info.n_tokens);
-//!         // info.data contains [n_tokens * n_embd] f32 values
-//!         // Layout: data[token_idx * n_embd + dim_idx]
+//!     for &layer in &[13, 20, 27] {
+//!         if let Some(t) = capture.get_layer(layer) {
+//!             println!(
+//!                 "l_out-{layer}: {} tokens × {} dims",
+//!                 t.n_tokens(),
+//!                 t.n_embd()
+//!             );
+//!             if let Some(vec) = t.token_embedding(0) {
+//!                 println!("  first token, first 3 dims: {:?}", &vec[..3.min(vec.len())]);
+//!             }
+//!         }
 //!     }
 //! }
 //! ```
+//!
+//! # Tensor layout
+//!
+//! Each [`CapturedTensor`] stores a flat `f32` buffer with
+//! `data[token_idx * n_embd + dim_idx]` (ggml row-major: `ne0` = embedding dim,
+//! `ne1` = token count). Use [`CapturedTensor::token_embedding`] to slice one row.
 
 use std::collections::HashMap;
 
-/// Information about a single captured tensor.
+/// A single tensor copied out of the decode graph.
+///
+/// Produced by [`TensorCapture`] after a successful [`crate::LlamaContext::decode`].
+/// For layer outputs (`"l_out-N"`), [`Self::layer`] is set to `N`.
 #[derive(Debug, Clone)]
 pub struct CapturedTensor {
-    /// The tensor name (e.g. `"l_out-13"`).
+    /// Graph node name (e.g. `"l_out-13"`, `"result_norm"`).
     pub name: String,
-    /// The layer index extracted from the name, or `None` if the name
-    /// doesn't follow the `"prefix-N"` pattern.
+    /// Layer index when `name` is `"l_out-{N}"`, otherwise `None`.
     pub layer: Option<usize>,
-    /// First dimension (typically `n_embd` / hidden dimension).
+    /// First dimension (typically `n_embd` / hidden size).
     pub ne0: usize,
-    /// Second dimension (typically `n_tokens`).
+    /// Second dimension (typically number of tokens in the batch position).
     pub ne1: usize,
-    /// Flattened f32 data with `ne0 * ne1` elements.
+    /// Flattened `ne0 * ne1` values in ggml row-major order.
     ///
-    /// Layout (row-major from ggml's perspective):
-    /// `data[token_idx * ne0 + dim_idx]`
-    ///
-    /// This matches the ggml tensor layout where `ne[0]` is the
-    /// innermost (contiguous) dimension.
+    /// Index as `data[token_idx * ne0 + dim_idx]`.
     pub data: Vec<f32>,
 }
 
 impl CapturedTensor {
-    /// Number of embedding dimensions (alias for `ne0`).
+    /// Number of embedding dimensions (alias for [`Self::ne0`]).
     #[inline]
     #[must_use]
     pub fn n_embd(&self) -> usize {
         self.ne0
     }
 
-    /// Number of tokens (alias for `ne1`).
+    /// Number of token positions (alias for [`Self::ne1`]).
     #[inline]
     #[must_use]
     pub fn n_tokens(&self) -> usize {
         self.ne1
     }
 
-    /// Get the hidden state for a specific token.
+    /// Hidden-state vector for one token index.
     ///
-    /// Returns a slice of `n_embd` floats, or `None` if `token_idx` is
-    /// out of range.
+    /// Returns `None` when `token_idx >= n_tokens()`.
     #[must_use]
     pub fn token_embedding(&self, token_idx: usize) -> Option<&[f32]> {
         if token_idx >= self.ne1 {
@@ -96,31 +137,29 @@ impl CapturedTensor {
 /// Strategy for selecting which tensors to capture.
 #[derive(Debug, Clone)]
 enum CaptureFilter {
-    /// Capture tensors named `"l_out-{N}"` for specific layer indices.
+    /// `"l_out-{N}"` for each listed layer index `N`.
     Layers(Vec<usize>),
-    /// Capture tensors whose names exactly match the given strings.
+    /// Exact graph node names.
     Names(Vec<String>),
-    /// Capture tensors whose names start with the given prefix.
+    /// Names starting with a prefix (e.g. `"attn_out"`).
     Prefix(String),
-    /// Capture all tensors (warning: can be very large).
+    /// Every node (can be very large — debug only).
     All,
 }
 
-/// Captures intermediate tensor outputs during `llama_decode`.
+/// Captures intermediate tensors during [`crate::LlamaContext::decode`].
 ///
-/// Create a `TensorCapture`, attach it to `LlamaContextParams` via
-/// [`with_tensor_capture`](super::params::LlamaContextParams::with_tensor_capture),
-/// then call `decode()`. After decode completes, read captured data
-/// via [`get`], [`get_layer`], or [`iter`].
+/// Attach with [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture) before creating the
+/// context. The same instance can be reused across decodes if you call
+/// [`Self::clear`] between passes.
 ///
-/// # Lifetime & Safety
+/// # Lifetime
 ///
-/// The `TensorCapture` must outlive the `LlamaContext` it is attached to.
-/// The borrow is enforced by [`with_tensor_capture`](super::params::LlamaContextParams::with_tensor_capture)
-/// taking `&mut self`.
+/// The capture must outlive the [`crate::LlamaContext`] it is wired into;
+/// [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture) takes `&mut TensorCapture` to
+/// enforce this at compile time.
 pub struct TensorCapture {
     filter: CaptureFilter,
-    /// Captured tensors keyed by name.
     captured: HashMap<String, CapturedTensor>,
 }
 
@@ -135,18 +174,11 @@ impl std::fmt::Debug for TensorCapture {
 }
 
 impl TensorCapture {
-    /// Create a capture that intercepts layer outputs `"l_out-{N}"` for
-    /// the specified layer indices.
+    /// Capture transformer layer outputs `"l_out-{N}"` for the given indices.
     ///
-    /// This is the most common use case for extracting per-layer hidden
-    /// states from a language model.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Capture layers 13, 20, 27 (typical for LLaMA-3.2-3B with positions [0.5, 0.75, 1.0])
-    /// let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
-    /// ```
+    /// This is the usual choice for hidden-state extraction. EAGLE-3 draft models
+    /// often use three layers at ~50%, 75%, and 100% depth — e.g. `[13, 20, 27]`
+    /// on a 28-layer model.
     #[must_use]
     pub fn for_layers(layer_indices: &[usize]) -> Self {
         Self {
@@ -155,13 +187,9 @@ impl TensorCapture {
         }
     }
 
-    /// Create a capture that intercepts tensors with exact matching names.
+    /// Capture tensors whose graph names match exactly.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// let mut capture = TensorCapture::for_names(&["result_norm", "l_out-27"]);
-    /// ```
+    /// Example names: `"result_norm"`, `"l_out-27"`.
     #[must_use]
     pub fn for_names(names: &[&str]) -> Self {
         Self {
@@ -172,15 +200,9 @@ impl TensorCapture {
         }
     }
 
-    /// Create a capture that intercepts all tensors whose name starts with
-    /// the given prefix.
+    /// Capture every tensor whose name starts with `prefix`.
     ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Capture all attention outputs
-    /// let mut capture = TensorCapture::for_prefix("attn_out");
-    /// ```
+    /// Useful for families like `"attn_out-*"` or `"attn_norm-*"`.
     #[must_use]
     pub fn for_prefix(prefix: &str) -> Self {
         Self {
@@ -189,10 +211,10 @@ impl TensorCapture {
         }
     }
 
-    /// Create a capture that intercepts **all** tensors.
+    /// Capture **all** graph nodes.
     ///
-    /// ⚠️ Warning: this can produce very large amounts of data.
-    /// Use only for debugging or inspection.
+    /// Warning: memory use scales with model size and sequence length. Prefer
+    /// [`Self::for_layers`] or [`Self::for_names`] in production code.
     #[must_use]
     pub fn all() -> Self {
         Self {
@@ -201,52 +223,47 @@ impl TensorCapture {
         }
     }
 
-    /// Clear all previously captured data, keeping the filter configuration.
-    ///
-    /// Call this before a new `decode()` if reusing the capture across
-    /// multiple batches.
+    /// Drop captured tensors but keep the filter (safe to call before another decode).
     pub fn clear(&mut self) {
         self.captured.clear();
     }
 
-    /// Get a captured tensor by its full name (e.g. `"l_out-13"`).
+    /// Lookup by full graph name (e.g. `"l_out-13"`).
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&CapturedTensor> {
         self.captured.get(name)
     }
 
-    /// Get a captured layer output by layer index.
-    ///
-    /// Looks up `"l_out-{layer_idx}"`.
+    /// Lookup a layer output (`"l_out-{layer_idx}"`).
     #[must_use]
     pub fn get_layer(&self, layer_idx: usize) -> Option<&CapturedTensor> {
         self.captured.get(&format!("l_out-{layer_idx}"))
     }
 
-    /// Returns `true` if the specified layer was captured.
+    /// Whether `"l_out-{layer_idx}"` was captured in the last decode.
     #[must_use]
     pub fn has_layer(&self, layer_idx: usize) -> bool {
         self.captured.contains_key(&format!("l_out-{layer_idx}"))
     }
 
-    /// Number of tensors captured so far.
+    /// Number of tensors stored from the most recent decode.
     #[must_use]
     pub fn len(&self) -> usize {
         self.captured.len()
     }
 
-    /// Returns `true` if no tensors have been captured.
+    /// `true` when [`Self::len`] is zero.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.captured.is_empty()
     }
 
-    /// Iterate over all captured tensors.
+    /// Iterate `(name, tensor)` pairs from the last decode.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &CapturedTensor)> {
         self.captured.iter().map(|(k, v)| (k.as_str(), v))
     }
 
-    /// Get all captured layer indices (sorted).
+    /// Sorted layer indices present among captured `"l_out-*"` tensors.
     #[must_use]
     pub fn captured_layers(&self) -> Vec<usize> {
         let mut layers: Vec<usize> = self.captured.values().filter_map(|ct| ct.layer).collect();
@@ -255,9 +272,6 @@ impl TensorCapture {
         layers
     }
 
-    // ── Internal: callback matching ──────────────────────────────────
-
-    /// Check if a tensor name matches the capture filter.
     fn matches(&self, name: &str) -> bool {
         match &self.filter {
             CaptureFilter::Layers(indices) => {
@@ -274,7 +288,6 @@ impl TensorCapture {
         }
     }
 
-    /// Store a captured tensor.
     fn store(&mut self, name: String, ne0: usize, ne1: usize, data: Vec<f32>) {
         let layer = name
             .strip_prefix("l_out-")
@@ -293,14 +306,11 @@ impl TensorCapture {
     }
 }
 
-// ── The extern "C" callback ──────────────────────────────────────────────
-
-/// The `cb_eval` callback function passed to llama.cpp.
+/// `cb_eval` callback installed by [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture).
 ///
 /// # Safety
 ///
-/// This function is called from C code during graph evaluation.
-/// `user_data` must point to a valid `TensorCapture` instance.
+/// `user_data` must point to a live [`TensorCapture`] for the context lifetime.
 pub(crate) unsafe extern "C" fn tensor_capture_callback(
     t: *mut llama_cpp_sys_4::ggml_tensor,
     ask: bool,
@@ -310,7 +320,6 @@ pub(crate) unsafe extern "C" fn tensor_capture_callback(
         return false;
     }
 
-    // Read tensor name from the fixed-size C array
     let name_bytes = &(*t).name;
     let len = name_bytes
         .iter()
@@ -331,9 +340,8 @@ pub(crate) unsafe extern "C" fn tensor_capture_callback(
         return true;
     }
 
-    // Data phase: copy tensor data out
-    let ne0 = (*t).ne[0] as usize;
-    let ne1 = (*t).ne[1] as usize;
+    let ne0 = usize::try_from((*t).ne[0]).expect("tensor ne[0] must be non-negative");
+    let ne1 = usize::try_from((*t).ne[1]).expect("tensor ne[1] must be non-negative");
     let n_elements = ne0 * ne1;
 
     let mut buf = vec![0f32; n_elements];
@@ -407,7 +415,6 @@ mod tests {
         assert_eq!(ct.n_tokens(), 2);
         assert_eq!(ct.data, data);
 
-        // Also accessible by layer index
         let ct2 = capture.get_layer(13).unwrap();
         assert_eq!(ct2.name, ct.name);
         assert!(capture.has_layer(13));
@@ -417,7 +424,6 @@ mod tests {
     #[test]
     fn test_token_embedding() {
         let mut capture = TensorCapture::for_layers(&[5]);
-        // 2 tokens, 3 dims: token0=[1,2,3], token1=[4,5,6]
         let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         capture.store("l_out-5".to_string(), 3, 2, data);
 

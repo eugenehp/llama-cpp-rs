@@ -5,7 +5,42 @@
 //! llama.cpp. This makes it easier to keep up with the changes in llama.cpp, but does mean that
 //! the API is not as nice as it could be.
 //!
-//! # Examples
+//! # Quick start
+//!
+//! ```no_run
+//! use llama_cpp_4::prelude::*;
+//! use std::num::NonZeroU32;
+//!
+//! fn main() {
+//!     let backend = LlamaBackend::init().unwrap();
+//!     let model = LlamaModel::load_from_file(
+//!         &backend,
+//!         "model.gguf",
+//!         &LlamaModelParams::default(),
+//!     )
+//!     .unwrap();
+//!     let mut ctx = model
+//!         .new_context(
+//!             &backend,
+//!             LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048)),
+//!         )
+//!         .unwrap();
+//!
+//!     let tokens = model.str_to_token("Hello, world!", AddBos::Always).unwrap();
+//!     let mut batch = LlamaBatch::new(512, 1);
+//!     for (i, &tok) in tokens.iter().enumerate() {
+//!         batch
+//!             .add(tok, i as i32, &[0], i == tokens.len() - 1)
+//!             .unwrap();
+//!     }
+//!     ctx.decode(&mut batch).unwrap();
+//!
+//!     let token = LlamaSampler::greedy().sample(&ctx, 0);
+//!     let _piece = model.token_to_bytes(token, Special::Plaintext).unwrap();
+//! }
+//! ```
+//!
+//! # Examples in this repository
 //!
 //! - [simple](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/simple)
 //! - [chat](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/chat)
@@ -13,6 +48,25 @@
 //! - [server](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/server)
 //! - [mtp](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/mtp) — MTP speculative decoding via [`crate::mtp::MtpSession`]
 //! - [eagle](https://github.com/eugenehp/llama-cpp-rs/tree/main/examples/eagle) — EAGLE-3 speculative decoding via [`crate::eagle::Eagle3Session`]
+//!
+//! # Advanced: tensor capture
+//!
+//! Use [`TensorCapture`] with [`LlamaContextParams::with_tensor_capture`] to read
+//! per-layer hidden states (or other named graph nodes) during
+//! [`LlamaContext::decode`]. See [`context::tensor_capture`] for a full example.
+//!
+//! # Prelude
+//!
+//! For the types used in most inference programs, import [`prelude`]:
+//!
+//! ```
+//! use llama_cpp_4::prelude::*;
+//! ```
+//!
+//! The same core types are also re-exported at the crate root (e.g.
+//! [`LlamaModel`], [`LlamaBackend`]) so you can pick whichever import style
+//! you prefer. See [`prelude`] for a full list and additional examples (chat,
+//! embeddings, memory estimation).
 //!
 //! # Feature Flags
 //!
@@ -35,12 +89,14 @@ use std::string::FromUtf8Error;
 pub mod common;
 pub mod context;
 pub mod eagle;
+pub mod fit;
 #[cfg(feature = "ggml")]
 pub mod ggml;
 pub mod llama_backend;
 pub mod llama_batch;
 pub mod model;
 pub mod mtp;
+pub mod prelude;
 pub mod quantize;
 pub mod sampling;
 pub mod token;
@@ -425,7 +481,7 @@ pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
 /// Panics if the returned string is not valid UTF-8.
 #[must_use]
 pub fn model_meta_key_str(key: u32) -> String {
-    let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key.try_into().unwrap()) };
+    let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key) };
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
     c_str
         .to_str()
@@ -433,7 +489,7 @@ pub fn model_meta_key_str(key: u32) -> String {
         .to_owned()
 }
 
-/// Quantize a model file using typed [`QuantizeParams`].
+/// Quantize a model file using typed [`crate::quantize::QuantizeParams`].
 ///
 /// Returns `Ok(())` on success, or `Err(code)` with the non-zero error code
 /// returned by `llama_model_quantize`.
@@ -441,6 +497,11 @@ pub fn model_meta_key_str(key: u32) -> String {
 /// # Panics
 ///
 /// Panics if either path contains an interior null byte.
+///
+/// # Errors
+///
+/// Returns `Err(code)` with the non-zero status code from `llama_model_quantize`
+/// when quantization fails.
 ///
 /// # Example
 ///
@@ -469,15 +530,6 @@ pub fn model_quantize(
     } else {
         Err(rc)
     }
-}
-
-/// Get default quantization parameters (raw sys type).
-///
-/// Prefer [`QuantizeParams::new`] for the typed Rust API.
-#[must_use]
-#[deprecated(since = "0.2.19", note = "use `QuantizeParams::new` instead")]
-pub fn model_quantize_default_params() -> llama_cpp_sys_4::llama_model_quantize_params {
-    unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() }
 }
 
 /// Set the log callback.
@@ -556,30 +608,34 @@ pub unsafe fn opt_param_filter_all(
     llama_cpp_sys_4::llama_opt_param_filter_all(tensor, userdata)
 }
 
-/// Auto-fit model and context parameters for available memory.
-///
-/// # Safety
-///
-/// All pointers must be valid.
-#[allow(clippy::too_many_arguments)]
-pub unsafe fn params_fit(
-    path_model: *const std::ffi::c_char,
-    mparams: *mut llama_cpp_sys_4::llama_model_params,
-    cparams: *mut llama_cpp_sys_4::llama_context_params,
-    tensor_split: *mut f32,
-    tensor_buft_overrides: *mut llama_cpp_sys_4::llama_model_tensor_buft_override,
-    margins: *mut usize,
-    n_ctx_min: u32,
-    log_level: llama_cpp_sys_4::ggml_log_level,
-) -> llama_cpp_sys_4::common_params_fit_status {
-    llama_cpp_sys_4::common_fit_params(
-        path_model,
-        mparams,
-        cparams,
-        tensor_split,
-        tensor_buft_overrides,
-        margins,
-        n_ctx_min,
-        log_level,
-    )
-}
+// ── Crate-root re-exports (see also [`prelude`]) ────────────────────────────
+//
+// These mirror the most common [`prelude`] exports so callers can write
+// `llama_cpp_4::LlamaModel` without a glob import.
+
+/// Parameters used when creating a context.
+pub use context::params::LlamaContextParams;
+/// One captured intermediate tensor from [`TensorCapture`].
+pub use context::CapturedTensor;
+/// An inference context tied to a model.
+pub use context::LlamaContext;
+/// Per-buffer memory usage entry from [`LlamaContext::memory_breakdown`].
+pub use context::MemoryBreakdownEntry;
+/// Hook `cb_eval` during decode to copy named graph tensors (layer hidden states, …).
+pub use context::TensorCapture;
+/// Initialise the llama.cpp backend and hardware drivers.
+pub use llama_backend::LlamaBackend;
+/// Micro-batch submitted to [`LlamaContext::decode`].
+pub use llama_batch::LlamaBatch;
+/// Parameters used when loading a model.
+pub use model::params::LlamaModelParams;
+/// Controls whether tokenisation prepends a BOS token.
+pub use model::AddBos;
+/// A loaded GGUF model.
+pub use model::LlamaModel;
+/// Controls how special tokens are rendered as text.
+pub use model::Special;
+/// Sampler chain for token selection.
+pub use sampling::LlamaSampler;
+/// A single vocabulary token id.
+pub use token::LlamaToken;

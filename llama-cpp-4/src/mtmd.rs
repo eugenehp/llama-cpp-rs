@@ -2,7 +2,7 @@
 //!
 //! `libmtmd` extends llama.cpp with the ability to encode image and audio
 //! inputs (bitmaps) into token embeddings that can then be fed into a
-//! standard [`llama_decode`] call alongside normal text tokens.
+//! standard [`crate::context::LlamaContext::decode`] call alongside normal text tokens.
 //!
 //! # Quick-start
 //!
@@ -51,6 +51,7 @@
 //! This module is only compiled when the `mtmd` Cargo feature is enabled.
 
 use std::ffi::{CStr, CString};
+use std::os::raw::c_void;
 use std::path::Path;
 use std::ptr::NonNull;
 use std::slice;
@@ -107,6 +108,12 @@ pub enum MtmdError {
 
 /// A convenience `Result` alias for this module.
 pub type Result<T> = std::result::Result<T, MtmdError>;
+
+/// Progress callback invoked while the CLIP/mmproj weights are loading.
+///
+/// Receives a value in `[0.0, 1.0]`. Return `true` to continue loading or
+/// `false` to abort immediately.
+pub type MtmdProgressCallback = unsafe extern "C" fn(progress: f32, user_data: *mut c_void) -> bool;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MtmdContextParams
@@ -180,6 +187,84 @@ impl MtmdContextParams {
     #[must_use]
     pub fn image_max_tokens(mut self, n: i32) -> Self {
         self.params.image_max_tokens = n;
+        self
+    }
+
+    /// Maximum number of multimodal output tokens per batch.
+    ///
+    /// Maps to `mtmd_context_params.batch_max_tokens`. The upstream default
+    /// is `1024`. Increase for large images or long audio segments.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "mtmd")]
+    /// # {
+    /// use llama_cpp_4::mtmd::MtmdContextParams;
+    /// let params = MtmdContextParams::default().with_batch_max_tokens(2048);
+    /// assert_eq!(params.batch_max_tokens(), 2048);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_batch_max_tokens(mut self, n: i32) -> Self {
+        self.params.batch_max_tokens = n;
+        self
+    }
+
+    /// Get the configured batch token cap (`batch_max_tokens`).
+    #[must_use]
+    pub fn batch_max_tokens(&self) -> i32 {
+        self.params.batch_max_tokens
+    }
+
+    /// Set flash-attention mode for the vision encoder.
+    ///
+    /// Maps to `mtmd_context_params.flash_attn_type`. Uses the same
+    /// [`crate::context::params::LlamaFlashAttnType`] enum as text contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "mtmd")]
+    /// # {
+    /// use llama_cpp_4::context::params::LlamaFlashAttnType;
+    /// use llama_cpp_4::mtmd::MtmdContextParams;
+    /// let params = MtmdContextParams::default()
+    ///     .with_flash_attn_type(LlamaFlashAttnType::Auto);
+    /// assert_eq!(params.flash_attn_type(), LlamaFlashAttnType::Auto);
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_flash_attn_type(
+        mut self,
+        flash_attn_type: crate::context::params::LlamaFlashAttnType,
+    ) -> Self {
+        self.params.flash_attn_type = flash_attn_type.into();
+        self
+    }
+
+    /// Get flash-attention mode for the vision encoder.
+    #[must_use]
+    pub fn flash_attn_type(&self) -> crate::context::params::LlamaFlashAttnType {
+        crate::context::params::LlamaFlashAttnType::from(self.params.flash_attn_type)
+    }
+
+    /// Register a callback invoked while mmproj weights load.
+    ///
+    /// Maps to `mtmd_context_params.progress_callback`. Pass `None` to disable
+    /// progress reporting. The callback may return `false` to abort loading
+    /// early; see [`MtmdProgressCallback`].
+    ///
+    /// `user_data` is forwarded to each invocation and must remain valid until
+    /// [`MtmdContext::init_from_file`] returns.
+    #[must_use]
+    pub fn with_progress_callback(
+        mut self,
+        callback: Option<MtmdProgressCallback>,
+        user_data: *mut c_void,
+    ) -> Self {
+        self.params.progress_callback = callback;
+        self.params.progress_callback_user_data = user_data;
         self
     }
 
@@ -361,15 +446,8 @@ impl MtmdContext {
             .unwrap_or_else(|_| Self::default_marker())
     }
 
-    /// Returns the audio sample rate in Hz (e.g. 16 000 for Whisper), or
-    /// `-1` if audio is not supported.
-    #[must_use]
-    #[deprecated(note = "use audio_sample_rate() instead")]
-    pub fn audio_bitrate(&self) -> i32 {
-        self.audio_sample_rate()
-    }
-
-    /// Returns the audio sample rate in Hz.
+    /// Returns the audio sample rate in Hz (e.g. `16_000` for Whisper), or `-1` if
+    /// audio is not supported.
     #[must_use]
     pub fn audio_sample_rate(&self) -> i32 {
         unsafe { sys::mtmd_get_audio_sample_rate(self.ptr.as_ptr()) }
@@ -393,7 +471,7 @@ impl MtmdContext {
     /// Tokenize a text prompt that contains one or more media markers.
     ///
     /// The number of `bitmaps` must equal the number of media markers in the
-    /// prompt text, otherwise [`MtmdError::TokenizeError(1)`] is returned.
+    /// prompt text, otherwise [`MtmdError::TokenizeError`] with code `1` is returned.
     ///
     /// This call is **thread-safe** (shared `&self`).
     ///
@@ -1019,7 +1097,9 @@ pub struct MtmdVideo {
 
 impl std::fmt::Debug for MtmdVideo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("MtmdVideo").field("info", &self.info()).finish()
+        f.debug_struct("MtmdVideo")
+            .field("info", &self.info())
+            .finish()
     }
 }
 
@@ -1096,7 +1176,11 @@ impl MtmdVideo {
         let mut out_bitmap: *mut sys::mtmd_bitmap = std::ptr::null_mut();
         let mut out_text: *mut std::os::raw::c_char = std::ptr::null_mut();
         let ret = unsafe {
-            sys::mtmd_helper_video_read_next(self.ptr.as_ptr(), &raw mut out_bitmap, &raw mut out_text)
+            sys::mtmd_helper_video_read_next(
+                self.ptr.as_ptr(),
+                &raw mut out_bitmap,
+                &raw mut out_text,
+            )
         };
         match ret {
             0 => {

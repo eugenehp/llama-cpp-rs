@@ -72,9 +72,6 @@ pub struct CommonParams {
     /// `YaRN` original context length
     pub yarn_orig_ctx: i32,
 
-    /// KV cache defragmentation threshold
-    pub defrag_thold: f32,
-
     /// prompt for the model to consume
     pub prompt: String,
 }
@@ -100,7 +97,6 @@ impl Default for CommonParams {
             yarn_beta_fast: 32.0,
             yarn_beta_slow: 1.0,
             yarn_orig_ctx: 0,
-            defrag_thold: 0.1,
             prompt: String::new(),
         }
     }

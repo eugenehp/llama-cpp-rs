@@ -1,122 +1,38 @@
 //! A safe wrapper around `llama_context_params`.
-use std::fmt::Debug;
+//!
+//! Use [`LlamaContextParams`] to configure context size, batching, KV layout,
+//! `RoPE` / `YaRN` scaling, flash attention, per-sequence samplers, and pairing
+//! with another context (`ctx_other`).
+mod advanced;
+mod types;
+
+pub use types::*;
+
 use std::num::NonZeroU32;
 
-/// A rusty wrapper around `llama_context_type`.
-//
-// Cast the sys constants to `u32` so the discriminants compile on both clang
-// (where bindgen emits `c_uint`) and MSVC (where it emits `c_int`).
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum LlamaContextType {
-    /// Default context (standard inference).
-    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT as u32,
-    /// Multi-token-prediction draft context, used as the draft side of
-    /// speculative decoding. Pair with [`crate::mtp::MtpSession`].
-    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP as u32,
+use thiserror::Error;
+
+use crate::sampling::LlamaSampler;
+
+/// Error returned when [`LlamaContextParams::try_clone`] cannot duplicate state.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ParamsCloneError {
+    /// Per-sequence sampler chains cannot be duplicated.
+    #[error("cannot clone params that own per-sequence sampler chains")]
+    SamplerChains,
 }
 
-impl From<llama_cpp_sys_4::llama_context_type> for LlamaContextType {
-    fn from(value: llama_cpp_sys_4::llama_context_type) -> Self {
-        if value == llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP {
-            Self::Mtp
-        } else {
-            Self::Default
-        }
-    }
-}
-
-impl From<LlamaContextType> for llama_cpp_sys_4::llama_context_type {
-    fn from(value: LlamaContextType) -> Self {
-        value as u32 as Self
-    }
-}
-
-/// A rusty wrapper around `rope_scaling_type`.
-#[repr(i8)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum RopeScalingType {
-    /// The scaling type is unspecified
-    Unspecified = -1,
-    /// No scaling
-    None = 0,
-    /// Linear scaling
-    Linear = 1,
-    /// Yarn scaling
-    Yarn = 2,
-}
-
-/// Create a `RopeScalingType` from a `c_int` - returns `RopeScalingType::ScalingUnspecified` if
-/// the value is not recognized.
-impl From<i32> for RopeScalingType {
-    fn from(value: i32) -> Self {
-        match value {
-            0 => Self::None,
-            1 => Self::Linear,
-            2 => Self::Yarn,
-            _ => Self::Unspecified,
-        }
-    }
-}
-
-/// Create a `c_int` from a `RopeScalingType`.
-impl From<RopeScalingType> for i32 {
-    fn from(value: RopeScalingType) -> Self {
-        match value {
-            RopeScalingType::None => 0,
-            RopeScalingType::Linear => 1,
-            RopeScalingType::Yarn => 2,
-            RopeScalingType::Unspecified => -1,
-        }
-    }
-}
-
-/// A rusty wrapper around `LLAMA_POOLING_TYPE`.
-#[repr(i8)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum LlamaPoolingType {
-    /// The pooling type is unspecified
-    Unspecified = -1,
-    /// No pooling    
-    None = 0,
-    /// Mean pooling
-    Mean = 1,
-    /// CLS pooling
-    Cls = 2,
-    /// Last pooling
-    Last = 3,
-}
-
-/// Create a `LlamaPoolingType` from a `c_int` - returns `LlamaPoolingType::Unspecified` if
-/// the value is not recognized.
-impl From<i32> for LlamaPoolingType {
-    fn from(value: i32) -> Self {
-        match value {
-            0 => Self::None,
-            1 => Self::Mean,
-            2 => Self::Cls,
-            3 => Self::Last,
-            _ => Self::Unspecified,
-        }
-    }
-}
-
-/// Create a `c_int` from a `LlamaPoolingType`.
-impl From<LlamaPoolingType> for i32 {
-    fn from(value: LlamaPoolingType) -> Self {
-        match value {
-            LlamaPoolingType::None => 0,
-            LlamaPoolingType::Mean => 1,
-            LlamaPoolingType::Cls => 2,
-            LlamaPoolingType::Last => 3,
-            LlamaPoolingType::Unspecified => -1,
-        }
-    }
-}
-
-/// A safe wrapper around `llama_context_params`.
+/// Builder for [`llama_context_params`](llama_cpp_sys_4::llama_context_params).
 ///
-/// Generally this should be created with [`Default::default()`] and then modified with `with_*` methods.
+/// Construct with [`Default::default()`], chain `with_*` setters, then pass the
+/// value to [`crate::model::LlamaModel::new_context`]. Getter methods mirror
+/// the fields that exist on the underlying C struct.
+///
+/// # Sampler ownership
+///
+/// [`Self::with_sampler_seq_configs`] stores owned [`LlamaSampler`] chains inside
+/// this struct until the context is created. [`Clone`] clears sampler configs
+/// because the underlying chains cannot be duplicated safely.
 ///
 /// # Examples
 ///
@@ -129,7 +45,7 @@ impl From<LlamaPoolingType> for i32 {
 ///
 /// assert_eq!(ctx_params.n_ctx(), NonZeroU32::new(2048));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(
     missing_docs,
     clippy::struct_excessive_bools,
@@ -140,6 +56,9 @@ pub struct LlamaContextParams {
     /// When `true`, the `TurboQuant` attention rotation (PR #21038) will be
     /// disabled for any context created from these params.
     pub(crate) attn_rot_disabled: bool,
+    /// Keeps sampler chains alive while `context_params.samplers` points at them.
+    owned_samplers: Vec<LlamaSampler>,
+    sampler_configs: Vec<llama_cpp_sys_4::llama_sampler_seq_config>,
 }
 
 /// SAFETY: we do not currently allow setting or reading the pointers that cause this to not be automatically send or sync.
@@ -177,7 +96,7 @@ impl LlamaContextParams {
     pub fn n_ctx(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.context_params.n_ctx)
     }
-    
+
     /// Set the maximum number of independent sequence states in the context.
     ///
     /// This maps to llama.cpp's `llama_context_params.n_seq_max` and must match
@@ -197,7 +116,7 @@ impl LlamaContextParams {
         self
     }
 
-    /// Get the maximum number of independent sequence states in the context.
+    /// Get the configured maximum number of independent sequence states.
     #[must_use]
     pub fn n_seq_max(&self) -> u32 {
         self.context_params.n_seq_max
@@ -293,40 +212,6 @@ impl LlamaContextParams {
     #[must_use]
     pub fn n_rs_seq(&self) -> u32 {
         self.context_params.n_rs_seq
-    }
-
-    /// Set the `flash_attention` parameter
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use llama_cpp_4::context::params::LlamaContextParams;
-    /// let params = LlamaContextParams::default()
-    ///     .with_flash_attention(true);
-    /// assert_eq!(params.flash_attention(), true);
-    /// ```
-    #[must_use]
-    pub fn with_flash_attention(mut self, enabled: bool) -> Self {
-        self.context_params.flash_attn_type = if enabled {
-            llama_cpp_sys_4::LLAMA_FLASH_ATTN_TYPE_ENABLED
-        } else {
-            llama_cpp_sys_4::LLAMA_FLASH_ATTN_TYPE_DISABLED
-        };
-        self
-    }
-
-    /// Get the `flash_attention` parameter
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use llama_cpp_4::context::params::LlamaContextParams;
-    /// let params = LlamaContextParams::default();
-    /// assert_eq!(params.flash_attention(), false);
-    /// ```
-    #[must_use]
-    pub fn flash_attention(&self) -> bool {
-        self.context_params.flash_attn_type == llama_cpp_sys_4::LLAMA_FLASH_ATTN_TYPE_ENABLED
     }
 
     /// Set the `offload_kqv` parameter to control offloading KV cache & KQV ops to GPU
@@ -575,22 +460,33 @@ impl LlamaContextParams {
     }
 
     /// Attach a [`TensorCapture`](super::tensor_capture::TensorCapture) to
-    /// intercept intermediate tensor outputs during `decode()`.
+    /// intercept intermediate tensor outputs during [`crate::LlamaContext::decode`].
     ///
-    /// This sets up the `cb_eval` callback to capture tensors matching the
-    /// capture's filter (e.g. specific layer outputs). After `decode()` the
-    /// captured data can be read from the `TensorCapture`.
+    /// Sets `cb_eval` to copy tensors matching the capture filter (layer outputs,
+    /// named nodes, prefix, or all). After `decode()`, read results from the
+    /// capture — see [`crate::TensorCapture`] and [`crate::context::tensor_capture`].
+    ///
+    /// The capture must outlive the context. Call [`TensorCapture::clear`](crate::TensorCapture::clear) before
+    /// reusing it on another batch.
     ///
     /// # Example
     ///
-    /// ```rust,ignore
-    /// use llama_cpp_4::context::params::LlamaContextParams;
-    /// use llama_cpp_4::context::tensor_capture::TensorCapture;
+    /// ```no_run
+    /// use llama_cpp_4::prelude::*;
     ///
-    /// let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
-    /// let ctx_params = LlamaContextParams::default()
-    ///     .with_embeddings(true)
-    ///     .with_tensor_capture(&mut capture);
+    /// fn main() {
+    ///     let backend = LlamaBackend::init().unwrap();
+    ///     let model = LlamaModel::load_from_file(
+    ///         &backend,
+    ///         "model.gguf",
+    ///         &LlamaModelParams::default(),
+    ///     )
+    ///     .unwrap();
+    ///
+    ///     let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
+    ///     let ctx_params = LlamaContextParams::default().with_tensor_capture(&mut capture);
+    ///     let _ctx = model.new_context(&backend, ctx_params).unwrap();
+    /// }
     /// ```
     #[must_use]
     pub fn with_tensor_capture(self, capture: &mut super::tensor_capture::TensorCapture) -> Self {
@@ -715,6 +611,23 @@ impl LlamaContextParams {
     pub fn pooling_type(&self) -> LlamaPoolingType {
         LlamaPoolingType::from(self.context_params.pooling_type)
     }
+
+    /// Clone these params, failing when sampler chains are attached.
+    ///
+    /// Prefer this over [`Clone::clone`] when you need to detect dropped sampler
+    /// configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParamsCloneError::SamplerChains`] when per-sequence sampler
+    /// chains are attached and cannot be duplicated.
+    pub fn try_clone(&self) -> Result<Self, ParamsCloneError> {
+        if self.sampler_configs.is_empty() {
+            Ok(self.clone())
+        } else {
+            Err(ParamsCloneError::SamplerChains)
+        }
+    }
 }
 
 /// Default parameters for `LlamaContext`. (as defined in llama.cpp by `llama_context_default_params`)
@@ -731,6 +644,28 @@ impl Default for LlamaContextParams {
         Self {
             context_params,
             attn_rot_disabled: false,
+            owned_samplers: Vec::new(),
+            sampler_configs: Vec::new(),
+        }
+    }
+}
+
+/// Duplicate context params for reuse.
+///
+/// Sampler chains attached via [`LlamaContextParams::with_sampler_seq_configs`]
+/// are **not** cloned — the copy clears `samplers` / `n_samplers` because the
+/// underlying C chains cannot be duplicated safely.
+impl Clone for LlamaContextParams {
+    fn clone(&self) -> Self {
+        let mut context_params = self.context_params;
+        // Sampler chains cannot be duplicated here; cloned params omit them.
+        context_params.samplers = std::ptr::null_mut();
+        context_params.n_samplers = 0;
+        Self {
+            context_params,
+            attn_rot_disabled: self.attn_rot_disabled,
+            owned_samplers: Vec::new(),
+            sampler_configs: Vec::new(),
         }
     }
 }

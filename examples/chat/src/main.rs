@@ -1,20 +1,21 @@
-//! This is a translation of simple.cpp in llama.cpp using llama-cpp-4.
+//! Interactive multi-turn chat using the model's built-in chat template.
 //!
-//! inspired by <https://github.com/ggerganov/llama.cpp/blob/master/examples/simple-chat/simple-chat.cpp>
-//! TODO: add chat template <https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template>
+//! Uses [`LlamaModel::apply_chat_template`] so formatting matches the GGUF
+//! metadata (Llama, Qwen, Mistral, …) instead of raw user text.
 //!
 //! ```console
-//! cargo run local ../../qwen2-1_5b-instruct-q4_0.gguf
+//! cargo run -p chat -- local path/to/model.gguf
+//! cargo run -p chat -- hf-model bartowski/Llama-3.2-1B-Instruct-GGUF Q4_K_M
 //! ```
 //!
-//! gives
+//! Example session:
 //!
-//! ```console
+//! ```text
 //! user
 //! hello
 //!
 //! assistant
-//! Hello! How can I assist you today? If you have any questions or need help with something, feel free to ask. I'm here to help.
+//! Hello! How can I help you today?
 //!
 //! user
 //! ```
@@ -29,14 +30,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use colored::Colorize;
 use hf_hub::api::sync::ApiBuilder;
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::kv_overrides::ParamOverrideValue;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::LlamaModel;
-use llama_cpp_4::model::{AddBos, Special};
-use llama_cpp_4::sampling::LlamaSampler;
+use llama_cpp_4::prelude::*;
 // use llama_cpp_sys_4::LLAMA_DEFAULT_SEED;
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -189,13 +183,16 @@ fn main() -> Result<()> {
     #[allow(unused)]
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::common(), LlamaSampler::greedy()]);
 
-    // tokenize the prompt
-    let mut generate = |prompt: String| -> Result<String> {
+    let mut messages: Vec<LlamaChatMessage> = Vec::new();
+
+    let mut generate = |prompt: &str| -> Result<String> {
         let mut output: String = String::new();
 
+        ctx.clear_kv_cache();
+
         let tokens_list = model
-            .str_to_token(&prompt, AddBos::Always)
-            .with_context(|| format!("failed to tokenize {prompt}"))?;
+            .str_to_token(prompt, AddBos::Always)
+            .with_context(|| "failed to tokenize prompt".to_string())?;
 
         let n_cxt = ctx.n_ctx() as i32;
         let n_kv_req = tokens_list.len() as i32 + (n_len - tokens_list.len() as i32);
@@ -264,12 +261,32 @@ fn main() -> Result<()> {
     };
 
     loop {
-        let mut prompt = String::new();
+        let mut line = String::new();
         println!("\n{}", "user".green());
-        std::io::stdin().read_line(&mut prompt)?;
+        std::io::stdin().read_line(&mut line)?;
 
-        let response = generate(prompt)?;
+        let user_text = line.trim();
+        if user_text.is_empty() {
+            continue;
+        }
+
+        let user_msg = LlamaChatMessage::new("user".into(), user_text.into())
+            .context("invalid user message")?;
+
+        let mut turn_messages = messages.clone();
+        turn_messages.push(user_msg.clone());
+
+        let prompt = model
+            .apply_chat_template(None, &turn_messages, true)
+            .context("failed to apply chat template")?;
+
+        let response = generate(&prompt)?;
         println!("\n{}", "assistant".red());
         println!("{}", response.white());
+
+        let asst_msg = LlamaChatMessage::new("assistant".into(), response)
+            .context("invalid assistant message")?;
+        messages.push(user_msg);
+        messages.push(asst_msg);
     }
 }

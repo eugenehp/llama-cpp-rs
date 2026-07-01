@@ -20,12 +20,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::LlamaModel;
-use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::prelude::*;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 

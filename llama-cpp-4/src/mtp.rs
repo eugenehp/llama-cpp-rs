@@ -75,9 +75,20 @@
 //! | [`MtpSession::need_embd_pre_norm`] | `true` | Next-n hidden states (upstream name) |
 //! | [`MtpSession::need_embd`] | `false` | Post-norm / seq embeddings not used |
 //!
-//! Rust keeps `*_pre_norm` names; upstream C API uses `*_nextn` since the Jun 2026
-//! llama.cpp bump. Session init configures extraction on both contexts automatically;
-//! manual [`LlamaContext::set_embeddings_pre_norm`] is rarely needed.
+//! # Multi-head `NextN` (Step3.5+)
+//!
+//! When [`crate::model::LlamaModel::n_layer_nextn`] returns a value greater than `1`, set the
+//! draft context head before each [`MtpSession::draft`] call:
+//!
+//! ```ignore
+//! for head in 0..model.n_layer_nextn() {
+//!     draft.set_nextn_layer_offset(head);
+//!     let drafts = session.draft(0, n_past, last_token)?;
+//!     // verify on target ...
+//! }
+//! draft.set_nextn_layer_offset(0); // restore default
+//! ```
+//!
 
 use std::ptr::NonNull;
 
@@ -256,7 +267,7 @@ impl MtpSession {
             n_draft_max: config.n_draft_max,
             n_min: config.n_min,
             p_min: config.p_min,
-            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP as i32,
+            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP.cast_signed(),
         };
 
         let raw = unsafe {
@@ -345,6 +356,10 @@ impl MtpSession {
     /// ```ignore
     /// session.begin(0, &prompt_tokens)?;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtpSessionError::BadSeqId`] if `seq_id` is out of range.
     pub fn begin(&mut self, seq_id: i32, prompt: &[LlamaToken]) -> Result<(), MtpSessionError> {
         self.check_seq(seq_id)?;
         unsafe {
@@ -369,9 +384,14 @@ impl MtpSession {
     /// target.decode(&mut batch)?;
     /// session.process(&batch)?;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtpSessionError::Process`] when upstream rejects the batch.
     pub fn process(&mut self, batch: &LlamaBatch) -> Result<(), MtpSessionError> {
-        let ok =
-            unsafe { llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &batch.llama_batch) };
+        let ok = unsafe {
+            llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &raw const batch.llama_batch)
+        };
         if ok {
             Ok(())
         } else {
@@ -393,6 +413,10 @@ impl MtpSession {
     ///     // verify each draft against target logits ...
     /// }
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtpSessionError::BadSeqId`] if `seq_id` is out of range.
     pub fn draft(
         &mut self,
         seq_id: i32,
@@ -401,9 +425,9 @@ impl MtpSession {
     ) -> Result<Vec<LlamaToken>, MtpSessionError> {
         self.check_seq(seq_id)?;
 
-        let cap = self.config.n_draft_max.max(0) as usize;
+        let cap = usize::try_from(self.config.n_draft_max.max(0)).unwrap_or(0);
         let mut buf: Vec<i32> = vec![0; cap];
-        let mut out_n: i32 = cap as i32;
+        let mut out_n = i32::try_from(cap).unwrap_or(i32::MAX);
 
         unsafe {
             llama_cpp_sys_4::mtp_session_draft(
@@ -412,11 +436,11 @@ impl MtpSession {
                 n_past,
                 id_last.0,
                 buf.as_mut_ptr(),
-                &mut out_n,
+                &raw mut out_n,
             );
         }
 
-        let n = out_n.max(0) as usize;
+        let n = usize::try_from(out_n.max(0)).unwrap_or(0);
         buf.truncate(n);
         Ok(buf.into_iter().map(LlamaToken).collect())
     }
@@ -431,6 +455,10 @@ impl MtpSession {
     /// ```ignore
     /// session.accept(0, n_accepted)?;
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtpSessionError::BadSeqId`] if `seq_id` is out of range.
     pub fn accept(&mut self, seq_id: i32, n_accepted: u16) -> Result<(), MtpSessionError> {
         self.check_seq(seq_id)?;
         unsafe {
@@ -440,7 +468,7 @@ impl MtpSession {
     }
 
     fn check_seq(&self, seq_id: i32) -> Result<(), MtpSessionError> {
-        if seq_id < 0 || (seq_id as u32) >= self.config.n_seq {
+        if seq_id < 0 || seq_id.cast_unsigned() >= self.config.n_seq {
             return Err(MtpSessionError::BadSeqId {
                 seq_id,
                 n_seq: self.config.n_seq,
@@ -461,6 +489,6 @@ impl std::fmt::Debug for MtpSession {
         f.debug_struct("MtpSession")
             .field("config", &self.config)
             .field("need_embd_pre_norm", &self.need_embd_pre_norm())
-            .finish()
+            .finish_non_exhaustive()
     }
 }

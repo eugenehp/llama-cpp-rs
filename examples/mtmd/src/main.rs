@@ -23,13 +23,7 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use llama_cpp_4::{
-    context::params::LlamaContextParams,
-    llama_backend::LlamaBackend,
-    model::{params::LlamaModelParams, LlamaModel, Special},
-    mtmd::{MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText},
-    token::LlamaToken,
-};
+use llama_cpp_4::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CLI

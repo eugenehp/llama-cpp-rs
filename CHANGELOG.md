@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+## [0.4.0] - 2026-07-01
+
+### Removed (breaking)
+- **`LlamaContextParams::with_flash_attention` / `flash_attention`** — use
+  `with_flash_attn_type` / `flash_attn_type` with [`LlamaFlashAttnType`].
+- **`LlamaContextParams::with_defrag_thold` / `defrag_thold`** — upstream removed
+  the field from active use; leave the C default (`-1.0`, disabled).
+- **`CommonParams::defrag_thold`**.
+- **`LlamaSampler::grammar_lazy`** — use `grammar_lazy_patterns`.
+- **`MtmdContext::audio_bitrate`** — use `audio_sample_rate`.
+- **`llama_cpp_4::params_fit`** — use `llama_cpp_4::fit::fit_params`.
+- **`llama_cpp_4::model_quantize_default_params`** — use `QuantizeParams::new`.
+
+### Added
+- **llama.cpp**: vendored submodule updated to `4fc4ec5` (tag `b9859`).
+- **Context params** (`llama-cpp-4`): flash attention, attention type, `n_outputs_max`,
+  `kv_unified`, `swa_full`, `op_offload`, `ctx_other`, YaRN fields, `no_perf`, abort
+  callback, per-sequence sampler configs, and `LlamaPoolingType::Rank`.
+- **Context** (`llama-cpp-4`): `memory_breakdown()`, layer input embeddings,
+  `set_nextn_layer_offset()`, `ctx_other()`; [`TensorCapture`] for `cb_eval` hooks.
+- **Model** (`llama-cpp-4`): `n_layer_nextn()`, `n_expert()`, `n_devices()`,
+  `get_device()` / `LlamaBackendDevice`, `target_layer_ids()`, `devices()` iterator.
+- **Fit** (`llama-cpp-4`): `fit::get_device_memory_data` for per-device memory estimates;
+  `fit::fit_params` safe wrapper around `common_fit_params`.
+- **Prelude** (`llama-cpp-4`): `llama_cpp_4::prelude` re-exports common inference types;
+  expanded re-exports (`ParamOverrideValue`, `TensorTypeOverride`, `LlamaTokenDataArray`,
+  `RpcServer`, …).
+- **mtmd** (`llama-cpp-4`): `batch_max_tokens`, flash attention, progress callback.
+- **sys** (`llama-cpp-sys-4`): `ext_shim` for structured memory breakdown and fit helpers.
+- **Prebuilt download** (`llama-cpp-sys-4`): `--features prebuilt` downloads matching
+  GitHub release tarballs into `target/llama-prebuilt-cache/` (or uses `LLAMA_PREBUILT_DIR`);
+  falls back to local CMake when no asset exists. Script: `scripts/fetch-prebuilt.sh`.
+- **Integration tests** (`llama-cpp-4`): GGUF end-to-end suite (`test_integration`) with
+  `scripts/fetch-test-model.sh` and CI job.
+
+### Changed
+- **`LlamaContextParams`**: split into `params::{types,advanced}` submodules; added
+  `try_clone()`.
+- **READMEs**: updated to crate `0.4.0` and llama.cpp `4fc4ec5` (`b9859`); prelude-first
+  quick-start, runnable rustdoc examples, and corrected API snippets.
+- **Examples**: migrated to `llama_cpp_4::prelude`; chat example uses `apply_chat_template`.
+
+### Fixed
+- **`LlamaContextParams: Clone`**: manual impl clears sampler chains so `params.clone()`
+  works in examples such as `incremental-chat`.
+
 ## [0.3.2] - 2026-06-20
 
 ### Changed

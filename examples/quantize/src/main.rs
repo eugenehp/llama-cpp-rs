@@ -30,15 +30,12 @@
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::quantize::{
-    attn_rot_disabled, set_attn_rot_disabled, GgmlType, LlamaFtype, QuantizeParams,
-    TensorTypeOverride,
-};
+use llama_cpp_4::prelude::*;
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
 #[derive(clap::Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 #[command(about = "Quantize a GGUF model to a smaller precision")]
 struct Args {
     /// Input model file (F16 or F32 GGUF)
@@ -148,11 +145,8 @@ fn parse_ggml_type(s: &str) -> Option<GgmlType> {
         "IQ2XXS" | "IQ2_XXS" => Some(GgmlType::IQ2XXS),
         "IQ2XS" | "IQ2_XS" => Some(GgmlType::IQ2XS),
         "IQ2S" | "IQ2_S" => Some(GgmlType::IQ2S),
-        "IQ2M" | "IQ2_M" => None, // llama_ftype only, not a raw ggml tensor type
         "IQ3XXS" | "IQ3_XXS" => Some(GgmlType::IQ3XXS),
-        "IQ3XS" | "IQ3_XS" => None, // llama_ftype only
         "IQ3S" | "IQ3_S" => Some(GgmlType::IQ3S),
-        "IQ3M" | "IQ3_M" => None, // llama_ftype only
         "IQ4NL" | "IQ4_NL" => Some(GgmlType::IQ4NL),
         "IQ4XS" | "IQ4_XS" => Some(GgmlType::IQ4XS),
         "TQ1_0" | "TQ1" => Some(GgmlType::TQ1_0),

@@ -6,13 +6,7 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use llama_cpp_4::{
-    context::params::LlamaContextParams,
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, LlamaModel, Special},
-    token::data_array::LlamaTokenDataArray,
-};
+use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -188,13 +182,15 @@ fn generate_text(model: &LlamaModel, prompt: &str) -> Result<()> {
     ctx.decode(&mut batch).context("Failed to decode batch")?;
 
     // Generate 128 tokens
-    let mut n_cur = batch.n_tokens();
     let max_tokens = 128;
 
     print!("{}", prompt);
     std::io::stdout().flush()?;
 
-    for _ in 0..max_tokens {
+    for n_cur in batch.n_tokens().. {
+        if n_cur - batch.n_tokens() >= max_tokens {
+            break;
+        }
         // Sample next token
         let candidates = ctx.candidates();
         let mut candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
@@ -219,9 +215,6 @@ fn generate_text(model: &LlamaModel, prompt: &str) -> Result<()> {
         batch.clear();
         batch.add(new_token_id, n_cur, &[0], true)?;
 
-        n_cur += 1;
-
-        // Decode the batch
         ctx.decode(&mut batch).context("Failed to decode batch")?;
     }
 

@@ -6,21 +6,24 @@ use std::num::NonZeroU16;
 use std::os::raw::{c_char, c_int};
 use std::path::Path;
 use std::ptr::NonNull;
+use std::slice;
 
 use llama_cpp_sys_4::{
     llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template,
     llama_chat_builtin_templates, llama_chat_message, llama_detokenize, llama_init_from_model,
     llama_model, llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
-    llama_model_free, llama_model_get_vocab, llama_model_has_decoder, llama_model_has_encoder,
-    llama_model_is_diffusion, llama_model_is_hybrid, llama_model_is_recurrent,
-    llama_model_load_from_file, llama_model_load_from_splits, llama_model_meta_count,
-    llama_model_meta_key_by_index, llama_model_meta_val_str, llama_model_meta_val_str_by_index,
-    llama_model_n_cls_out, llama_model_n_ctx_train, llama_model_n_embd, llama_model_n_embd_inp,
-    llama_model_n_embd_out, llama_model_n_head, llama_model_n_head_kv, llama_model_n_layer,
-    llama_model_n_params, llama_model_n_swa, llama_model_rope_freq_scale_train,
-    llama_model_rope_type, llama_model_save_to_file, llama_model_size, llama_split_path,
-    llama_split_prefix, llama_token_to_piece, llama_tokenize, llama_vocab, llama_vocab_type,
-    LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
+    llama_model_free, llama_model_get_device, llama_model_get_vocab, llama_model_has_decoder,
+    llama_model_has_encoder, llama_model_is_diffusion, llama_model_is_hybrid,
+    llama_model_is_recurrent, llama_model_load_from_file, llama_model_load_from_splits,
+    llama_model_meta_count, llama_model_meta_key_by_index, llama_model_meta_val_str,
+    llama_model_meta_val_str_by_index, llama_model_n_cls_out, llama_model_n_ctx_train,
+    llama_model_n_devices, llama_model_n_embd, llama_model_n_embd_inp, llama_model_n_embd_out,
+    llama_model_n_expert, llama_model_n_head, llama_model_n_head_kv, llama_model_n_layer,
+    llama_model_n_layer_nextn, llama_model_n_params, llama_model_n_swa,
+    llama_model_rope_freq_scale_train, llama_model_rope_type, llama_model_save_to_file,
+    llama_model_size, llama_model_target_layer_ids, llama_model_target_layer_ids_n,
+    llama_split_path, llama_split_prefix, llama_token_to_piece, llama_tokenize, llama_vocab,
+    llama_vocab_type, LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
 };
 
 use crate::context::params::LlamaContextParams;
@@ -36,6 +39,131 @@ use crate::{
 };
 
 pub mod params;
+
+/// Opaque ggml backend device handle returned by [`LlamaModel::get_device`].
+///
+/// Use [`Self::name`], [`Self::description`], [`Self::device_type`], and
+/// [`Self::memory`] to inspect the device. The handle is valid for the lifetime
+/// of the parent [`LlamaModel`].
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct LlamaBackendDevice {
+    pub(crate) dev: llama_cpp_sys_4::ggml_backend_dev_t,
+}
+
+/// Backend device class (CPU, discrete GPU, integrated GPU, …).
+#[repr(i32)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LlamaBackendDeviceType {
+    /// Host CPU backend.
+    Cpu = llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_CPU.cast_signed(),
+    /// Discrete GPU.
+    Gpu = llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_GPU.cast_signed(),
+    /// Integrated GPU.
+    IntegratedGpu = llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_IGPU.cast_signed(),
+    /// Accelerator device (e.g. BLAS / Hexagon).
+    Accel = llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_ACCEL.cast_signed(),
+    /// Meta / placeholder device entry.
+    Meta = llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_META.cast_signed(),
+}
+
+impl From<llama_cpp_sys_4::ggml_backend_dev_type> for LlamaBackendDeviceType {
+    fn from(value: llama_cpp_sys_4::ggml_backend_dev_type) -> Self {
+        match value {
+            llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_CPU => Self::Cpu,
+            llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_GPU => Self::Gpu,
+            llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_IGPU => Self::IntegratedGpu,
+            llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_ACCEL => Self::Accel,
+            _ => Self::Meta,
+        }
+    }
+}
+
+impl LlamaBackendDevice {
+    /// Human-readable device name (e.g. `CUDA0`, `Metal`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the name pointer is null or not valid UTF-8.
+    pub fn name(&self) -> Result<&str, StringFromModelError> {
+        let ptr = unsafe { llama_cpp_sys_4::ggml_backend_dev_name(self.dev) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Longer device description (often includes hardware name).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the description pointer is null or not valid UTF-8.
+    pub fn description(&self) -> Result<&str, StringFromModelError> {
+        let ptr = unsafe { llama_cpp_sys_4::ggml_backend_dev_description(self.dev) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Device class (CPU, GPU, integrated GPU, …).
+    #[must_use]
+    pub fn device_type(&self) -> LlamaBackendDeviceType {
+        unsafe { llama_cpp_sys_4::ggml_backend_dev_type(self.dev).into() }
+    }
+
+    /// Device memory `(free_bytes, total_bytes)`.
+    #[must_use]
+    pub fn memory(&self) -> (usize, usize) {
+        let mut free = 0usize;
+        let mut total = 0usize;
+        unsafe {
+            llama_cpp_sys_4::ggml_backend_dev_memory(self.dev, &raw mut free, &raw mut total);
+        }
+        (free, total)
+    }
+}
+
+/// Iterator over [`LlamaBackendDevice`] handles for a loaded model.
+///
+/// # Examples
+///
+/// ```no_run
+/// use llama_cpp_4::prelude::*;
+///
+/// fn main() {
+///     let backend = LlamaBackend::init().unwrap();
+///     let model = LlamaModel::load_from_file(&backend, "model.gguf", &LlamaModelParams::default()).unwrap();
+///     for dev in model.devices() {
+///         let (free, total) = dev.memory();
+///         println!("{}: {} / {} bytes free", dev.name().unwrap(), free, total);
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct LlamaBackendDevices<'a> {
+    model: &'a LlamaModel,
+    next: i32,
+}
+
+#[allow(clippy::copy_iterator)]
+impl Iterator for LlamaBackendDevices<'_> {
+    type Item = LlamaBackendDevice;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let dev = self.model.get_device(self.next)?;
+        self.next += 1;
+        Some(dev)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = usize::try_from((self.model.n_devices() - self.next).max(0)).unwrap_or(0);
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for LlamaBackendDevices<'_> {}
 
 /// A safe wrapper around `llama_model`.
 #[derive(Debug)]
@@ -61,13 +189,13 @@ impl LlamaVocab {
     }
 
     /// Get the vocabulary type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the C API returns a vocabulary type that does not fit in `u32`.
     #[must_use]
     pub fn vocab_type(&self) -> u32 {
-        unsafe {
-            llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref())
-                .try_into()
-                .unwrap()
-        }
+        unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()) as u32 }
     }
 
     /// Get the BOS token.
@@ -187,13 +315,13 @@ impl LlamaVocab {
     }
 
     /// Get the attributes of a token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the C API returns attributes that do not fit in `u32`.
     #[must_use]
     pub fn get_attr(&self, token: LlamaToken) -> u32 {
-        unsafe {
-            llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0)
-                .try_into()
-                .unwrap()
-        }
+        unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0) as u32 }
     }
 
     /// Check if a token is a control token.
@@ -1088,6 +1216,97 @@ impl LlamaModel {
     #[must_use]
     pub fn n_layer(&self) -> c_int {
         unsafe { llama_model_n_layer(self.model.as_ptr()) }
+    }
+
+    /// Get the number of `NextN` / MTP prediction heads bundled with the model.
+    ///
+    /// Returns `0` when the checkpoint has no `NextN` blocks. Multi-head models
+    /// (e.g. Step3.5) return values greater than `1`; pair with
+    /// [`crate::context::LlamaContext::set_nextn_layer_offset`] on the draft
+    /// context. See [`crate::mtp`] for the speculative-decoding workflow.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use llama_cpp_4::llama_backend::LlamaBackend;
+    /// # use llama_cpp_4::model::{LlamaModel, params::LlamaModelParams};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let backend = LlamaBackend::init()?;
+    /// # let model = LlamaModel::load_from_file(&backend, "model.gguf", &LlamaModelParams::default())?;
+    /// if model.n_layer_nextn() > 0 {
+    ///     println!("MTP model with {} NextN heads", model.n_layer_nextn());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn n_layer_nextn(&self) -> c_int {
+        unsafe { llama_model_n_layer_nextn(self.model.as_ptr()) }
+    }
+
+    /// Get the number of mixture-of-experts (`MoE`) layers in the model.
+    ///
+    /// Returns `0` for dense (non-MoE) checkpoints.
+    #[must_use]
+    pub fn n_expert(&self) -> c_int {
+        unsafe { llama_model_n_expert(self.model.as_ptr()) }
+    }
+
+    /// Number of backend devices the model tensors are spread across.
+    ///
+    /// Use with [`Self::get_device`] to inspect each device. Returns `0` when
+    /// the model is not yet loaded onto any device.
+    #[must_use]
+    pub fn n_devices(&self) -> c_int {
+        unsafe { llama_model_n_devices(self.model.as_ptr()) }
+    }
+
+    /// Get the backend device at `index`.
+    ///
+    /// Valid indices satisfy `0 <= index < n_devices()`. Returns `None` for
+    /// out-of-range indices or when the device pointer is null.
+    #[must_use]
+    pub fn get_device(&self, index: i32) -> Option<LlamaBackendDevice> {
+        if index < 0 || index >= self.n_devices() {
+            return None;
+        }
+        let dev = unsafe { llama_model_get_device(self.model.as_ptr(), index) };
+        if dev.is_null() {
+            None
+        } else {
+            Some(LlamaBackendDevice { dev })
+        }
+    }
+
+    /// Iterate backend devices the model tensors are spread across.
+    ///
+    /// Equivalent to calling [`Self::get_device`] for `0..self.n_devices()`.
+    /// Use [`LlamaBackendDevice::memory`] to inspect free/total bytes per device.
+    #[must_use]
+    pub fn devices(&self) -> LlamaBackendDevices<'_> {
+        LlamaBackendDevices {
+            model: self,
+            next: 0,
+        }
+    }
+
+    /// Target-model layer indices stored in this checkpoint.
+    ///
+    /// Populated for EAGLE / distillation draft models that record which target
+    /// layers they were trained against. Returns an empty slice when the
+    /// metadata is absent.
+    #[must_use]
+    pub fn target_layer_ids(&self) -> &[i32] {
+        let n = unsafe { llama_model_target_layer_ids_n(self.model.as_ptr()) };
+        if n == 0 {
+            return &[];
+        }
+        let ptr = unsafe { llama_model_target_layer_ids(self.model.as_ptr()) };
+        if ptr.is_null() {
+            &[]
+        } else {
+            unsafe { slice::from_raw_parts(ptr, n as usize) }
+        }
     }
 
     /// Get the number of attention heads in the model.

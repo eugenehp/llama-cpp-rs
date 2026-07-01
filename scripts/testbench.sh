@@ -62,7 +62,7 @@ info "Date     : $(date)"
 echo ""
 
 # ── Step 1: Build ─────────────────────────────────────────────────────────────
-banner "1 / 5  Build"
+banner "1 / 6  Build"
 if cargo build -p openai-server ${CARGO_FLAGS:-} 2>&1; then
   pass "cargo build -p openai-server"
 else
@@ -71,7 +71,7 @@ else
 fi
 
 # ── Step 2: Unit tests ────────────────────────────────────────────────────────
-banner "2 / 5  Unit tests  (no model required)"
+banner "2 / 6  Unit tests  (no model required)"
 if cargo test -p openai-server ${CARGO_FLAGS:-} 2>&1; then
   pass "cargo test -p openai-server  ($(cargo test -p openai-server 2>&1 | grep -oE '[0-9]+ passed' | head -1 || echo "all tests") passed)"
 else
@@ -79,7 +79,7 @@ else
 fi
 
 # ── Step 3: Locate / download a model ─────────────────────────────────────────
-banner "3 / 5  Locate model"
+banner "3 / 6  Locate model"
 
 if [[ -n "$HF_REPO" ]]; then
   info "Downloading from HF: $HF_REPO ${HF_QUANT:-}  (using --print-path)"
@@ -131,8 +131,23 @@ else
 fi
 export LLAMA_TEST_MODEL="${MODEL_PATH:-}"
 
-# ── Step 4: Rust integration tests ───────────────────────────────────────────
-banner "4 / 5  Rust integration tests"
+# ── Step 4: llama-cpp-4 integration tests ─────────────────────────────────────
+banner "4 / 6  llama-cpp-4 integration tests"
+if [[ -z "$MODEL_PATH" ]]; then
+  warn "Skipping (no model).  Set LLAMA_TEST_MODEL to enable."
+else
+  info "Running cargo test -p llama-cpp-4 --test test_integration…"
+  if LLAMA_TEST_MODEL="$MODEL_PATH" \
+     cargo test -p llama-cpp-4 --test test_integration ${CARGO_FLAGS:-} \
+      -- --test-threads=1 --nocapture 2>&1; then
+    pass "cargo test -p llama-cpp-4 --test test_integration"
+  else
+    fail "cargo test -p llama-cpp-4 --test test_integration"
+  fi
+fi
+
+# ── Step 5: Rust server integration tests ─────────────────────────────────────
+banner "5 / 6  Rust server integration tests"
 if [[ -z "$MODEL_PATH" ]]; then
   warn "Skipping (no model).  Set LLAMA_TEST_MODEL to enable."
 else
@@ -147,8 +162,8 @@ else
   fi
 fi
 
-# ── Step 5: Curl smoke tests ──────────────────────────────────────────────────
-banner "5 / 5  curl smoke tests"
+# ── Step 6: Curl smoke tests ──────────────────────────────────────────────────
+banner "6 / 6  curl smoke tests"
 if [[ -z "$MODEL_PATH" ]]; then
   warn "Skipping (no model)."
 else

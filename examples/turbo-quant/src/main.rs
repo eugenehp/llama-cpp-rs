@@ -45,14 +45,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use llama_cpp_4::{
-    context::params::LlamaContextParams,
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel, Special},
-    quantize::{attn_rot_disabled, GgmlType, LlamaFtype},
-    sampling::LlamaSampler,
-};
+use llama_cpp_4::prelude::*;
 
 // ─── CLI ─────────────────────────────────────────────────────────────────────
 
@@ -129,9 +122,7 @@ fn run_inference(
 
     let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
     let mut output = String::new();
-    let mut pos = tokens.len() as i32;
-
-    for _ in 0..n_predict {
+    for (pos, _) in (tokens.len() as i32..).zip(0..n_predict) {
         let token = sampler.sample(&ctx, -1);
         if model.is_eog_token(token) {
             break;
@@ -146,7 +137,6 @@ fn run_inference(
             .add(token, pos, &[0], true)
             .context("batch add failed")?;
         ctx.decode(&mut batch).context("decode failed")?;
-        pos += 1;
     }
 
     println!("[{label}] → {output}");

@@ -49,15 +49,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use llama_cpp_4::context::params::{LlamaContextParams, LlamaContextType};
-use llama_cpp_4::context::LlamaContext;
-use llama_cpp_4::eagle::{Eagle3Session, Eagle3SessionConfig};
-use llama_cpp_4::ggml_time_us;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaModel, Special};
-use llama_cpp_4::sampling::LlamaSampler;
+use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -141,11 +133,15 @@ fn main() -> Result<()> {
     );
 
     let session_config = Eagle3SessionConfig::new(1, args.n_draft_max).with_p_min(args.p_min);
-    let mut session = match Eagle3Session::new_with_config(&target_ctx, &draft_ctx, session_config) {
+    let mut session = match Eagle3Session::new_with_config(&target_ctx, &draft_ctx, session_config)
+    {
         Ok(s) => s,
         Err(e) => {
             println!("\nEAGLE-3 session could not be created: {e}");
-            println!("(Is `{}` a valid EAGLE-3 draft model for this target? It must be", args.draft.display());
+            println!(
+                "(Is `{}` a valid EAGLE-3 draft model for this target? It must be",
+                args.draft.display()
+            );
             println!(" converted with `convert_hf_to_gguf.py --target-model-dir <target>`.)");
             return Ok(());
         }
@@ -161,7 +157,9 @@ fn main() -> Result<()> {
 
     let Some(n_predict) = args.predict else {
         println!();
-        println!("Both models ready and the EAGLE-3 session initialised. Pass --predict N to generate.");
+        println!(
+            "Both models ready and the EAGLE-3 session initialised. Pass --predict N to generate."
+        );
         return Ok(());
     };
 

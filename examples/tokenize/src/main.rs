@@ -16,14 +16,13 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaModel, Special};
+use llama_cpp_4::prelude::*;
 use std::io::Read;
 use std::path::PathBuf;
 use std::pin::pin;
 
 #[derive(clap::Parser, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 #[command(about = "Tokenize a prompt and display token IDs and text")]
 struct Args {
     /// Path to the GGUF model file

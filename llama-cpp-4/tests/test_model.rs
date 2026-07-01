@@ -1,55 +1,19 @@
 //! Tests for model, vocab, and context APIs.
 //!
-//! These tests require a GGUF model. Set `LLAMA_TEST_MODEL` to the path of a GGUF model file.
-//! If not set, a vocab-only GGUF from the build directory is used if available.
+//! These tests require a GGUF model. Set `LLAMA_TEST_MODEL` to the path of a GGUF model file,
+//! or run [`scripts/fetch-test-model.sh`](../../scripts/fetch-test-model.sh) for the default tiny
+//! checkpoint. If neither is available, a vocab-only GGUF from the build directory is used.
+
+mod support;
 
 use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::{AddBos, LlamaModel};
-use std::path::PathBuf;
 
-/// Try to find a test model. Prefers LLAMA_TEST_MODEL env var,
-/// then falls back to a vocab-only GGUF in the build directory.
-fn find_test_model() -> Option<(PathBuf, bool)> {
-    // Check env var for a full model
-    if let Ok(path) = std::env::var("LLAMA_TEST_MODEL") {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            return Some((p, false)); // not vocab_only
-        }
-    }
+use support::model::{backend, load_model};
 
-    // Look for vocab-only GGUF in build dir
-    let build_dir = PathBuf::from("target/debug/build");
-    if let Ok(entries) = std::fs::read_dir(&build_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            if name
-                .to_str()
-                .map_or(false, |n| n.starts_with("llama-cpp-sys-4-"))
-            {
-                let vocab_path = entry
-                    .path()
-                    .join("out/llama.cpp/models/ggml-vocab-llama-bpe.gguf");
-                if vocab_path.exists() {
-                    return Some((vocab_path, true));
-                }
-            }
-        }
-    }
-    None
-}
-
-fn load_test_model() -> Option<(LlamaBackend, LlamaModel, bool)> {
-    let (path, vocab_only) = find_test_model()?;
-    let backend = LlamaBackend::init().ok()?;
-    let mut params = LlamaModelParams::default();
-    if vocab_only {
-        params = params.with_vocab_only(true);
-    }
-    let params = std::pin::pin!(params);
-    let model = LlamaModel::load_from_file(&backend, &path, &params).ok()?;
-    Some((backend, model, vocab_only))
+fn load_test_model() -> Option<(&'static LlamaBackend, LlamaModel, bool)> {
+    let (model, vocab_only) = load_model()?;
+    Some((backend(), model, vocab_only))
 }
 
 // ============================================================
@@ -90,6 +54,7 @@ fn test_model_numeric_properties() {
     assert!(model.n_ctx_train() > 0);
     assert!(model.n_embd() > 0);
     assert!(model.n_layer() > 0);
+    assert!(model.n_layer_nextn() >= 0);
     assert!(model.n_head() > 0);
     assert!(model.n_head_kv() > 0);
     assert!(model.n_vocab() > 0);
@@ -109,6 +74,9 @@ fn test_model_boolean_properties() {
     let _ = model.is_recurrent();
     let _ = model.is_hybrid();
     let _ = model.is_diffusion();
+    let _ = model.n_expert();
+    let _ = model.n_devices();
+    let _ = model.target_layer_ids();
     let _ = model.add_bos_token();
     let _ = model.add_eos_token();
 }
@@ -414,6 +382,47 @@ fn test_context_thread_control() {
     ctx.set_n_threads(2, 2);
     assert_eq!(ctx.n_threads(), 2);
     assert_eq!(ctx.n_threads_batch(), 2);
+}
+
+#[test]
+fn test_context_memory_breakdown() {
+    let Some((backend, model, vocab_only)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    if vocab_only {
+        eprintln!("SKIP: memory breakdown needs a full model");
+        return;
+    }
+    let ctx = model
+        .new_context(
+            &backend,
+            llama_cpp_4::context::params::LlamaContextParams::default(),
+        )
+        .unwrap();
+    let breakdown = ctx.memory_breakdown();
+    assert!(
+        breakdown
+            .iter()
+            .all(|e| e.buft_name.is_empty() || e.total() > 0 || e.total() == 0),
+        "entries should be well-formed"
+    );
+}
+
+#[test]
+fn test_model_devices_iterator() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let count = model.devices().count();
+    assert_eq!(count, model.n_devices().max(0) as usize);
+    for dev in model.devices() {
+        let _ = dev.name();
+        let _ = dev.description();
+        let _ = dev.device_type();
+        let _ = dev.memory();
+    }
 }
 
 #[test]

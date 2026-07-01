@@ -797,6 +797,7 @@ impl QuantizeParams {
     ///
     /// This is `pub(crate)` so that `model_quantize` can call it safely while
     /// holding all the guards alive.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn to_raw(&self) -> RawQuantizeParamsGuard<'_> {
         // ── imatrix ─────────────────────────────────────────────────────────
         // Build a null-terminated array of llama_model_imatrix_data.
@@ -833,7 +834,7 @@ impl QuantizeParams {
                 let bytes = kv.key.to_bytes_with_nul();
                 let copy_len = bytes.len().min(128);
                 for (dst, &src) in raw.key.iter_mut().zip(bytes[..copy_len].iter()) {
-                    *dst = src as std::os::raw::c_char;
+                    *dst = src.cast_signed();
                 }
                 match &kv.value {
                     KvOverrideValue::Int(v) => {

@@ -48,22 +48,11 @@ mod tools;
 
 use actix_multipart::Multipart;
 use actix_web::{http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServer};
-use anyhow::Context as _;
+use anyhow::{Context as _, Result};
 use clap::Parser;
 use futures_util::{stream, StreamExt as _};
 use hf_hub::api::sync::{Api, ApiBuilder};
-#[cfg(feature = "mtmd")]
-use llama_cpp_4::mtmd::{
-    MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
-};
-use llama_cpp_4::{
-    context::params::LlamaContextParams,
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaChatMessage, LlamaModel, Special},
-    sampling::LlamaSampler,
-    token::LlamaToken,
-};
+use llama_cpp_4::prelude::*;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
@@ -601,7 +590,7 @@ fn check_auth(req: &HttpRequest, state: &AppState) -> Option<HttpError> {
 // Request parsing
 // ---------------------------------------------------------------------------
 
-/// OpenAI uses `max_tokens`; newer clients may send `max_completion_tokens`.
+/// `OpenAI` uses `max_tokens`; newer clients may send `max_completion_tokens`.
 fn parse_max_tokens(req: &Value) -> Result<u32, HttpError> {
     let raw = req
         .get("max_completion_tokens")

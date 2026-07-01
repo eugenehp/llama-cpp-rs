@@ -25,11 +25,8 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::{AddBos, LlamaModel};
+use llama_cpp_4::prelude::*;
+use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
@@ -174,7 +171,6 @@ fn main() -> Result<()> {
 
     // Save: binary format with header
     let mut out = std::fs::File::create(&args.output)?;
-    use std::io::Write;
     // Header: magic, n_embd, layer_start, layer_end
     out.write_all(b"CVEC")?;
     out.write_all(&(n_embd as u32).to_le_bytes())?;

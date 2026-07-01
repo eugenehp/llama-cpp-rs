@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
+#[cfg(feature = "prebuilt")]
+mod prebuilt_download;
+
 macro_rules! debug_log {
     ($($arg:tt)*) => {
         if std::env::var("BUILD_DEBUG").is_ok() {
@@ -747,11 +750,36 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Compile the MTP C++ shim (stable C linkage for `mtp_session_*`).
+/// Compile the ext_shim C++ helpers (stable C linkage for C++-only llama.cpp APIs).
 ///
 /// Required on both the CMake and prebuilt paths: prebuilt tarballs ship
-/// llama/ggml/common libs only; `mtp_shim` is always built from source here
+/// llama/ggml/common libs only; `ext_shim` is always built from source here
 /// against the vendored llama.cpp headers so it matches the crate revision.
+fn compile_ext_shim(manifest_dir: &Path, llama_dst: &Path) {
+    let shim_dir = manifest_dir.join("ext_shim");
+    let ext_shim_src = shim_dir.join("ext_shim.cpp");
+    if !ext_shim_src.exists() {
+        return;
+    }
+
+    cc::Build::new()
+        .cpp(true)
+        .std("c++17")
+        .file(&ext_shim_src)
+        .include(&shim_dir)
+        .include(llama_dst.join("include"))
+        .include(llama_dst.join("ggml/include"))
+        .include(llama_dst.join("src"))
+        .include(llama_dst.join("common"))
+        .warnings(false)
+        .compile("ext_shim");
+    println!("cargo:rerun-if-changed={}", ext_shim_src.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        shim_dir.join("ext_shim.h").display()
+    );
+}
+
 fn compile_mtp_shim(manifest_dir: &Path, llama_dst: &Path) {
     let shim_dir = manifest_dir.join("mtp_shim");
     let mtp_shim_src = shim_dir.join("mtp_shim.cpp");
@@ -1037,61 +1065,23 @@ fn find_libgomp_lib_dir() -> Option<String> {
     None
 }
 
-#[cfg(feature = "prebuilt")]
-/// Setup prebuilt artifacts by automatically setting LLAMA_PREBUILT_DIR
-/// if the prebuilt feature is enabled
-fn setup_prebuilt_env() -> Option<PathBuf> {
-    // Collect enabled features for prebuilt artifact selection
-    let mut features = Vec::new();
-    if cfg!(feature = "cuda") {
-        features.push("cuda");
+fn resolve_prebuilt_directory(target: &str, use_shared_libs: bool) -> Option<PathBuf> {
+    if let Ok(raw) = env::var("LLAMA_PREBUILT_DIR") {
+        if !raw.is_empty() {
+            return Some(PathBuf::from(raw));
+        }
     }
-    if cfg!(feature = "metal") {
-        features.push("metal");
-    }
-    if cfg!(feature = "vulkan") {
-        features.push("vulkan");
-    }
-    if cfg!(feature = "webgpu") {
-        features.push("webgpu");
-    }
-    if cfg!(feature = "blas") {
-        features.push("blas");
-    }
-    if cfg!(feature = "opencl") {
-        features.push("opencl");
-    }
-    if cfg!(feature = "hip") {
-        features.push("hip");
-    }
-    if cfg!(feature = "openmp") {
-        features.push("openmp");
-    }
-    if cfg!(feature = "mpi") {
-        features.push("mpi");
-    }
-    if cfg!(feature = "rpc") {
-        features.push("rpc");
-    }
-    if cfg!(feature = "mtmd") {
-        features.push("mtmd");
-    }
-    if cfg!(feature = "q1") {
-        features.push("q1");
-    }
-    let features = features.join(",");
 
-    debug_log!("Prebuilt feature enabled, attempting to setup prebuilt artifacts");
-    debug_log!("Target features: {}", features);
+    #[cfg(feature = "prebuilt")]
+    {
+        prebuilt_download::ensure_prebuilt(target, use_shared_libs)
+    }
 
-    // TODO: Implement actual download and caching logic
-    // For now, this is a placeholder that demonstrates the concept
-    // In a full implementation, this would:
-    // 1. Check if prebuilt artifacts exist in cache
-    // 2. Download them if not present
-    // 3. Return the path to the cached artifacts
-
-    None
+    #[cfg(not(feature = "prebuilt"))]
+    {
+        let _ = (target, use_shared_libs);
+        None
+    }
 }
 
 fn main() {
@@ -1331,6 +1321,10 @@ fn main() {
             "-I{}",
             Path::new(&manifest_dir).join("mtp_shim").display()
         ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("ext_shim").display()
+        ))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
         // Do not derive PartialEq on types that contain function-pointer fields.
@@ -1356,6 +1350,10 @@ fn main() {
         .allowlist_function("mtp_session_.*")
         .allowlist_type("mtp_session")
         .allowlist_type("mtp_session_config")
+        .allowlist_function("llama_memory_breakdown_collect")
+        .allowlist_type("llama_memory_breakdown_entry")
+        .allowlist_function("common_device_memory_collect")
+        .allowlist_type("common_device_memory_flat_entry")
         // Speculative strategy selector for the shim (MTP vs EAGLE3). The
         // `mtp_session_config.spec_type` field is a plain int, so the enum is
         // not reachable transitively — allowlist it explicitly so its
@@ -1428,6 +1426,10 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_DIR");
     println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_TAG");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_REPO");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_URL");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_OFF");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH_ENGINE");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
@@ -1453,18 +1455,8 @@ fn main() {
     // Expected layout is flexible; files may be in <dir>, <dir>/lib,
     // <dir>/lib64, or <dir>/bin.
 
-    // Try prebuilt feature first
-    #[cfg(feature = "prebuilt")]
-    {
-        if let Some(prebuilt_dir) = setup_prebuilt_env() {
-            debug_log!("Using prebuilt artifacts from: {}", prebuilt_dir.display());
-            // TODO: Set LLAMA_PREBUILT_DIR environment variable
-            // unsafe { env::set_var("LLAMA_PREBUILT_DIR", prebuilt_dir); }
-        }
-    }
-
-    if let Ok(prebuilt_dir_raw) = env::var("LLAMA_PREBUILT_DIR") {
-        let prebuilt_dir = PathBuf::from(&prebuilt_dir_raw);
+    // Try prebuilt path (explicit LLAMA_PREBUILT_DIR or `prebuilt` feature download).
+    if let Some(prebuilt_dir) = resolve_prebuilt_directory(&target, build_shared_libs) {
         if prebuilt_dir.exists() {
             let use_shared_libs = env::var("LLAMA_PREBUILT_SHARED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
@@ -1556,10 +1548,19 @@ fn main() {
             }
 
             compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
+            compile_ext_shim(Path::new(&manifest_dir), &llama_dst);
             return;
         }
-        panic!(
-            "LLAMA_PREBUILT_DIR was set to '{}' but that path does not exist",
+
+        if env::var("LLAMA_PREBUILT_DIR").is_ok() {
+            panic!(
+                "LLAMA_PREBUILT_DIR was set to '{}' but that path does not exist",
+                prebuilt_dir.display()
+            );
+        }
+
+        println!(
+            "cargo:warning=Prebuilt path '{}' is missing; falling back to local compile",
             prebuilt_dir.display()
         );
     }
@@ -1634,15 +1635,6 @@ fn main() {
             debug_log!("sccache found at {}", sc.display());
             config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
             config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
-            // Enable sccache's distributed compilation if available
-            config.define(
-                "CMAKE_C_COMPILER_LAUNCHER",
-                sc.to_str().unwrap().to_string(),
-            );
-            config.define(
-                "CMAKE_CXX_COMPILER_LAUNCHER",
-                sc.to_str().unwrap().to_string(),
-            );
         }
     }
 
@@ -2260,6 +2252,7 @@ fn main() {
     }
 
     compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
+    compile_ext_shim(Path::new(&manifest_dir), &llama_dst);
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
     // This can happen even without the "openmp" feature because cmake's FindOpenMP

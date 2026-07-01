@@ -63,7 +63,7 @@
 //!     seed: 1234,
 //! }
 //! ```
-use llama_cpp_4::sampling::*;
+use llama_cpp_4::prelude::*;
 use llama_cpp_sys_4::common::*;
 
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]

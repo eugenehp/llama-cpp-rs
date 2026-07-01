@@ -10,15 +10,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
-use llama_cpp_4::{
-    context::params::LlamaContextParams,
-    ggml::GgmlBackend,
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel, Special},
-    rpc::{RpcBackend, RpcServer},
-    sampling::LlamaSampler,
-};
+use llama_cpp_4::prelude::*;
+use llama_cpp_4::ggml::GgmlBackend;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;

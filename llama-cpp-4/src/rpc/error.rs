@@ -8,19 +8,33 @@ use thiserror::Error;
 pub enum RpcError {
     /// Failed to initialize RPC backend
     #[error("Failed to initialize RPC backend for endpoint: {endpoint}")]
-    InitializationFailed { endpoint: String },
+    InitializationFailed {
+        /// Endpoint string passed to initialization
+        endpoint: String,
+    },
 
     /// Invalid endpoint format
     #[error("Invalid endpoint format: {endpoint}")]
-    InvalidEndpoint { endpoint: String },
+    InvalidEndpoint {
+        /// Malformed endpoint string
+        endpoint: String,
+    },
 
     /// Connection failed
     #[error("Failed to connect to RPC server at {endpoint}: {reason}")]
-    ConnectionFailed { endpoint: String, reason: String },
+    ConnectionFailed {
+        /// Server address
+        endpoint: String,
+        /// Backend error detail
+        reason: String,
+    },
 
     /// Server error
     #[error("RPC server error: {message}")]
-    ServerError { message: String },
+    ServerError {
+        /// Error message from the server
+        message: String,
+    },
 
     /// Memory query failed
     #[error("Failed to query device memory")]

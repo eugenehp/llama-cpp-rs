@@ -205,7 +205,7 @@ impl Eagle3Session {
             n_draft_max: config.n_draft_max,
             n_min: config.n_min,
             p_min: config.p_min,
-            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_EAGLE3 as i32,
+            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_EAGLE3.cast_signed(),
         };
 
         let raw = unsafe {
@@ -301,8 +301,9 @@ impl Eagle3Session {
     ///
     /// Returns [`Eagle3SessionError::Process`] if the underlying call fails.
     pub fn process(&mut self, batch: &LlamaBatch) -> Result<(), Eagle3SessionError> {
-        let ok =
-            unsafe { llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &batch.llama_batch) };
+        let ok = unsafe {
+            llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &raw const batch.llama_batch)
+        };
         if ok {
             Ok(())
         } else {
@@ -327,9 +328,9 @@ impl Eagle3Session {
     ) -> Result<Vec<LlamaToken>, Eagle3SessionError> {
         self.check_seq(seq_id)?;
 
-        let cap = self.config.n_draft_max.max(0) as usize;
+        let cap = usize::try_from(self.config.n_draft_max.max(0)).unwrap_or(0);
         let mut buf: Vec<i32> = vec![0; cap];
-        let mut out_n: i32 = cap as i32;
+        let mut out_n = i32::try_from(cap).unwrap_or(i32::MAX);
 
         unsafe {
             llama_cpp_sys_4::mtp_session_draft(
@@ -338,11 +339,11 @@ impl Eagle3Session {
                 n_past,
                 id_last.0,
                 buf.as_mut_ptr(),
-                &mut out_n,
+                &raw mut out_n,
             );
         }
 
-        let n = out_n.max(0) as usize;
+        let n = usize::try_from(out_n.max(0)).unwrap_or(0);
         buf.truncate(n);
         Ok(buf.into_iter().map(LlamaToken).collect())
     }
@@ -363,7 +364,7 @@ impl Eagle3Session {
     }
 
     fn check_seq(&self, seq_id: i32) -> Result<(), Eagle3SessionError> {
-        if seq_id < 0 || (seq_id as u32) >= self.config.n_seq {
+        if seq_id < 0 || seq_id.cast_unsigned() >= self.config.n_seq {
             return Err(Eagle3SessionError::BadSeqId {
                 seq_id,
                 n_seq: self.config.n_seq,
@@ -383,6 +384,6 @@ impl std::fmt::Debug for Eagle3Session {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Eagle3Session")
             .field("config", &self.config)
-            .finish()
+            .finish_non_exhaustive()
     }
 }

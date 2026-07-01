@@ -40,7 +40,7 @@ jobs:
       - name: Fmt
         run: cargo fmt
       - name: Test
-        run: cargo test --workspace --exclude llama-cpp-4 --exclude openai-server
+        run: cargo test --workspace --exclude openai-server
       - name: sccache stats
         run: sccache --show-stats || true
   linux:
@@ -119,7 +119,35 @@ jobs:
         shell: pwsh
         run: cargo build --features vulkan
       - name: Test
-        run: cargo test --workspace --exclude llama-cpp-4 --exclude openai-server
+        run: cargo test --workspace --exclude openai-server
       - name: sccache stats
         shell: pwsh
         run: sccache --show-stats
+  llama-cpp-4-integration:
+    name: llama-cpp-4 integration tests (GGUF)
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Fetch test model
+        run: ./scripts/fetch-test-model.sh
+      - name: Integration tests
+        env:
+          LLAMA_TEST_MODEL: ${{ github.workspace }}/target/test-models/stories260K.gguf
+        run: cargo test -p llama-cpp-4 --test test_integration -- --test-threads=1
+      - name: sccache stats
+        run: sccache --show-stats || true

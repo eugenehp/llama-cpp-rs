@@ -5,6 +5,7 @@
 #include "common.h"
 #include "fit.h"
 #include "mtp_shim.h"
+#include "ext_shim.h"
 
 // llama-ext.h lives in src/ but exports LLAMA_API entry points (pre-norm
 // embeddings setter/getters, memory-breakdown, etc). Pull it in so bindgen

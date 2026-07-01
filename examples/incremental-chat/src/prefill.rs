@@ -5,8 +5,7 @@
 //! minimises redundant work when the user edits their input.
 
 use anyhow::{anyhow, Context, Result};
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::prelude::*;
 
 /// How many trailing tokens to withhold from speculative prefill.
 ///
@@ -32,9 +31,8 @@ pub struct IncrementalPrefill {
 impl IncrementalPrefill {
     /// Create a new tracker.
     ///
-    /// - `history_len`: number of tokens already in the KV cache (system prompt
-    ///   + prior turns). The prefill tracker will never touch positions below
-    ///   this offset.
+    /// - `history_len`: tokens already in the KV cache (system prompt + prior
+    ///   turns). Positions below this offset are never touched.
     /// - `batch_size`: max tokens per micro-batch sent to `decode()`.
     pub fn new(history_len: usize, batch_size: usize) -> Self {
         Self {

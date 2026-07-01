@@ -11,10 +11,30 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `94a220cd6` (Jun 2026) — includes
+**llama.cpp version:** `4fc4ec5 (b9859)` (Jun 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673), and
 upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
+
+---
+
+## Using the library
+
+```toml
+[dependencies]
+llama-cpp-4 = "0.4.0"
+```
+
+Import the common types with the prelude:
+
+```rust
+use llama_cpp_4::prelude::*;
+```
+
+Core types are also at the crate root (`llama_cpp_4::LlamaModel`, …). See
+[`llama-cpp-4/README.md`](llama-cpp-4/README.md) for the full API guide and
+[`prelude` on docs.rs](https://docs.rs/llama-cpp-4/latest/llama_cpp_4/prelude/index.html)
+for runnable examples.
 
 ---
 
@@ -138,13 +158,31 @@ cargo build --release --features prebuilt
 - ✅ Feature flag infrastructure complete
 - ✅ Automatic feature detection and configuration
 - ✅ Safe fallback to local compilation
-- 📋 **TODO**: Actual artifact download and caching (foundation ready)
+- ✅ Automatic download from GitHub releases into `target/llama-prebuilt-cache/`
 
-When fully implemented, the prebuilt feature will automatically:
-1. Download matching prebuilt artifacts from GitHub releases
-2. Cache them in `target/llama-prebuilt-cache/`
-3. Use cached artifacts for subsequent builds
-4. Fall back gracefully to local compilation if artifacts unavailable
+When the `prebuilt` feature is enabled, `build.rs` will:
+1. Resolve the matching release asset for your target and backend (`cpu`, `vulkan`, `blas`, `metal`)
+2. Download it from GitHub releases (tag defaults to `v{CARGO_PKG_VERSION}`)
+3. Cache extracted libraries under `target/llama-prebuilt-cache/`
+4. Fall back gracefully to local compilation if no asset is available
+
+Environment overrides:
+
+| Variable | Description |
+|---|---|
+| `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.4.0`) |
+| `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
+| `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
+| `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
+| `LLAMA_PREBUILT_SHARED` | Force shared/dynamic linking when using `LLAMA_PREBUILT_DIR` |
+
+Manual prefetch:
+
+```bash
+./scripts/fetch-prebuilt.sh
+cargo build --features prebuilt
+```
 - `opencl` → Linux/Windows with OpenCL SDK/runtime (experimental in CI)
 - `blas`   → CPU acceleration (Linux/macOS/Windows)
 
@@ -175,28 +213,35 @@ With `--api-key`, pass `Authorization: Bearer <key>` on every route except `/hea
 ### Text generation (library)
 
 ```rust
-use llama_cpp_4::{
-    llama_backend::LlamaBackend,
-    llama_batch::LlamaBatch,
-    model::{params::LlamaModelParams, AddBos, LlamaModel, Special},
-    context::params::LlamaContextParams,
-    sampling::LlamaSampler,
-};
+use llama_cpp_4::prelude::*;
 use std::num::NonZeroU32;
 
-let backend = LlamaBackend::init()?;
-let model = LlamaModel::load_from_file(&backend, "model.gguf", &LlamaModelParams::default())?;
-let mut ctx = model.new_context(&backend, LlamaContextParams::default())?;
+fn main() -> anyhow::Result<()> {
+    let backend = LlamaBackend::init()?;
+    let model = LlamaModel::load_from_file(
+        &backend,
+        "model.gguf",
+        &LlamaModelParams::default(),
+    )?;
 
-let tokens = model.str_to_token("Hello, world!", AddBos::Always)?;
-let mut batch = LlamaBatch::new(512, 1);
-for (i, &tok) in tokens.iter().enumerate() {
-    batch.add(tok, i as i32, &[0], i == tokens.len() - 1)?;
+    let mut ctx = model.new_context(
+        &backend,
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048)),
+    )?;
+
+    let tokens = model.str_to_token("Hello, world!", AddBos::Always)?;
+    let mut batch = LlamaBatch::new(512, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch.add(tok, i as i32, &[0], i == tokens.len() - 1)?;
+    }
+    ctx.decode(&mut batch)?;
+
+    let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
+    let token = sampler.sample(&ctx, 0);
+    let piece = model.token_to_bytes(token, Special::Plaintext)?;
+    println!("{}", String::from_utf8_lossy(&piece));
+    Ok(())
 }
-ctx.decode(&mut batch)?;
-
-let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
-// ... decode loop
 ```
 
 ---
@@ -207,7 +252,8 @@ The `llama_cpp_4::quantize` module provides a fully typed Rust API for all
 quantization options.
 
 ```rust
-use llama_cpp_4::quantize::{GgmlType, LlamaFtype, QuantizeParams, TensorTypeOverride};
+use llama_cpp_4::prelude::*;
+use llama_cpp_4::quantize::TensorTypeOverride;
 
 // Basic — quantize to Q4_K_M
 let params = QuantizeParams::new(LlamaFtype::MostlyQ4KM)
@@ -311,22 +357,22 @@ every MB figure by ~85×; the ratios and % savings are the same.
 ### Using TurboQuant from Rust
 
 ```rust
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::quantize::GgmlType;
+use llama_cpp_4::prelude::*;
 
 // TurboQuant is ON by default — just set a quantized KV cache type:
 let ctx_params = LlamaContextParams::default()
-    .with_cache_type_k(GgmlType::Q5_0)   // ~31% of F16 VRAM
-    .with_cache_type_v(GgmlType::Q5_0);  // quality ≈ F16 thanks to rotation
+    .with_cache_type_k(GgmlType::Q5_0)
+    .with_cache_type_v(GgmlType::Q5_0);
 
 let ctx = model.new_context(&backend, ctx_params)?;
 ```
 
 ```rust
-// Disable rotation for a single context (e.g. benchmarking baseline):
+use llama_cpp_4::prelude::*;
+
 let ctx_params = LlamaContextParams::default()
     .with_cache_type_k(GgmlType::Q5_0)
-    .with_attn_rot_disabled(true);   // ← TurboQuant OFF for this context
+    .with_attn_rot_disabled(true);
 
 let ctx = model.new_context(&backend, ctx_params)?;
 ```
@@ -372,7 +418,7 @@ use [`LlamaContextType::Mtp`](llama-cpp-4/src/context/params.rs) and
 `n_rs_seq >= n_draft_max` (rollback snapshots for speculative verification):
 
 ```rust
-use llama_cpp_4::context::params::{LlamaContextParams, LlamaContextType};
+use llama_cpp_4::prelude::*;
 
 let n_draft_max = 3;
 
@@ -381,7 +427,7 @@ let draft = model.new_context(
     &backend,
     LlamaContextParams::default()
         .with_ctx_type(LlamaContextType::Mtp)
-        .with_n_rs_seq(n_draft_max.max(4)), // headroom for rollback
+        .with_n_rs_seq(n_draft_max.max(4)),
 )?;
 ```
 
@@ -398,19 +444,17 @@ let draft = model.new_context(
 | `n_min` | Minimum drafts to propose | `0` |
 
 ```rust
-use llama_cpp_4::mtp::{MtpSession, MtpSessionConfig};
+use llama_cpp_4::prelude::*;
 
-// Shorthand (defaults: n_min=0, p_min=0.0)
 let mut session = MtpSession::new(&target, &draft, 1, n_draft_max)?;
 
-// Full control
 let config = MtpSessionConfig::new(1, n_draft_max)
     .with_p_min(0.0)
     .with_n_min(0);
 let mut session = MtpSession::new_with_config(&target, &draft, config)?;
 
-assert!(session.need_embd_pre_norm()); // MTP: next-n embeddings (upstream name)
-assert!(!session.need_embd());         // post-norm / seq embeddings not used
+assert!(session.need_embd_pre_norm());
+assert!(!session.need_embd());
 ```
 
 The Rust API still uses `*_pre_norm` names; upstream renamed the C API to
@@ -791,7 +835,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.3.1},
+  version   = {0.4.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

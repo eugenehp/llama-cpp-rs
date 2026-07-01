@@ -18,7 +18,12 @@
     clippy::cast_possible_wrap,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::explicit_counter_loop,
+    clippy::too_many_lines,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::assigning_clones
 )]
 
 mod prefill;
@@ -29,15 +34,7 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 
-use llama_cpp_4::context::params::LlamaContextParams;
-use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::llama_batch::LlamaBatch;
-use llama_cpp_4::model::params::LlamaModelParams;
-use llama_cpp_4::model::LlamaModel;
-use llama_cpp_4::model::{AddBos, Special};
-use llama_cpp_4::quantize::GgmlType;
-use llama_cpp_4::sampling::LlamaSampler;
-use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::prelude::*;
 
 use prefill::IncrementalPrefill;
 
@@ -757,7 +754,7 @@ fn main() -> Result<()> {
 
     let params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(2048))
-        .with_flash_attention(true);
+        .with_flash_attn_type(LlamaFlashAttnType::Enabled);
 
     let name = model_path.split('/').next_back().unwrap_or(&model_path);
     println!("╔══════════════════════════════════════════════════════════════════════╗");
@@ -866,7 +863,7 @@ fn bench_kv_quant(model: &LlamaModel, backend: &LlamaBackend, prompts: &[&str]) 
     for (label, kv_type, no_turbo) in configs {
         let p = LlamaContextParams::default()
             .with_n_ctx(NonZeroU32::new(2048))
-            .with_flash_attention(true)
+            .with_flash_attn_type(LlamaFlashAttnType::Enabled)
             .with_cache_type_k(*kv_type)
             .with_cache_type_v(*kv_type)
             .with_attn_rot_disabled(*no_turbo);

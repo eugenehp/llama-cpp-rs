@@ -1,4 +1,11 @@
 //! Safe wrapper around `llama_context`.
+//!
+//! Submodules:
+//!
+//! - [`tensor_capture`] — hook `cb_eval` during [`LlamaContext::decode`] to copy
+//!   intermediate tensors (per-layer hidden states, norms, …).
+//! - [`memory_breakdown`] — per-buffer memory usage after load/decode.
+//! - [`kv_cache`] — sequence copy, shift, and clear helpers.
 
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroI32;
@@ -20,10 +27,14 @@ use crate::{
 };
 
 pub mod kv_cache;
+pub mod memory_breakdown;
 pub mod params;
 pub mod perf;
 pub mod session;
 pub mod tensor_capture;
+
+pub use memory_breakdown::MemoryBreakdownEntry;
+pub use tensor_capture::{CapturedTensor, TensorCapture};
 
 /// A safe wrapper around the `llama_context` C++ context.
 ///
@@ -474,6 +485,10 @@ impl<'model> LlamaContext<'model> {
     /// (one row per sampled token) or `masked=false` (one row per batch
     /// token). Use [`get_embeddings_pre_norm_ith`](Self::get_embeddings_pre_norm_ith)
     /// when you only need a single row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_embd` does not fit in `usize`.
     #[must_use]
     pub fn get_embeddings_pre_norm(&self) -> Option<&[f32]> {
         let n_embd =
@@ -491,6 +506,10 @@ impl<'model> LlamaContext<'model> {
     /// Get the pre-norm embedding row for the `i`th output position of the
     /// last decoded batch. Returns `None` if upstream rejects the index
     /// (e.g. masked mode with `batch.logits[i] == 0`, or out of range).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_embd` does not fit in `usize`.
     #[must_use]
     pub fn get_embeddings_pre_norm_ith(&self, i: i32) -> Option<&[f32]> {
         let n_embd =
@@ -503,6 +522,38 @@ impl<'model> LlamaContext<'model> {
                 Some(slice::from_raw_parts(p, n_embd))
             }
         }
+    }
+
+    /// Select which `NextN` block the MTP draft graph runs.
+    ///
+    /// `offset` indexes past the trunk transformer layers (`0` = first `NextN`
+    /// head). Required for multi-head MTP models such as Step3.5; restore to
+    /// `0` after drafting. See [`crate::mtp`] for the full speculative loop.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// for head in 0..model.n_layer_nextn() {
+    ///     draft.set_nextn_layer_offset(head);
+    ///     let drafts = session.draft(0, n_past, last_token)?;
+    /// }
+    /// draft.set_nextn_layer_offset(0);
+    /// ```
+    pub fn set_nextn_layer_offset(&mut self, offset: i32) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_nextn_layer_offset(self.context.as_ptr(), offset);
+        }
+    }
+
+    /// Return the paired context set via
+    /// [`crate::context::params::LlamaContextParams::with_ctx_other`].
+    ///
+    /// The pointer refers to the other live context created during
+    /// [`crate::model::LlamaModel::new_context`]; it is `None` when no pairing
+    /// was configured.
+    #[must_use]
+    pub fn ctx_other(&self) -> Option<NonNull<llama_cpp_sys_4::llama_context>> {
+        NonNull::new(unsafe { llama_cpp_sys_4::llama_get_ctx_other(self.context.as_ptr()) })
     }
 
     /// Reset the timings for the context.
@@ -540,10 +591,70 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
-    /// Print a breakdown of the memory usage.
+    /// Print a human-readable memory breakdown to stderr via llama.cpp.
+    ///
+    /// For structured access use [`Self::memory_breakdown`].
     pub fn memory_breakdown_print(&self) {
         unsafe {
             llama_cpp_sys_4::common_memory_breakdown_print(self.context.as_ptr());
+        }
+    }
+
+    /// Return structured per-buffer memory usage for this context.
+    ///
+    /// Each [`memory_breakdown::MemoryBreakdownEntry`] reports model weights,
+    /// KV / recurrent cache, and compute scratch bytes for one ggml buffer
+    /// type. Returns an empty vector when no buffers are registered.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use llama_cpp_4::prelude::*;
+    ///
+    /// fn main() {
+    ///     let backend = LlamaBackend::init().unwrap();
+    ///     let model = LlamaModel::load_from_file(&backend, "model.gguf", &LlamaModelParams::default()).unwrap();
+    ///     let ctx = model.new_context(&backend, LlamaContextParams::default()).unwrap();
+    ///     let total: usize = ctx.memory_breakdown().iter().map(|e| e.total()).sum();
+    ///     println!("context uses {total} bytes across all buffer types");
+    /// }
+    /// ```
+    #[must_use]
+    pub fn memory_breakdown(&self) -> Vec<memory_breakdown::MemoryBreakdownEntry> {
+        memory_breakdown::collect_memory_breakdown(self.context.as_ptr())
+    }
+
+    /// Enable or disable extraction of input embeddings for a transformer layer.
+    ///
+    /// Maps to `llama_set_embeddings_layer_inp`. After a successful
+    /// [`Self::decode`], read the vector with [`Self::get_embeddings_layer_inp`].
+    pub fn set_embeddings_layer_inp(&mut self, layer_id: u32, value: bool) {
+        unsafe {
+            llama_cpp_sys_4::llama_set_embeddings_layer_inp(self.context.as_ptr(), layer_id, value);
+        }
+    }
+
+    /// Get input embeddings for `layer_id` from the last decoded batch.
+    ///
+    /// Returns `None` when the layer was not enabled via
+    /// [`Self::set_embeddings_layer_inp`] or when upstream has no data for
+    /// `layer_id`. The slice length is [`LlamaModel::n_embd`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n_embd` does not fit in `usize`.
+    #[must_use]
+    pub fn get_embeddings_layer_inp(&self, layer_id: u32) -> Option<&[f32]> {
+        let n_embd =
+            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
+        unsafe {
+            let p =
+                llama_cpp_sys_4::llama_get_embeddings_layer_inp(self.context.as_ptr(), layer_id);
+            if p.is_null() {
+                None
+            } else {
+                Some(slice::from_raw_parts(p, n_embd))
+            }
         }
     }
 
