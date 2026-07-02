@@ -793,6 +793,24 @@ impl LlamaModel {
         self.token_to_bytes_with_size(token, 32, special, None)
     }
 
+    /// Convert a single token to its raw llama.cpp piece bytes.
+    ///
+    /// Unlike [`LlamaModel::token_to_bytes`], this does not discard tokens based
+    /// on token attributes before calling llama.cpp. This is useful for runtimes
+    /// that must preserve control, byte, or other model-specific pieces exactly.
+    ///
+    /// # Errors
+    ///
+    /// This function returns an error if llama.cpp cannot convert the token or
+    /// the default buffer is too small.
+    pub fn token_to_raw_bytes(
+        &self,
+        token: LlamaToken,
+        special: Special,
+    ) -> Result<Vec<u8>, TokenToStringError> {
+        self.token_to_raw_bytes_with_size(token, 32, special, None)
+    }
+
     /// Convert a vector of tokens to a single string.
     ///
     /// This function takes a slice of `LlamaToken`s and converts them into a single string, concatenating their
@@ -1128,6 +1146,56 @@ impl LlamaModel {
                 let len = usize::try_from(size).expect("size is positive and fits into usize");
                 bytes.truncate(len);
                 Ok(bytes)
+            }
+        }
+    }
+
+    /// Convert a token to raw llama.cpp piece bytes with a specified buffer size.
+    ///
+    /// This intentionally bypasses the token-attribute filtering in
+    /// [`LlamaModel::token_to_bytes_with_size`] and forwards directly to
+    /// `llama_token_to_piece`.
+    ///
+    /// # Errors
+    ///
+    /// - if llama.cpp reports an unknown token type.
+    /// - if the resultant token is larger than `buffer_size`.
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if `buffer_size` cannot fit into a `c_int`.
+    pub fn token_to_raw_bytes_with_size(
+        &self,
+        token: LlamaToken,
+        buffer_size: usize,
+        special: Special,
+        lstrip: Option<NonZeroU16>,
+    ) -> Result<Vec<u8>, TokenToStringError> {
+        let special = match special {
+            Special::Tokenize => true,
+            Special::Plaintext => false,
+        };
+        let mut buffer = vec![0_u8; buffer_size];
+        let len = c_int::try_from(buffer.len()).expect("length fits into c_int");
+        let lstrip = lstrip.map_or(0, |it| i32::from(it.get()));
+        let size = unsafe {
+            llama_token_to_piece(
+                self.get_vocab().vocab.as_ref(),
+                token.0,
+                buffer.as_mut_ptr().cast::<c_char>(),
+                len,
+                lstrip,
+                special,
+            )
+        };
+
+        match size {
+            0 => Err(TokenToStringError::UnknownTokenType),
+            i if i.is_negative() => Err(TokenToStringError::InsufficientBufferSpace(i)),
+            size => {
+                let len = usize::try_from(size).expect("size is positive and fits into usize");
+                buffer.truncate(len);
+                Ok(buffer)
             }
         }
     }

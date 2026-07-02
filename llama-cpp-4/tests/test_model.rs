@@ -7,7 +7,9 @@
 mod support;
 
 use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::model::{AddBos, LlamaModel};
+use llama_cpp_4::model::{AddBos, LlamaModel, Special};
+use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::TokenToStringError;
 
 use support::model::{backend, load_model};
 
@@ -151,6 +153,78 @@ fn test_token_attr() {
     };
     let bos = model.token_bos();
     let _ = model.token_attr(bos);
+}
+
+#[test]
+fn test_raw_token_bytes_preserve_filtered_special_piece() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let Some((token, raw)) = find_token_filtered_by_wrapper_with_raw_piece(&model) else {
+        panic!("expected at least one filtered token with a raw llama.cpp piece");
+    };
+
+    let filtered = model
+        .token_to_bytes(token, Special::Tokenize)
+        .expect("filtered token conversion should not error");
+    assert!(
+        filtered.is_empty(),
+        "selected token should be filtered by token_to_bytes"
+    );
+    assert!(
+        raw.len() > 1,
+        "selected token should exercise insufficient-buffer behavior"
+    );
+
+    let too_small =
+        model.token_to_raw_bytes_with_size(token, raw.len() - 1, Special::Tokenize, None);
+    assert!(
+        matches!(
+            too_small,
+            Err(TokenToStringError::InsufficientBufferSpace(size))
+                if size < 0 && usize::try_from(-size).ok() == Some(raw.len())
+        ),
+        "raw helper should surface llama.cpp's required buffer size"
+    );
+    let exact = model
+        .token_to_raw_bytes_with_size(token, raw.len(), Special::Tokenize, None)
+        .expect("exact raw token buffer should be sufficient");
+    assert_eq!(exact, raw);
+}
+
+fn find_token_filtered_by_wrapper_with_raw_piece(
+    model: &LlamaModel,
+) -> Option<(LlamaToken, Vec<u8>)> {
+    for id in 0..model.n_vocab() {
+        let token = LlamaToken::new(id);
+        let Ok(filtered) = model.token_to_bytes(token, Special::Tokenize) else {
+            continue;
+        };
+        if !filtered.is_empty() {
+            continue;
+        }
+        let raw = raw_token_bytes(model, token)?;
+        if raw.len() > 1 {
+            return Some((token, raw));
+        }
+    }
+    None
+}
+
+fn raw_token_bytes(model: &LlamaModel, token: LlamaToken) -> Option<Vec<u8>> {
+    match model.token_to_raw_bytes(token, Special::Tokenize) {
+        Ok(bytes) => Some(bytes),
+        Err(TokenToStringError::InsufficientBufferSpace(size)) if size < 0 => model
+            .token_to_raw_bytes_with_size(
+                token,
+                usize::try_from(-size).ok()?,
+                Special::Tokenize,
+                None,
+            )
+            .ok(),
+        Err(_) => None,
+    }
 }
 
 // ============================================================
