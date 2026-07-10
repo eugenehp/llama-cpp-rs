@@ -262,12 +262,15 @@ impl MtpSession {
             return Err(MtpSessionError::InvalidConfig("n_draft_max must be > 0"));
         }
 
+        // `MTP_SPEC_TYPE_*` is `c_uint` under clang/gcc and `c_int` under MSVC;
+        // `as i32` compiles on both. The allow covers the clang/gcc case.
+        #[allow(clippy::cast_possible_wrap)]
         let c_config = llama_cpp_sys_4::mtp_session_config {
             n_seq: config.n_seq,
             n_draft_max: config.n_draft_max,
             n_min: config.n_min,
             p_min: config.p_min,
-            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP.cast_signed(),
+            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP as i32,
         };
 
         let raw = unsafe {

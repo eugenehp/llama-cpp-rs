@@ -521,7 +521,14 @@ fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
     } else if target.contains("apple") {
         "*.dylib"
     } else {
-        "*.so"
+        // Match versioned sonames too (e.g. `libggml-base.so.0`), not just the
+        // bare `.so` developer symlink. At runtime the dynamic loader requests
+        // the SONAME (`libggml-base.so.0`), so that file — not just
+        // `libggml-base.so` — must be placed next to the test/example
+        // binaries. Globbing only `*.so` copies the symlink but misses the
+        // versioned target, causing `cargo test` to fail at load time with
+        // "libggml-base.so.0: cannot open shared object file".
+        "*.so*"
     };
 
     let shared_libs_dir = if target.contains("windows") {
@@ -624,7 +631,10 @@ fn extract_prebuilt_shared_assets(prebuilt_root: &Path, target: &str) -> Vec<Pat
     } else if target.contains("apple") {
         "*.dylib"
     } else {
-        "*.so"
+        // Include versioned sonames (e.g. `libggml-base.so.0`) — the runtime
+        // loader requests the SONAME, not the bare `.so` symlink. See the note
+        // in `extract_lib_assets`.
+        "*.so*"
     };
 
     let mut files = Vec::new();
@@ -1531,6 +1541,10 @@ fn main() {
                         .and_then(|f| f.to_str())
                         .expect("invalid prebuilt asset file name");
 
+                    // Follow symlinks so the destination is a real file under
+                    // the (possibly versioned) name the loader will request.
+                    let src = std::fs::canonicalize(&asset).unwrap_or_else(|_| asset.clone());
+
                     for dst in [
                         target_dir.join(filename),
                         target_dir.join("examples").join(filename),
@@ -1540,8 +1554,8 @@ fn main() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         if !dst.exists() {
-                            let _ = std::fs::hard_link(&asset, &dst)
-                                .or_else(|_| std::fs::copy(&asset, &dst).map(|_| ()));
+                            let _ = std::fs::hard_link(&src, &dst)
+                                .or_else(|_| std::fs::copy(&src, &dst).map(|_| ()));
                         }
                     }
                 }
@@ -2345,6 +2359,15 @@ fn main() {
             let asset_clone = asset.clone();
             let filename = asset_clone.file_name().unwrap();
             let filename = filename.to_str().unwrap();
+
+            // Follow symlinks to the real library file. On Linux the SONAME
+            // entry (e.g. `libggml-base.so.0`) and the dev entry
+            // (`libggml-base.so`) are usually symlinks pointing at the real
+            // versioned file. We want the destination to be a real file / hard
+            // link carrying the exact (possibly versioned) name, so the loader
+            // can resolve it without the rest of the symlink chain being
+            // present.
+            let asset = std::fs::canonicalize(&asset).unwrap_or(asset);
 
             // Helper: remove stale destination before hard-linking.
             // On Linux, cmake creates versioned symlink chains (e.g. libllama.so -> libllama.so.0).

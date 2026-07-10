@@ -7,7 +7,9 @@
 mod support;
 
 use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::model::{AddBos, LlamaModel};
+use llama_cpp_4::model::{AddBos, LlamaModel, Special};
+use llama_cpp_4::token::LlamaToken;
+use llama_cpp_4::TokenToStringError;
 
 use support::model::{backend, load_model};
 
@@ -151,6 +153,156 @@ fn test_token_attr() {
     };
     let bos = model.token_bos();
     let _ = model.token_attr(bos);
+}
+
+#[test]
+fn test_raw_token_bytes_preserve_filtered_special_piece() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let Some((token, raw)) = find_token_filtered_by_wrapper_with_raw_piece(&model) else {
+        panic!("expected at least one filtered token with a raw llama.cpp piece");
+    };
+
+    let filtered = model
+        .token_to_bytes(token, Special::Tokenize)
+        .expect("filtered token conversion should not error");
+    assert!(
+        filtered.is_empty(),
+        "selected token should be filtered by token_to_bytes"
+    );
+    assert!(
+        raw.len() > 1,
+        "selected token should exercise insufficient-buffer behavior"
+    );
+
+    let too_small =
+        model.token_to_raw_bytes_with_size(token, raw.len() - 1, Special::Tokenize, None);
+    assert!(
+        matches!(
+            too_small,
+            Err(TokenToStringError::InsufficientBufferSpace(size))
+                if size < 0 && usize::try_from(-size).ok() == Some(raw.len())
+        ),
+        "raw helper should surface llama.cpp's required buffer size"
+    );
+    let exact = model
+        .token_to_raw_bytes_with_size(token, raw.len(), Special::Tokenize, None)
+        .expect("exact raw token buffer should be sufficient");
+    assert_eq!(exact, raw);
+}
+
+fn find_token_filtered_by_wrapper_with_raw_piece(
+    model: &LlamaModel,
+) -> Option<(LlamaToken, Vec<u8>)> {
+    for id in 0..model.n_vocab() {
+        let token = LlamaToken::new(id);
+        let Ok(filtered) = model.token_to_bytes(token, Special::Tokenize) else {
+            continue;
+        };
+        if !filtered.is_empty() {
+            continue;
+        }
+        let raw = raw_token_bytes(model, token)?;
+        if raw.len() > 1 {
+            return Some((token, raw));
+        }
+    }
+    None
+}
+
+fn raw_token_bytes(model: &LlamaModel, token: LlamaToken) -> Option<Vec<u8>> {
+    match model.token_to_raw_bytes(token, Special::Tokenize) {
+        Ok(bytes) => Some(bytes),
+        Err(TokenToStringError::InsufficientBufferSpace(size)) if size < 0 => model
+            .token_to_raw_bytes_with_size(
+                token,
+                usize::try_from(-size).ok()?,
+                Special::Tokenize,
+                None,
+            )
+            .ok(),
+        Err(_) => None,
+    }
+}
+
+#[test]
+fn test_token_to_raw_bytes_autosizes_over_whole_vocab() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    // The convenience helper must never surface InsufficientBufferSpace: it
+    // grows the buffer to whatever llama.cpp requires. Cross-check every token
+    // against an explicitly oversized buffer.
+    for id in 0..model.n_vocab() {
+        let token = LlamaToken::new(id);
+        let auto = model.token_to_raw_bytes(token, Special::Tokenize);
+        assert!(
+            !matches!(auto, Err(TokenToStringError::InsufficientBufferSpace(_))),
+            "token {id} should have auto-sized instead of reporting insufficient buffer"
+        );
+        if let Ok(auto) = auto {
+            let explicit = model
+                .token_to_raw_bytes_with_size(token, 4096, Special::Tokenize, None)
+                .expect("oversized buffer should always succeed");
+            assert_eq!(auto, explicit, "auto-sized bytes must match explicit buffer");
+        }
+    }
+}
+
+#[test]
+fn test_tokens_to_raw_bytes_matches_per_token_concatenation() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let tokens = model
+        .str_to_token("The quick brown fox", AddBos::Never)
+        .expect("tokenizing ascii should succeed");
+
+    let batch = model
+        .tokens_to_raw_bytes(&tokens, Special::Plaintext)
+        .expect("batch raw conversion should succeed");
+
+    let mut expected = Vec::new();
+    for &token in &tokens {
+        expected.extend_from_slice(
+            &model
+                .token_to_raw_bytes(token, Special::Plaintext)
+                .expect("per-token raw conversion should succeed"),
+        );
+    }
+    assert_eq!(batch, expected);
+}
+
+#[test]
+fn test_stream_detokenizer_matches_bulk_raw_bytes() {
+    use llama_cpp_4::token::detokenizer::StreamDetokenizer;
+
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let tokens = model
+        .str_to_token("The quick brown fox", AddBos::Never)
+        .expect("tokenizing ascii should succeed");
+
+    let mut detok = StreamDetokenizer::new(&model, Special::Plaintext);
+    let mut streamed = detok
+        .push_all(tokens.iter().copied())
+        .expect("streaming push should succeed");
+    streamed.push_str(&detok.finish().expect("finish should succeed"));
+
+    let bulk = String::from_utf8(
+        model
+            .tokens_to_raw_bytes(&tokens, Special::Plaintext)
+            .expect("bulk raw conversion should succeed"),
+    )
+    .expect("ascii round-trip is valid utf-8");
+
+    assert_eq!(streamed, bulk);
 }
 
 // ============================================================

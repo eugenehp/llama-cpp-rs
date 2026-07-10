@@ -6,6 +6,7 @@ use std::mem::ManuallyDrop;
 
 pub mod data;
 pub mod data_array;
+pub mod detokenizer;
 
 /// A safe wrapper for `llama_token`.
 ///
