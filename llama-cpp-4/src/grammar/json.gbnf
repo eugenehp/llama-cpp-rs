@@ -5,13 +5,13 @@ object ::=
   "{" (
             string ":" value
     ("," string ":" value)*
-  )? "}" 
+  )? "}"
 
 array  ::=
   "[" (
             value
     ("," value)*
-  )? "]" 
+  )? "]"
 
 string ::=
   "\"" (

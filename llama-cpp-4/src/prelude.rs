@@ -163,6 +163,7 @@ pub use crate::model::{
 };
 pub use crate::sampling::{LlamaSampler, LlamaSamplerParams};
 pub use crate::token::data_array::LlamaTokenDataArray;
+pub use crate::token::detokenizer::{DetokenizeError, StreamDetokenizer};
 pub use crate::token::LlamaToken;
 
 // ── Errors & results ────────────────────────────────────────────────────────

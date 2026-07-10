@@ -4,7 +4,7 @@
 [![docs.rs](https://img.shields.io/docsrs/llama-cpp-4.svg)](https://docs.rs/llama-cpp-4)
 [![License](https://img.shields.io/crates/l/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4)
 
-Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).  
+Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
 **llama.cpp version:** `4fc4ec5 (b9859)` · **Crate version:** 0.4.0

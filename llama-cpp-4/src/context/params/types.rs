@@ -1,15 +1,18 @@
 /// A rusty wrapper around `llama_context_type`.
 //
 // Cast the sys constants to `u32` so the discriminants compile on both clang
-// (where bindgen emits `c_uint`) and MSVC (where it emits `c_int`).
+// (where bindgen emits `c_uint`, making the cast a no-op) and MSVC (where it
+// emits `c_int` and the cast is required). The `unnecessary_cast` allow covers
+// the clang/gcc case where the source is already `u32`.
+#[allow(clippy::unnecessary_cast)]
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum LlamaContextType {
     /// Default context (standard inference).
-    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT,
+    Default = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_DEFAULT as u32,
     /// Multi-token-prediction draft context, used as the draft side of
     /// speculative decoding. Pair with [`crate::mtp::MtpSession`].
-    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP,
+    Mtp = llama_cpp_sys_4::LLAMA_CONTEXT_TYPE_MTP as u32,
 }
 
 impl From<llama_cpp_sys_4::llama_context_type> for LlamaContextType {
