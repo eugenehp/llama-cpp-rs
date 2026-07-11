@@ -1,7 +1,7 @@
-name: Update llama cpp nightly
+name: Update llama cpp weekly
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * 1'  # 00:00 UTC every Monday
   workflow_dispatch:
 
 permissions:

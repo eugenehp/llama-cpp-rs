@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+## [0.4.1] - 2026-07-10
+
+### Added
+- **Raw-byte detokenization** (`llama-cpp-4`): recover a token's exact
+  `llama_token_to_piece` bytes, bypassing the token-attribute filtering in
+  [`LlamaModel::token_to_bytes`] so control, byte-fallback, and other special
+  pieces are preserved verbatim.
+  - [`LlamaModel::token_to_raw_bytes`] — single token; auto-sizes the buffer to
+    whatever llama.cpp requires (no more spurious `InsufficientBufferSpace` on
+    long pieces).
+  - [`LlamaModel::token_to_raw_bytes_with_size`] — explicit buffer control, with
+    `lstrip` support.
+  - [`LlamaModel::tokens_to_raw_bytes`] — lossless bulk conversion for a token slice.
+- **Streaming detokenizer** (`llama-cpp-4`): [`token::detokenizer::StreamDetokenizer`],
+  a stateful, UTF-8-aware decoder for token-by-token generation loops. It buffers
+  partial multi-byte sequences split across byte-fallback tokens (emoji, CJK,
+  accents) and emits only complete text; accompanied by [`DetokenizeError`]. Both
+  are re-exported from `llama_cpp_4::prelude`.
+- **Example**: `examples/detokenize.rs` demonstrating the single/bulk raw-byte
+  APIs and streaming detokenization during generation.
+
+### Changed
+- **llama.cpp**: vendored submodule updated to `082b326f` (tag `b9951`), tracking
+  daily upstream syncs from 2026-07-03 through 2026-07-10.
+
+### Dependencies
+- Bump `cc` from 1.2.65 to 1.2.66.
+
 ## [0.4.0] - 2026-07-01
 
 ### Removed (breaking)

@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `4fc4ec5 (b9859)` · **Crate version:** 0.4.0
+**llama.cpp version:** `082b326f (b9951)` · **Crate version:** 0.4.1
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -54,7 +54,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.4.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.4.1/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 

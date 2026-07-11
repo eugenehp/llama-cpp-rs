@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `4fc4ec5 (b9859)` (Jun 2026) — includes
+**llama.cpp version:** `082b326f (b9951)` (Jul 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673), and
 upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
@@ -22,7 +22,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.4.0"
+llama-cpp-4 = "0.4.1"
 ```
 
 Import the common types with the prelude:
@@ -171,7 +171,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.4.0`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.4.1`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -243,6 +243,31 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+### Streaming detokenization (library)
+
+Byte-fallback tokenizers split a single UTF-8 character (emoji, CJK, accents) across several
+tokens, so decoding each token on its own can produce invalid UTF-8. `StreamDetokenizer`
+(new in 0.4.1) buffers the raw piece bytes and emits only complete text — ideal for a
+token-by-token generation loop:
+
+```rust
+use llama_cpp_4::prelude::*;
+
+fn stream(model: &LlamaModel, tokens: &[LlamaToken]) -> Result<String, DetokenizeError> {
+    let mut detok = StreamDetokenizer::new(model, Special::Plaintext);
+    let mut text = String::new();
+    for &token in tokens {
+        text.push_str(&detok.push(token)?); // returns only completed UTF-8
+    }
+    text.push_str(&detok.finish()?);        // flush any trailing text
+    Ok(text)
+}
+```
+
+For lossless, non-streaming conversion use `model.tokens_to_raw_bytes(&tokens, special)` (or
+`token_to_raw_bytes` for one token) — these preserve control/byte pieces that `token_to_bytes`
+filters away. Runnable demo: `cargo run --example detokenize -- model.gguf`.
 
 ---
 
@@ -835,7 +860,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.4.0},
+  version   = {0.4.1},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```
