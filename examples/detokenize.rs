@@ -24,7 +24,9 @@ use std::io::Write;
 
 #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 fn main() {
-    let model_path = std::env::args().nth(1).expect("please specify a model path");
+    let model_path = std::env::args()
+        .nth(1)
+        .expect("please specify a model path");
     let prompt = std::env::args()
         .nth(2)
         .unwrap_or_else(|| "The quick brown fox".to_string());
@@ -62,7 +64,9 @@ fn main() {
     // ── 2. Bulk raw bytes ────────────────────────────────────────────────────
     // `tokens_to_raw_bytes` concatenates every piece losslessly. For a complete
     // token sequence the bytes form valid UTF-8.
-    let bulk = model.tokens_to_raw_bytes(&tokens, Special::Tokenize).unwrap();
+    let bulk = model
+        .tokens_to_raw_bytes(&tokens, Special::Tokenize)
+        .unwrap();
     println!(
         "\nbulk detokenized prompt: {:?}",
         String::from_utf8_lossy(&bulk),

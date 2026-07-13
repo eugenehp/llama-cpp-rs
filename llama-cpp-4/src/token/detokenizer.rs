@@ -192,6 +192,9 @@ mod tests {
     #[test]
     fn incomplete_utf8_reports_leftover_bytes() {
         let err = DetokenizeError::IncompleteUtf8(vec![0xE2, 0x82]);
-        assert_eq!(err.to_string(), "stream ended with 2 incomplete utf-8 byte(s)");
+        assert_eq!(
+            err.to_string(),
+            "stream ended with 2 incomplete utf-8 byte(s)"
+        );
     }
 }

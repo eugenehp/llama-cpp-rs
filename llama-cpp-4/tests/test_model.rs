@@ -247,7 +247,10 @@ fn test_token_to_raw_bytes_autosizes_over_whole_vocab() {
             let explicit = model
                 .token_to_raw_bytes_with_size(token, 4096, Special::Tokenize, None)
                 .expect("oversized buffer should always succeed");
-            assert_eq!(auto, explicit, "auto-sized bytes must match explicit buffer");
+            assert_eq!(
+                auto, explicit,
+                "auto-sized bytes must match explicit buffer"
+            );
         }
     }
 }
