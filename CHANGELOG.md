@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.4.2] - 2026-07-12
+
 ### Added
 - **`MtmdInputText::from_bytes`** (`llama-cpp-4`): construct a multimodal text
   prompt from raw bytes. Combined with upstream's new `text_len` field, prompts
