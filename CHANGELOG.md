@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+- **`MtmdInputText::from_bytes`** (`llama-cpp-4`): construct a multimodal text
+  prompt from raw bytes. Combined with upstream's new `text_len` field, prompts
+  may now contain interior NUL bytes without being truncated.
+
+### Changed
+- **llama.cpp**: vendored submodule updated to `99f3dc3` (tag `b9982`) from
+  `082b326f` (b9951).
+- **`MtmdInputText`** (`llama-cpp-4`): now length-delimited instead of
+  `CString`-backed, matching upstream `mtmd_input_text::text_len`
+  ([#25548](https://github.com/ggml-org/llama.cpp/pull/25548)). `new` is now
+  infallible (interior NUL bytes are permitted and preserved); `try_new` is kept
+  for compatibility but never returns `Err`.
+
+### Fixed
+- **mtmd**: a NUL byte embedded in a multimodal prompt no longer silently
+  truncates it (and drops later messages). The prompt length is now passed
+  explicitly to `mtmd_tokenize`.
+
 ## [0.4.1] - 2026-07-10
 
 ### Added

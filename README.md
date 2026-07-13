@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `082b326f (b9951)` (Jul 2026) — includes
+**llama.cpp version:** `99f3dc3 (b9982)` (Jul 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673), and
 upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
