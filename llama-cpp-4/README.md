@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** `082b326f (b9951)` · **Crate version:** 0.4.1
+**llama.cpp version:** `99f3dc3 (b9982)` · **Crate version:** 0.4.1
 
 ---
 

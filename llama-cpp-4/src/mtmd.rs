@@ -500,7 +500,11 @@ impl MtmdContext {
             .collect();
 
         let c_text = sys::mtmd_input_text {
-            text: text.c_text.as_ptr(),
+            // Upstream reads exactly `text_len` bytes from `text`
+            // (llama.cpp #25548), so the prompt is length-delimited and interior
+            // NUL bytes are preserved instead of truncating it.
+            text: text.text.as_ptr().cast(),
+            text_len: text.text_len,
             add_special: text.add_special,
             parse_special: text.parse_special,
         };
@@ -722,53 +726,76 @@ impl MtmdContext {
 ///
 /// The prompt string must contain the media marker (see
 /// [`MtmdContext::default_marker`]) once for every bitmap to be embedded.
+///
+/// The prompt is passed to llama.cpp as an explicit pointer + length
+/// (`mtmd_input_text::text_len`), so interior NUL bytes are preserved rather
+/// than truncating the prompt — use [`MtmdInputText::from_bytes`] when the
+/// prompt is not guaranteed NUL-free.
 #[derive(Debug)]
 pub struct MtmdInputText<'a> {
-    c_text: CString,
+    /// Prompt bytes followed by a trailing NUL sentinel. The sentinel keeps the
+    /// buffer usable by any C code that still treats `text` as a C string; it is
+    /// excluded from `text_len`.
+    text: Vec<u8>,
+    /// Prompt length in bytes, excluding the trailing NUL sentinel. Passed
+    /// verbatim as `mtmd_input_text::text_len`, so interior NULs are honoured.
+    text_len: usize,
     add_special: bool,
     parse_special: bool,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> MtmdInputText<'a> {
-    /// Create a new `MtmdInputText`.
+    /// Create a new `MtmdInputText` from a string prompt.
     ///
-    /// * `text`          – the prompt (must not contain interior NUL bytes)
+    /// * `text`          – the prompt (interior NUL bytes are permitted and
+    ///   preserved)
     /// * `add_special`   – whether to add BOS/EOS tokens
     /// * `parse_special` – whether to parse special tokens embedded in the text
-    ///
-    /// # Panics
-    ///
-    /// Panics if `text` contains an interior NUL byte.
     #[must_use]
     pub fn new(text: &'a str, add_special: bool, parse_special: bool) -> Self {
-        let c_text = CString::new(text).expect("MtmdInputText: text must not contain NUL bytes");
+        Self::from_bytes(text.as_bytes(), add_special, parse_special)
+    }
+
+    /// Create a new `MtmdInputText` from raw prompt bytes.
+    ///
+    /// Unlike a C string, the prompt length is carried explicitly, so `text`
+    /// may contain interior NUL bytes without truncating the prompt. The bytes
+    /// are copied into an owned, NUL-terminated buffer.
+    ///
+    /// * `text`          – the prompt bytes (typically UTF-8)
+    /// * `add_special`   – whether to add BOS/EOS tokens
+    /// * `parse_special` – whether to parse special tokens embedded in the text
+    #[must_use]
+    pub fn from_bytes(text: &'a [u8], add_special: bool, parse_special: bool) -> Self {
+        let text_len = text.len();
+        let mut buf = Vec::with_capacity(text_len + 1);
+        buf.extend_from_slice(text);
+        buf.push(0); // NUL sentinel, not counted in `text_len`
         Self {
-            c_text,
+            text: buf,
+            text_len,
             add_special,
             parse_special,
             _marker: std::marker::PhantomData,
         }
     }
 
-    /// Try to create a new `MtmdInputText`, returning an error if `text`
-    /// contains an interior NUL byte.
+    /// Try to create a new `MtmdInputText` from a string prompt.
+    ///
+    /// Retained for backwards compatibility. Interior NUL bytes are now
+    /// permitted (see [`MtmdInputText::new`]), so this never returns `Err`;
+    /// prefer [`new`](MtmdInputText::new).
     ///
     /// # Errors
     ///
-    /// Returns [`std::ffi::NulError`] if `text` contains a NUL byte.
+    /// Never returns an error; the `Result` is kept for API stability.
     pub fn try_new(
         text: &'a str,
         add_special: bool,
         parse_special: bool,
     ) -> std::result::Result<Self, std::ffi::NulError> {
-        let c_text = CString::new(text)?;
-        Ok(Self {
-            c_text,
-            add_special,
-            parse_special,
-            _marker: std::marker::PhantomData,
-        })
+        Ok(Self::new(text, add_special, parse_special))
     }
 }
 
@@ -1553,5 +1580,31 @@ mod tests {
         assert_eq!(std::mem::offset_of!(MtmdDecoderPos, x), 4);
         assert_eq!(std::mem::offset_of!(MtmdDecoderPos, y), 8);
         assert_eq!(std::mem::offset_of!(MtmdDecoderPos, z), 12);
+    }
+
+    #[test]
+    fn input_text_records_byte_length_and_nul_terminates() {
+        let input = MtmdInputText::new("hello", true, false);
+        // text_len is the prompt length, excluding the trailing NUL sentinel.
+        assert_eq!(input.text_len, 5);
+        assert_eq!(input.text, b"hello\0");
+        assert!(input.add_special);
+        assert!(!input.parse_special);
+    }
+
+    #[test]
+    fn input_text_preserves_interior_nul() {
+        // The whole point of upstream's `text_len`: a prompt with an embedded
+        // NUL must keep its full length rather than truncating at the NUL.
+        let input = MtmdInputText::from_bytes(b"a\0b", false, true);
+        assert_eq!(input.text_len, 3);
+        assert_eq!(input.text, b"a\0b\0");
+    }
+
+    #[test]
+    fn input_text_try_new_is_infallible() {
+        let input = MtmdInputText::try_new("marker \u{1} data", true, true)
+            .expect("try_new no longer rejects any input");
+        assert_eq!(input.text_len, "marker \u{1} data".len());
     }
 }
