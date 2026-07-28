@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- Lifetime-bound, non-thread-transferable MTP and EAGLE-3 sessions with
+  bounded prompt/proposal/state inputs, exact implementation continuation
+  state, checked topology/capacity construction, and contained C++ failures.
+- Transactional tensor capture/write-back with decode lifecycle hooks and a
+  documented safe ownership boundary.
+
+### Changed
+
+- Forward-port the binding and native patches to literal llama.cpp revision
+  `f87067841bac583bc089a225382248d857791ca8`, including EAGLE-3 v3 target
+  extraction for `gpt-oss`.
+- Build `llama-common` for the speculative shim and verify the patched source
+  postcondition even when an OUT_DIR sentinel or shared CMake cache exists.
+- Resolve shared runtime assets against Cargo's active target/profile
+  directory even when `build.build-dir` places `OUT_DIR` elsewhere.
+- Honor the documented static-link default in `llama-cpp-4`; shared
+  `libllama` artifacts now require the explicit `dynamic-link` feature.
+- Fall back from unverified prebuilt archives to a source build; explicit
+  unverifiable `LLAMA_PREBUILT_DIR` inputs now fail closed.
+
 ## [0.4.2] - 2026-07-12
 
 ### Added

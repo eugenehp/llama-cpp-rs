@@ -95,7 +95,10 @@ use crate::context::params::LlamaContextType;
 use crate::context::LlamaContext;
 use crate::llama_batch::LlamaBatch;
 use crate::speculative::MAX_SPECULATIVE_PROMPT_TOKENS;
-use crate::speculative::{capture_state, restore_state, validate_config, SpeculativeStateError};
+use crate::speculative::{
+    capture_state, restore_state, validate_config, validate_context_capacities,
+    SpeculativeContextCapacity, SpeculativeStateError,
+};
 use crate::token::LlamaToken;
 
 /// Errors raised by the MTP draft session.
@@ -786,13 +789,24 @@ fn validate_contexts(
             "target sequence capacity is too small or draft capacity differs from n_seq",
         ));
     }
-    let required_recurrent = u32::try_from(config.n_draft_max)
+    let required_draft = u32::try_from(config.n_draft_max)
         .map_err(|_| MtpSessionError::InvalidConfig("n_draft_max exceeds u32"))?;
-    if draft.n_rs_seq() < required_recurrent {
-        return Err(MtpSessionError::IncompatibleContexts(
-            "draft recurrent-state capacity is smaller than n_draft_max",
-        ));
-    }
+    validate_context_capacities(
+        SpeculativeContextCapacity {
+            batch: target.n_batch(),
+            micro_batch: target.n_ubatch(),
+            recurrent_slots: target.n_rs_seq(),
+            recurrent_or_hybrid: target.model.is_recurrent() || target.model.is_hybrid(),
+        },
+        SpeculativeContextCapacity {
+            batch: draft.n_batch(),
+            micro_batch: draft.n_ubatch(),
+            recurrent_slots: draft.n_rs_seq(),
+            recurrent_or_hybrid: draft.model.is_recurrent() || draft.model.is_hybrid(),
+        },
+        required_draft,
+    )
+    .map_err(MtpSessionError::IncompatibleContexts)?;
     if draft.model.n_embd_out() != target.model.n_embd() {
         return Err(MtpSessionError::IncompatibleContexts(
             "draft output width differs from target hidden width",

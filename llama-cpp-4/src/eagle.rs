@@ -68,7 +68,10 @@ use crate::context::params::LlamaContextType;
 use crate::context::LlamaContext;
 use crate::llama_batch::LlamaBatch;
 use crate::speculative::MAX_SPECULATIVE_PROMPT_TOKENS;
-use crate::speculative::{capture_state, restore_state, validate_config, SpeculativeStateError};
+use crate::speculative::{
+    capture_state, restore_state, validate_config, validate_context_capacities,
+    SpeculativeContextCapacity, SpeculativeStateError,
+};
 use crate::token::LlamaToken;
 
 /// Errors raised by the EAGLE-3 draft session.
@@ -684,18 +687,55 @@ fn validate_contexts(
             "target sequence capacity is too small or draft capacity differs from n_seq",
         ));
     }
+    let required_draft = u32::try_from(config.n_draft_max)
+        .map_err(|_| Eagle3SessionError::InvalidConfig("n_draft_max exceeds u32"))?;
+    validate_context_capacities(
+        SpeculativeContextCapacity {
+            batch: target.n_batch(),
+            micro_batch: target.n_ubatch(),
+            recurrent_slots: target.n_rs_seq(),
+            recurrent_or_hybrid: target.model.is_recurrent() || target.model.is_hybrid(),
+        },
+        SpeculativeContextCapacity {
+            batch: draft.n_batch(),
+            micro_batch: draft.n_ubatch(),
+            recurrent_slots: draft.n_rs_seq(),
+            recurrent_or_hybrid: draft.model.is_recurrent() || draft.model.is_hybrid(),
+        },
+        required_draft,
+    )
+    .map_err(Eagle3SessionError::IncompatibleContexts)?;
     let target_layers = target.model.n_layer();
-    let layer_ids = draft.model.target_layer_ids();
-    if layer_ids.len() != 3
-        || layer_ids
-            .iter()
-            .any(|&layer| layer < 0 || layer >= target_layers)
-    {
+    let target_architecture = target
+        .model
+        .meta_val_str("general.architecture", 64)
+        .map_err(|_| {
+            Eagle3SessionError::IncompatibleContexts(
+                "target model architecture metadata is unavailable",
+            )
+        })?;
+    if !valid_target_layer_ids(
+        draft.model.target_layer_ids(),
+        target_layers,
+        target_architecture == "gpt-oss",
+    ) {
         return Err(Eagle3SessionError::IncompatibleContexts(
-            "draft must name exactly three in-range target extraction layers",
+            "draft must name exactly three supported target extraction sites",
         ));
     }
     Ok(())
+}
+
+fn valid_target_layer_ids(
+    layer_ids: &[i32],
+    target_layers: i32,
+    terminal_nextn_site: bool,
+) -> bool {
+    target_layers > 0
+        && layer_ids.len() == 3
+        && layer_ids.iter().all(|&layer| {
+            layer >= 0 && (layer < target_layers || (layer == target_layers && terminal_nextn_site))
+        })
 }
 
 impl Drop for Eagle3Session<'_, '_, '_> {
@@ -709,5 +749,20 @@ impl std::fmt::Debug for Eagle3Session<'_, '_, '_> {
         f.debug_struct("Eagle3Session")
             .field("config", &self.config)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_target_layer_ids;
+
+    #[test]
+    fn validates_transformer_and_terminal_nextn_sites() {
+        assert!(valid_target_layer_ids(&[1, 4, 7], 8, false));
+        assert!(!valid_target_layer_ids(&[1, 4], 8, false));
+        assert!(!valid_target_layer_ids(&[1, -1, 7], 8, false));
+        assert!(!valid_target_layer_ids(&[1, 4, 8], 8, false));
+        assert!(valid_target_layer_ids(&[1, 4, 8], 8, true));
+        assert!(!valid_target_layer_ids(&[1, 4, 9], 8, true));
     }
 }

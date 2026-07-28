@@ -17,8 +17,45 @@ macro_rules! debug_log {
 }
 
 fn get_cargo_target_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
     let profile = std::env::var("PROFILE")?;
+
+    // Cargo includes the active target/profile directory in the build
+    // script's runtime-library search path. Prefer that authoritative path:
+    // with unstable `build.build-dir`, OUT_DIR intentionally lives somewhere
+    // else and cannot identify where Cargo will look for shared libraries
+    // while running tests and binaries.
+    let runtime_path_variables: &[&str] = if cfg!(target_os = "windows") {
+        &["PATH"]
+    } else if cfg!(target_os = "macos") {
+        &["DYLD_FALLBACK_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
+    } else {
+        &["LD_LIBRARY_PATH"]
+    };
+    for variable in runtime_path_variables {
+        let Some(paths) = std::env::var_os(variable) else {
+            continue;
+        };
+        for path in std::env::split_paths(&paths) {
+            if path
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(&profile))
+            {
+                return Ok(path);
+            }
+            if path.file_name().is_some_and(|name| name == "deps") {
+                if let Some(parent) = path.parent() {
+                    if parent
+                        .file_name()
+                        .is_some_and(|name| name == std::ffi::OsStr::new(&profile))
+                    {
+                        return Ok(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
     let mut target_dir = None;
     let mut sub_path = out_dir.as_path();
     while let Some(parent) = sub_path.parent() {
@@ -237,6 +274,58 @@ fn patch_target_path(dst: &Path, patch: &Patch<'_>) -> Result<PathBuf, String> {
     Ok(dst.join(rel))
 }
 
+fn patch_entries(patches_dir: &Path) -> Vec<PathBuf> {
+    if !patches_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
+        .expect("failed to read patches dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "patch")
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+fn patches_match_new_side(patches_dir: &Path, dst: &Path) -> Result<bool, String> {
+    for patch_path in patch_entries(patches_dir) {
+        let patch_text = fs::read_to_string(&patch_path)
+            .map_err(|error| format!("failed to read patch {}: {error}", patch_path.display()))?;
+        let patches = Patch::from_multiple(&patch_text)
+            .map_err(|error| format!("failed to parse patch {}: {error}", patch_path.display()))?;
+
+        for patch in patches {
+            let file_path = patch_target_path(dst, &patch)?;
+            let creates_file = patch.old.path.as_ref() == "/dev/null";
+            let deletes_file = patch.new.path.as_ref() == "/dev/null";
+            let current = match fs::read_to_string(&file_path) {
+                Ok(contents) => contents,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound && deletes_file => {
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound && creates_file => {
+                    return Ok(false);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "failed to read patched target {}: {error}",
+                        file_path.display()
+                    ));
+                }
+            };
+            let current_lines: Vec<&str> = current.lines().collect();
+            if !patch_matches_side(&current_lines, &patch, true) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
     for patch_path in entries {
         println!(
@@ -347,16 +436,7 @@ fn apply_patches_via_cli(entries: &[PathBuf], dst: &Path) -> Result<(), String> 
 /// Uses the `patch -p1` command.
 /// Skips the patches directory entirely when it does not exist or is empty.
 fn apply_patches(patches_dir: &Path, dst: &Path) {
-    if !patches_dir.is_dir() {
-        return;
-    }
-    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
-        .expect("failed to read patches dir")
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.extension().map(|e| e == "patch").unwrap_or(false))
-        .collect();
-    entries.sort();
+    let entries = patch_entries(patches_dir);
     if entries.is_empty() {
         return;
     }
@@ -379,6 +459,48 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
              The patch may need rebasing against the current llama.cpp submodule commit."
         );
     }
+}
+
+fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
+    if staged_dir.exists() {
+        std::fs::remove_dir_all(staged_dir).expect("failed to clear staged llama.cpp patches");
+    }
+    std::fs::create_dir_all(staged_dir).expect("failed to create staged llama.cpp patches");
+    let always_active = [
+        "0003-exact-speculative-state.patch",
+        "0004-exact-decode-lifecycle-hooks.patch",
+        "0005-fail-closed-eagle3-process.patch",
+    ];
+    for name in always_active {
+        let source = patches_dir.join(name);
+        assert!(
+            source.is_file(),
+            "required llama.cpp patch is absent: {}",
+            source.display()
+        );
+        std::fs::copy(&source, staged_dir.join(name))
+            .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
+    }
+
+    if cfg!(feature = "q1") {
+        let name = "0001-q1-quantization.patch";
+        let source = patches_dir.join(name);
+        if source.exists() {
+            std::fs::copy(&source, staged_dir.join(name))
+                .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
+        }
+    }
+
+    if cfg!(feature = "vulkan") {
+        let name = "0002-vulkan-spirv-headers-sdk.patch";
+        let source = patches_dir.join(name);
+        if source.exists() {
+            std::fs::copy(&source, staged_dir.join(name))
+                .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
+        }
+    }
+
+    true
 }
 
 /// Return a string that uniquely identifies the current state of the llama.cpp
@@ -1223,6 +1345,7 @@ fn main() {
     debug_log!("CARGO_MANIFEST_DIR: {}", manifest_dir);
     debug_log!("TARGET_DIR: {}", target_dir.display());
     debug_log!("OUT_DIR: {}", out_dir.display());
+    debug_log!("LD_LIBRARY_PATH: {:?}", env::var_os("LD_LIBRARY_PATH"));
     debug_log!("BUILD_SHARED: {}", build_shared_libs);
 
     // ── Source copy with version tracking ────────────────────────────────────
@@ -1234,66 +1357,38 @@ fn main() {
     let sentinel = out_dir.join(".llama-src-version");
     let current_version = llama_src_version(&llama_src, &patches_dir);
     let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
-    let needs_copy = !llama_dst.exists() || stored_version.trim() != current_version.trim();
+    let staged_dir = out_dir.join("patches-active");
+    let staged_any = stage_active_patches(&patches_dir, &staged_dir);
+    let patches_applied = !staged_any
+        || patches_match_new_side(&staged_dir, &llama_dst).unwrap_or_else(|error| {
+            debug_log!(
+                "Failed to verify the staged patch postcondition for {}: {}",
+                llama_dst.display(),
+                error
+            );
+            false
+        });
+    let needs_copy =
+        !llama_dst.exists() || stored_version.trim() != current_version.trim() || !patches_applied;
     if needs_copy {
         if llama_dst.exists() {
-            debug_log!("Source version changed — removing stale OUT_DIR copy");
+            debug_log!(
+                "Source version or patch postcondition changed — removing stale OUT_DIR copy"
+            );
             std::fs::remove_dir_all(&llama_dst).ok();
         }
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
 
-        // Apply local patches (only those gated by active Cargo features).
-        let staged_dir = out_dir.join("patches-active");
-        if staged_dir.exists() {
-            std::fs::remove_dir_all(&staged_dir).expect("failed to clear staged llama.cpp patches");
-        }
-        std::fs::create_dir_all(&staged_dir).ok();
-        let mut staged_any = false;
-
-        let speculative_patch = patches_dir.join("0003-exact-speculative-state.patch");
-        if speculative_patch.exists() {
-            std::fs::copy(
-                &speculative_patch,
-                staged_dir.join("0003-exact-speculative-state.patch"),
-            )
-            .expect("failed to stage exact speculative state patch");
-            staged_any = true;
-        }
-
-        let lifecycle_patch = patches_dir.join("0004-exact-decode-lifecycle-hooks.patch");
-        if lifecycle_patch.exists() {
-            std::fs::copy(
-                &lifecycle_patch,
-                staged_dir.join("0004-exact-decode-lifecycle-hooks.patch"),
-            )
-            .expect("failed to stage exact decode lifecycle patch");
-            staged_any = true;
-        }
-
-        if cfg!(feature = "q1") {
-            let q1_patch = patches_dir.join("0001-q1-quantization.patch");
-            if q1_patch.exists() {
-                std::fs::copy(&q1_patch, staged_dir.join("0001-q1-quantization.patch"))
-                    .expect("failed to stage q1 patch");
-                staged_any = true;
-            }
-        }
-
-        if cfg!(feature = "vulkan") {
-            let spirv_patch = patches_dir.join("0002-vulkan-spirv-headers-sdk.patch");
-            if spirv_patch.exists() {
-                std::fs::copy(
-                    &spirv_patch,
-                    staged_dir.join("0002-vulkan-spirv-headers-sdk.patch"),
-                )
-                .expect("failed to stage vulkan SPIRV-Headers patch");
-                staged_any = true;
-            }
-        }
-
         if staged_any {
             apply_patches(&staged_dir, &llama_dst);
+            if !patches_match_new_side(&staged_dir, &llama_dst)
+                .unwrap_or_else(|error| panic!("failed to verify applied patches: {error}"))
+            {
+                panic!(
+                    "llama.cpp patch application completed without satisfying the staged postcondition"
+                );
+            }
         }
         std::fs::write(&sentinel, &current_version)
             .expect("failed to write source version sentinel");
@@ -1495,8 +1590,29 @@ fn main() {
     // Expected layout is flexible; files may be in <dir>, <dir>/lib,
     // <dir>/lib64, or <dir>/bin.
 
+    // A prebuilt archive is safe only when it contains the same patched
+    // native implementation as the headers and shim compiled in this build.
+    // Existing 0.4.2 archives do not carry a patch identity, so fail closed
+    // for explicit paths and make the convenience feature use the verified
+    // source build while exact patches are active.
+    let prebuilt_dir = if staged_any {
+        if let Ok(path) = env::var("LLAMA_PREBUILT_DIR") {
+            panic!(
+                "LLAMA_PREBUILT_DIR='{path}' cannot be verified against the active llama.cpp patches; use the source build"
+            );
+        }
+        if cfg!(feature = "prebuilt") {
+            println!(
+                "cargo:warning=The active llama.cpp patches have no prebuilt identity envelope; falling back to the verified source build"
+            );
+        }
+        None
+    } else {
+        resolve_prebuilt_directory(&target, build_shared_libs)
+    };
+
     // Try prebuilt path (explicit LLAMA_PREBUILT_DIR or `prebuilt` feature download).
-    if let Some(prebuilt_dir) = resolve_prebuilt_directory(&target, build_shared_libs) {
+    if let Some(prebuilt_dir) = prebuilt_dir {
         if prebuilt_dir.exists() {
             let use_shared_libs = env::var("LLAMA_PREBUILT_SHARED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
@@ -1718,15 +1834,16 @@ fn main() {
         config.define("CMAKE_DISABLE_FIND_PACKAGE_Git", "ON");
     }
 
-    // Build tools (including the mtmd library) only when the mtmd feature is
-    // requested.  Common is also required because the CMakeLists gate for
-    // tools is `if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)`.
+    // The speculative-session shim calls llama.cpp's `common_speculative_*`
+    // implementation, which lives in llama-common. Build that library for
+    // every source configuration so downstream binaries cannot compile the
+    // shim and then fail to link its implementation. Tools (including mtmd)
+    // remain opt-in.
+    config.define("LLAMA_BUILD_COMMON", "ON");
     if cfg!(feature = "mtmd") {
         config.define("LLAMA_BUILD_TOOLS", "ON");
-        config.define("LLAMA_BUILD_COMMON", "ON");
     } else {
         config.define("LLAMA_BUILD_TOOLS", "OFF");
-        config.define("LLAMA_BUILD_COMMON", "OFF");
     }
 
     config.define(
@@ -2102,13 +2219,10 @@ fn main() {
     //     configure run was interrupted.  cmake --build would fail with "No
     //     such file or directory".
     //
-    //  2. CMakeCache.txt has GGML_NATIVE set to the wrong value: this happens
-    //     when build.rs is updated (e.g. the GGML_NATIVE=OFF fix) without
-    //     bumping the crate version, so Cargo reuses the same OUT_DIR and the
-    //     cmake crate skips configuration entirely — leaving the old ON value
-    //     in the cache and baking -mcpu=native into the library, which then
-    //     crashes with SIGILL on any chip that lacks the build host's ISA
-    //     extensions.
+    //  2. CMakeCache.txt contains an option that conflicts with this build.rs:
+    //     this happens when build.rs changes without a crate-version bump, so
+    //     Cargo reuses the shared directory and the cmake crate skips
+    //     configuration entirely.
     {
         let cmake_build_dir = cmake_out_dir.join("build");
         let cache = cmake_build_dir.join("CMakeCache.txt");
@@ -2136,7 +2250,11 @@ fn main() {
                 let native_mismatch =
                     (want_native && cached_native_off) || (!want_native && cached_native_on);
 
-                // 2b. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
+                // 2b. llama-common supplies the implementation behind the
+                //     always-built speculative-session shim.
+                let common_mismatch = !cache_contents.contains("LLAMA_BUILD_COMMON:BOOL=ON");
+
+                // 2c. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
                 //     to set (ARM non-native non-android builds).  Without an
                 //     explicit -march flag, Apple Clang silently enables
                 //     dotprod/i8mm for arm64-apple-macosx targets, producing
@@ -2159,7 +2277,7 @@ fn main() {
                     .unwrap_or("");
                 let arm_arch_mismatch = we_set_arm_arch && cached_arm_arch != "armv8-a";
 
-                // 2c. x86 ISA options: when !want_native on x86, we now
+                // 2d. x86 ISA options: when !want_native on x86, we now
                 //     force AVX/AVX2/FMA/F16C/BMI2 to OFF.  A stale cache
                 //     from a previous build (or from before this fix) may
                 //     still have them ON, causing SIGILL on older CPUs.
@@ -2179,7 +2297,7 @@ fn main() {
                     stale_options.iter().any(|opt| cache_contents.contains(opt))
                 };
 
-                // 2d. GGML_METAL mismatch: on macOS, llama.cpp defaults
+                // 2e. GGML_METAL mismatch: on macOS, llama.cpp defaults
                 //     GGML_METAL to ON, so a stale cache from a previous
                 //     `--features metal` build (or from the cmake default)
                 //     would keep Metal enabled even when the feature is off.
@@ -2189,7 +2307,7 @@ fn main() {
                     (enable_metal && cached_metal_off) || (!enable_metal && cached_metal_on)
                 };
 
-                // 2e. GGML_WEBGPU mismatch: stale cache may keep WebGPU ON/OFF
+                // 2f. GGML_WEBGPU mismatch: stale cache may keep WebGPU ON/OFF
                 //     after feature toggles.
                 let webgpu_mismatch = {
                     let cached_webgpu_on = cache_contents.contains("GGML_WEBGPU:BOOL=ON");
@@ -2198,7 +2316,7 @@ fn main() {
                         || (!cfg!(feature = "webgpu") && cached_webgpu_on)
                 };
 
-                // 2f. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
+                // 2g. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
                 //     a previous build (or from an environment-polluted cmake
                 //     run) may have the wrong architecture, producing x86_64
                 //     object code in an arm64 binary (or vice versa).
@@ -2223,6 +2341,7 @@ fn main() {
                 };
 
                 let mismatch = native_mismatch
+                    || common_mismatch
                     || arm_arch_mismatch
                     || x86_isa_mismatch
                     || metal_mismatch
@@ -2231,6 +2350,7 @@ fn main() {
                 if mismatch {
                     debug_log!(
                         "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
+                         LLAMA_BUILD_COMMON mismatch={}; \
                          GGML_CPU_ARM_ARCH: cache={:?} want={}) — removing cache \
                          to force reconfiguration",
                         if cached_native_on {
@@ -2241,6 +2361,7 @@ fn main() {
                             "?"
                         },
                         desired_native_str,
+                        common_mismatch,
                         cached_arm_arch,
                         if we_set_arm_arch {
                             "armv8-a"

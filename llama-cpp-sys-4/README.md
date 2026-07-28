@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `99f3dc3 (b9982)` · **Crate version:** 0.4.2
+**llama.cpp revision:** `f87067841bac583bc089a225382248d857791ca8` · **Crate version:** 0.4.2
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -40,16 +40,23 @@ use llama_cpp_4::prelude::*;
 | `native` | `-march=native` — tune for the build machine's CPU |
 | `rpc` | Remote compute backend |
 | `dynamic-link` | Link against a pre-installed shared `libllama` instead of building from source |
-| `prebuilt` | Download precompiled libs from GitHub releases (see below) |
+| `prebuilt` | Request a compatible precompiled build when one can be verified (see below) |
 
 ---
 
 ## Prebuilt libraries
 
-Skip the CMake compile by enabling `prebuilt` or setting `LLAMA_PREBUILT_DIR`:
+The exact speculative-state, decode-lifecycle, and fail-closed EAGLE-3 process
+patches require native libraries built from the same patched source. Existing
+0.4.2 archives do not carry a patch-identity envelope, so `prebuilt` currently
+emits a warning and uses the verified source build. `LLAMA_PREBUILT_DIR` fails
+closed while those patches are active rather than mixing patched headers with
+unverifiable native objects.
+
+Once release assets carry an exact patch identity, the intended interface is:
 
 ```bash
-# Automatic download + cache (falls back to local compile if no release asset)
+# Automatic download + cache, when a compatible release asset is available
 cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
@@ -96,7 +103,7 @@ cargo build -p llama-cpp-sys-4 --features mpi
 
 - `clang` — required by `bindgen` to parse the C++ headers
 - A C++17 compiler (GCC 9+, Clang 10+, MSVC 2019+)
-- `cmake` is **not** required — the build is driven entirely by `build.rs`
+- `cmake` and a supported CMake generator (Ninja is preferred)
 
 ### Regenerating bindings
 

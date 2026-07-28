@@ -165,6 +165,38 @@ pub(crate) fn validate_config(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct SpeculativeContextCapacity {
+    pub(crate) batch: u32,
+    pub(crate) micro_batch: u32,
+    pub(crate) recurrent_slots: u32,
+    pub(crate) recurrent_or_hybrid: bool,
+}
+
+pub(crate) fn validate_context_capacities(
+    target: SpeculativeContextCapacity,
+    draft: SpeculativeContextCapacity,
+    maximum_draft_tokens: u32,
+) -> Result<(), &'static str> {
+    let required_rows = maximum_draft_tokens
+        .checked_add(1)
+        .ok_or("n_draft_max plus one exceeds u32")?;
+    if target.batch < required_rows || draft.batch < required_rows {
+        return Err("target or draft batch capacity is smaller than n_draft_max plus one");
+    }
+    if (target.recurrent_or_hybrid && target.micro_batch < required_rows)
+        || (draft.recurrent_or_hybrid && draft.micro_batch < required_rows)
+    {
+        return Err("recurrent micro-batch capacity is smaller than n_draft_max plus one");
+    }
+    if (target.recurrent_or_hybrid && target.recurrent_slots < maximum_draft_tokens)
+        || (draft.recurrent_or_hybrid && draft.recurrent_slots < maximum_draft_tokens)
+    {
+        return Err("recurrent context capacity is smaller than n_draft_max");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +230,52 @@ mod tests {
             .checked_mul(std::mem::size_of::<i32>())
             .unwrap();
         assert!(maximum_prompt_bytes < MAX_SPECULATIVE_STATE_BYTES);
+    }
+
+    #[test]
+    fn speculative_decode_capacity_is_checked_before_native_allocation() {
+        let transformer = SpeculativeContextCapacity {
+            batch: 4,
+            micro_batch: 1,
+            recurrent_slots: 0,
+            recurrent_or_hybrid: false,
+        };
+        assert!(validate_context_capacities(transformer, transformer, 3).is_ok());
+        assert!(validate_context_capacities(
+            SpeculativeContextCapacity {
+                batch: 3,
+                ..transformer
+            },
+            transformer,
+            3,
+        )
+        .is_err());
+
+        let recurrent = SpeculativeContextCapacity {
+            batch: 4,
+            micro_batch: 4,
+            recurrent_slots: 3,
+            recurrent_or_hybrid: true,
+        };
+        assert!(validate_context_capacities(recurrent, recurrent, 3).is_ok());
+        assert!(validate_context_capacities(
+            SpeculativeContextCapacity {
+                micro_batch: 3,
+                ..recurrent
+            },
+            recurrent,
+            3,
+        )
+        .is_err());
+        assert!(validate_context_capacities(
+            SpeculativeContextCapacity {
+                recurrent_slots: 2,
+                ..recurrent
+            },
+            recurrent,
+            3,
+        )
+        .is_err());
+        assert!(validate_context_capacities(transformer, transformer, u32::MAX).is_err());
     }
 }

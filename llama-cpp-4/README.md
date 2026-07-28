@@ -60,7 +60,7 @@ See [`prelude`](src/prelude.rs) on docs.rs for runnable examples (generation, ch
 |---|---|---|
 | `openmp` | ✅ | Multi-threaded CPU inference via OpenMP |
 | `mtmd` | ✅ | Multimodal (vision / audio) via `libmtmd` |
-| `dynamic-link` | ✅ | Link llama.cpp as a shared library |
+| `dynamic-link` | | Link llama.cpp as a shared library |
 | `cuda` | | NVIDIA GPU via CUDA |
 | `metal` | | Apple GPU via Metal |
 | `vulkan` | | Cross-platform GPU via Vulkan |
