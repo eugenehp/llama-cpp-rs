@@ -9,6 +9,8 @@
   state, checked topology/capacity construction, and contained C++ failures.
 - Transactional tensor capture/write-back with decode lifecycle hooks and a
   documented safe ownership boundary.
+- Allocation-reusing tokenization and raw-token-piece sinks, plus a
+  count-only tokenizer query for coordinator-owned bounded utility work.
 
 ### Changed
 

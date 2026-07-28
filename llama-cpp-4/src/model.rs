@@ -831,16 +831,75 @@ impl LlamaModel {
         token: LlamaToken,
         special: Special,
     ) -> Result<Vec<u8>, TokenToStringError> {
-        match self.token_to_raw_bytes_with_size(token, 32, special, None) {
-            // llama.cpp reports the required size as a negative value; retry once
-            // with exactly that many bytes so long pieces never spuriously fail.
-            Err(TokenToStringError::InsufficientBufferSpace(needed)) if needed < 0 => {
-                match usize::try_from(-needed) {
-                    Ok(size) => self.token_to_raw_bytes_with_size(token, size, special, None),
-                    Err(_) => Err(TokenToStringError::InsufficientBufferSpace(needed)),
+        let mut buffer = Vec::with_capacity(32);
+        self.token_to_raw_bytes_into(token, special, &mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// Converts one token to raw piece bytes in caller-owned reusable storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if llama.cpp reports an unknown token or an excessive
+    /// required buffer length.
+    pub fn token_to_raw_bytes_into(
+        &self,
+        token: LlamaToken,
+        special: Special,
+        buffer: &mut Vec<u8>,
+    ) -> Result<(), TokenToStringError> {
+        let special = matches!(special, Special::Tokenize);
+        buffer.clear();
+        if buffer.capacity() < 32 {
+            buffer.reserve(32);
+        }
+        loop {
+            let capacity = buffer.capacity();
+            buffer.resize(capacity, 0);
+            let native_capacity = c_int::try_from(capacity)
+                .map_err(|_| TokenToStringError::BufferCapacityExceeded(capacity))?;
+            let size = unsafe {
+                llama_token_to_piece(
+                    self.get_vocab().vocab.as_ref(),
+                    token.0,
+                    buffer.as_mut_ptr().cast::<c_char>(),
+                    native_capacity,
+                    0,
+                    special,
+                )
+            };
+            match size {
+                0 => {
+                    buffer.clear();
+                    return Err(TokenToStringError::UnknownTokenType);
+                }
+                needed if needed.is_negative() => {
+                    let required = usize::try_from(-needed)
+                        .map_err(|_| TokenToStringError::InsufficientBufferSpace(needed))?;
+                    buffer.clear();
+                    if required <= capacity {
+                        return Err(TokenToStringError::InsufficientBufferSpace(needed));
+                    }
+                    buffer.reserve_exact(required);
+                }
+                written => {
+                    let written = usize::try_from(written).map_err(|_| {
+                        TokenToStringError::NativePieceLength {
+                            returned: written,
+                            capacity,
+                        }
+                    })?;
+                    if written > capacity {
+                        buffer.clear();
+                        return Err(TokenToStringError::NativePieceLength {
+                            returned: size,
+                            capacity,
+                        });
+                    }
+                    buffer.truncate(written);
+                    return Ok(());
                 }
             }
-            other => other,
         }
     }
 
@@ -933,24 +992,44 @@ impl LlamaModel {
         str: &str,
         add_bos: AddBos,
     ) -> Result<Vec<LlamaToken>, StringToTokenError> {
+        let mut buffer = Vec::new();
+        self.str_to_token_into(str, add_bos, &mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// Tokenizes into caller-owned storage so repeated operations can reuse
+    /// their allocation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text contains NUL or its length exceeds the
+    /// native integer representation.
+    pub fn str_to_token_into(
+        &self,
+        str: &str,
+        add_bos: AddBos,
+        buffer: &mut Vec<LlamaToken>,
+    ) -> Result<(), StringToTokenError> {
         let add_bos = match add_bos {
             AddBos::Always => true,
             AddBos::Never => false,
         };
-
+        if let Some(position) = str.as_bytes().iter().position(|byte| *byte == 0) {
+            return Err(StringToTokenError::InteriorNul(position));
+        }
         let tokens_estimation = std::cmp::max(8, (str.len() / 2) + usize::from(add_bos));
-        let mut buffer = Vec::with_capacity(tokens_estimation);
-
-        let c_string = CString::new(str)?;
-        let buffer_capacity =
-            c_int::try_from(buffer.capacity()).expect("buffer capacity should fit into a c_int");
-
+        buffer.clear();
+        if buffer.capacity() < tokens_estimation {
+            buffer.reserve(tokens_estimation);
+        }
+        let buffer_capacity = c_int::try_from(buffer.capacity())?;
+        let text_length = c_int::try_from(str.len())?;
         let size = unsafe {
             llama_tokenize(
                 self.get_vocab().vocab.as_ref(),
-                c_string.as_ptr(),
-                c_int::try_from(c_string.as_bytes().len())?,
-                buffer.as_mut_ptr(),
+                str.as_ptr().cast(),
+                text_length,
+                buffer.as_mut_ptr().cast(),
                 buffer_capacity,
                 add_bos,
                 true,
@@ -960,14 +1039,18 @@ impl LlamaModel {
         // if we fail the first time we can resize the vector to the correct size and try again. This should never fail.
         // as a result - size is guaranteed to be positive here.
         let size = if size.is_negative() {
-            buffer.reserve_exact(usize::try_from(-size).expect("usize's are larger "));
+            let required = usize::try_from(size.unsigned_abs())?;
+            if buffer.capacity() < required {
+                buffer.reserve_exact(required);
+            }
+            let retry_capacity = c_int::try_from(buffer.capacity())?;
             unsafe {
                 llama_tokenize(
                     self.get_vocab().vocab.as_ref(),
-                    c_string.as_ptr(),
-                    c_int::try_from(c_string.as_bytes().len())?,
-                    buffer.as_mut_ptr(),
-                    -size,
+                    str.as_ptr().cast(),
+                    text_length,
+                    buffer.as_mut_ptr().cast(),
+                    retry_capacity,
                     add_bos,
                     true,
                 )
@@ -976,11 +1059,43 @@ impl LlamaModel {
             size
         };
 
-        let size = usize::try_from(size).expect("size is positive and usize ");
+        let native_size = size;
+        let size = usize::try_from(native_size)?;
+        if size > buffer.capacity() {
+            return Err(StringToTokenError::NativeTokenCount {
+                returned: native_size,
+                capacity: buffer.capacity(),
+            });
+        }
 
-        // Safety: `size` < `capacity` and llama-cpp has initialized elements up to `size`
+        // Safety: `size <= capacity` and llama.cpp initialized elements up to `size`.
         unsafe { buffer.set_len(size) }
-        Ok(buffer.into_iter().map(LlamaToken).collect())
+        Ok(())
+    }
+
+    /// Counts tokens without materializing token identifiers.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text contains NUL or its length/count cannot
+    /// be represented by the native API.
+    pub fn str_token_count(&self, str: &str, add_bos: AddBos) -> Result<usize, StringToTokenError> {
+        let add_bos = matches!(add_bos, AddBos::Always);
+        if let Some(position) = str.as_bytes().iter().position(|byte| *byte == 0) {
+            return Err(StringToTokenError::InteriorNul(position));
+        }
+        let size = unsafe {
+            llama_tokenize(
+                self.get_vocab().vocab.as_ref(),
+                str.as_ptr().cast(),
+                c_int::try_from(str.len())?,
+                std::ptr::null_mut(),
+                0,
+                add_bos,
+                true,
+            )
+        };
+        Ok(usize::try_from(i64::from(size).unsigned_abs())?)
     }
 
     /// Get the type of a token.

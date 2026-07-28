@@ -344,6 +344,17 @@ pub enum TokenToStringError {
     /// There was insufficient buffer space to convert the token to a string.
     #[error("Insufficient Buffer Space {0}")]
     InsufficientBufferSpace(c_int),
+    /// Caller-owned storage exceeds llama.cpp's signed buffer-length type.
+    #[error("piece buffer capacity {0} exceeds the native c_int bound")]
+    BufferCapacityExceeded(usize),
+    /// llama.cpp reported a positive piece length outside the supplied buffer.
+    #[error("native piece length {returned} exceeds buffer capacity {capacity}")]
+    NativePieceLength {
+        /// Positive length returned by llama.cpp.
+        returned: c_int,
+        /// Supplied caller-owned capacity.
+        capacity: usize,
+    },
     /// The token was not valid utf8.
     #[error("FromUtf8Error {0}")]
     FromUtf8Error(#[from] FromUtf8Error),
@@ -355,9 +366,20 @@ pub enum StringToTokenError {
     /// the string contained a null byte and thus could not be converted to a c string.
     #[error("{0}")]
     NulError(#[from] NulError),
+    /// The string contained an interior NUL at the reported byte.
+    #[error("input contains an interior NUL at byte {0}")]
+    InteriorNul(usize),
     #[error("{0}")]
     /// Failed to convert a provided integer to a [`c_int`].
     CIntConversionError(#[from] std::num::TryFromIntError),
+    /// llama.cpp reported a positive token count outside the supplied buffer.
+    #[error("native token count {returned} exceeds buffer capacity {capacity}")]
+    NativeTokenCount {
+        /// Positive count returned by llama.cpp.
+        returned: c_int,
+        /// Supplied caller-owned capacity.
+        capacity: usize,
+    },
 }
 
 /// Failed to apply model chat template.
