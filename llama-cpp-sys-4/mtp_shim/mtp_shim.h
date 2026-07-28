@@ -33,6 +33,19 @@ enum mtp_spec_type {
     MTP_SPEC_TYPE_EAGLE3 = 1,
 };
 
+// Result of a versioned speculative-state operation.
+enum mtp_state_status {
+    MTP_STATE_STATUS_OK             = 0,
+    MTP_STATE_STATUS_NULL           = 1,
+    MTP_STATE_STATUS_BAD_SEQUENCE   = 2,
+    MTP_STATE_STATUS_NOT_QUIESCENT  = 3,
+    MTP_STATE_STATUS_BUFFER_SMALL   = 4,
+    MTP_STATE_STATUS_UNAVAILABLE    = 5,
+    MTP_STATE_STATUS_INVALID        = 6,
+    MTP_STATE_STATUS_OVERFLOW       = 7,
+    MTP_STATE_STATUS_EXCEPTION      = 8,
+};
+
 struct mtp_session_config {
     uint32_t n_seq;
     int32_t  n_draft_max;
@@ -75,7 +88,7 @@ bool mtp_session_need_embd_pre_norm(const struct mtp_session * s);
 // Optional: call once per fresh generation. `prompt` is the prompt-token array
 // already decoded into the target context (used by ngram-style speculators;
 // MTP currently uses it only for sanity assertions).
-void mtp_session_begin(
+bool mtp_session_begin(
         struct mtp_session * s,
         int32_t              seq_id,
         const llama_token *  prompt,
@@ -98,7 +111,7 @@ bool mtp_session_process(
 // `n_draft_max`).
 // On return: `*out_n_tokens` is set to the number of tokens written, and
 // `out_tokens[0..*out_n_tokens]` holds the draft.
-void mtp_session_draft(
+bool mtp_session_draft(
         struct mtp_session * s,
         int32_t              seq_id,
         llama_pos            n_past,
@@ -110,10 +123,48 @@ void mtp_session_draft(
 // accepted by the target verifier (and that the remainder were rejected).
 // This updates per-sequence carryover state and rolls back the draft context's
 // recurrent state past redundant pre-advancement.
-void mtp_session_accept(
+bool mtp_session_accept(
         struct mtp_session * s,
         int32_t              seq_id,
         uint16_t             n_accepted);
+
+// True only when no sequence has an unaccepted draft proposal.
+bool mtp_session_is_quiescent(const struct mtp_session * s);
+
+// True when `seq_id` has a proposal produced by `mtp_session_draft` that has
+// not yet been completed by `mtp_session_accept`.
+bool mtp_session_has_pending_proposal(
+        const struct mtp_session * s,
+        int32_t                    seq_id);
+
+// Return the exact size of the versioned per-sequence speculative state.
+//
+// State includes the prompt storage owned by this shim and the selected
+// implementation's opaque continuation bytes. It can be captured/restored
+// only while the complete session is quiescent. Target and draft
+// `llama_context` state must be checkpointed separately.
+enum mtp_state_status mtp_session_state_size(
+        const struct mtp_session * s,
+        int32_t                    seq_id,
+        size_t *                   out_size);
+
+// Copy the exact versioned state. On `BUFFER_SMALL`, `out_written` receives the
+// required size and no bytes are written.
+enum mtp_state_status mtp_session_state_get(
+        const struct mtp_session * s,
+        int32_t                    seq_id,
+        uint8_t *                  out_data,
+        size_t                     capacity,
+        size_t *                   out_written);
+
+// Restore exact versioned state. Configuration, strategy, sequence identity,
+// lengths, and the implementation-specific state are all validated before the
+// shim commits its prompt storage.
+enum mtp_state_status mtp_session_state_set(
+        struct mtp_session * s,
+        int32_t              seq_id,
+        const uint8_t *      data,
+        size_t               size);
 
 // Log speculative-decoding statistics via llama.cpp's LOG_INF (draft/accept
 // counts and timings). Requires a log callback if you want to capture output.

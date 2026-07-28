@@ -145,7 +145,6 @@ impl LlamaModelParams {
     #[must_use]
     pub fn load_mode(&self) -> LlamaLoadMode {
         match self.params.load_mode {
-            llama_cpp_sys_4::LLAMA_LOAD_MODE_NONE => LlamaLoadMode::None,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP => LlamaLoadMode::Mmap,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK => LlamaLoadMode::Mlock,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK => LlamaLoadMode::MmapMlock,

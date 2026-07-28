@@ -388,6 +388,7 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
 /// 1. The commit hash from the submodule's git HEAD (most precise).
 /// 2. The mtime of `CMakeLists.txt` (fallback for non-git trees).
 fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
+    const PATCH_STAGING_VERSION: &str = "2";
     let ph = patches_hash(patches_dir);
     // In a git submodule the `.git` entry is a *file* whose content is:
     //   gitdir: ../../.git/modules/llama-cpp-sys-4/llama.cpp
@@ -404,10 +405,10 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
                         let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
                         let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
                         if let Ok(hash) = std::fs::read_to_string(commit_path) {
-                            return format!("{}:{}", hash.trim(), ph);
+                            return format!("{}:{}:{PATCH_STAGING_VERSION}", hash.trim(), ph);
                         }
                     }
-                    return format!("{}:{}", head, ph);
+                    return format!("{}:{}:{PATCH_STAGING_VERSION}", head, ph);
                 }
             }
         }
@@ -420,7 +421,11 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
         .map(|t| format!("{t:?}"))
         .unwrap_or_else(|_| "unknown".to_owned());
     // Mix in patch contents so that updating patches forces a re-copy+re-patch.
-    format!("{}:{}", base, patches_hash(patches_dir))
+    format!(
+        "{}:{}:{PATCH_STAGING_VERSION}",
+        base,
+        patches_hash(patches_dir)
+    )
 }
 
 /// Copy a directory tree.  This runs on the *host*, so cfg!(unix/windows) is correct here.
@@ -1240,8 +1245,31 @@ fn main() {
 
         // Apply local patches (only those gated by active Cargo features).
         let staged_dir = out_dir.join("patches-active");
+        if staged_dir.exists() {
+            std::fs::remove_dir_all(&staged_dir).expect("failed to clear staged llama.cpp patches");
+        }
         std::fs::create_dir_all(&staged_dir).ok();
         let mut staged_any = false;
+
+        let speculative_patch = patches_dir.join("0003-exact-speculative-state.patch");
+        if speculative_patch.exists() {
+            std::fs::copy(
+                &speculative_patch,
+                staged_dir.join("0003-exact-speculative-state.patch"),
+            )
+            .expect("failed to stage exact speculative state patch");
+            staged_any = true;
+        }
+
+        let lifecycle_patch = patches_dir.join("0004-exact-decode-lifecycle-hooks.patch");
+        if lifecycle_patch.exists() {
+            std::fs::copy(
+                &lifecycle_patch,
+                staged_dir.join("0004-exact-decode-lifecycle-hooks.patch"),
+            )
+            .expect("failed to stage exact decode lifecycle patch");
+            staged_any = true;
+        }
 
         if cfg!(feature = "q1") {
             let q1_patch = patches_dir.join("0001-q1-quantization.patch");
@@ -1360,6 +1388,7 @@ fn main() {
         .allowlist_function("mtp_session_.*")
         .allowlist_type("mtp_session")
         .allowlist_type("mtp_session_config")
+        .allowlist_type("mtp_state_status")
         .allowlist_function("llama_memory_breakdown_collect")
         .allowlist_type("llama_memory_breakdown_entry")
         .allowlist_function("common_device_memory_collect")
@@ -1370,6 +1399,7 @@ fn main() {
         // constants are emitted.
         .allowlist_type("mtp_spec_type")
         .allowlist_item("MTP_SPEC_TYPE_.*")
+        .allowlist_item("MTP_STATE_STATUS_.*")
         .opaque_type("mtp_session")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")
@@ -2376,6 +2406,14 @@ fn main() {
             // with EEXIST because the directory entry is occupied. Using symlink_metadata()
             // detects both regular files and symlinks (broken or valid).
             let force_hard_link = |src: &Path, dst: &Path| {
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                        panic!(
+                            "Failed to create shared-library destination {}: {error}",
+                            parent.display()
+                        )
+                    });
+                }
                 if dst.symlink_metadata().is_ok() {
                     let _ = std::fs::remove_file(dst);
                 }

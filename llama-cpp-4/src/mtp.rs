@@ -29,8 +29,8 @@
 //!
 //! let n_draft_max = 3;
 //!
-//! let target = model.new_context(&backend, LlamaContextParams::default())?;
-//! let draft = model.new_context(
+//! let mut target = model.new_context(&backend, LlamaContextParams::default())?;
+//! let mut draft = model.new_context(
 //!     &backend,
 //!     LlamaContextParams::default()
 //!         .with_ctx_type(LlamaContextType::Mtp)
@@ -38,7 +38,7 @@
 //! )?;
 //!
 //! let config = MtpSessionConfig::new(1, n_draft_max).with_p_min(0.0);
-//! let mut session = MtpSession::new_with_config(&target, &draft, config)?;
+//! let mut session = MtpSession::new_with_config(&mut target, &mut draft, config)?;
 //! ```
 //!
 //! # Speculative loop
@@ -47,10 +47,7 @@
 //!
 //! ```ignore
 //! // 1. Target prefill or verify decode (you build the batch)
-//! target.decode(&mut batch)?;
-//!
-//! // 2. Tell MTP about the batch just decoded on the target
-//! session.process(&batch)?;
+//! session.decode_target_and_process(&mut batch)?;
 //!
 //! // 3. Ask for draft tokens starting from the last accepted token
 //! let drafts = session.draft(0, n_past, last_token)?;
@@ -90,10 +87,15 @@
 //! ```
 //!
 
+use std::marker::PhantomData;
 use std::ptr::NonNull;
+use std::rc::Rc;
 
+use crate::context::params::LlamaContextType;
 use crate::context::LlamaContext;
 use crate::llama_batch::LlamaBatch;
+use crate::speculative::MAX_SPECULATIVE_PROMPT_TOKENS;
+use crate::speculative::{capture_state, restore_state, validate_config, SpeculativeStateError};
 use crate::token::LlamaToken;
 
 /// Errors raised by the MTP draft session.
@@ -108,6 +110,31 @@ pub enum MtpSessionError {
     #[error("mtp_session_process failed (see llama.cpp logs)")]
     Process,
 
+    /// Native prompt initialization failed or raised a contained exception.
+    #[error("mtp_session_begin failed")]
+    Begin,
+
+    /// Native draft generation failed or raised a contained exception.
+    #[error("mtp_session_draft failed")]
+    Draft,
+
+    /// Native proposal acceptance failed or raised a contained exception.
+    #[error("mtp_session_accept failed")]
+    Accept,
+
+    /// Prompt storage exceeds the safe speculative-session bound.
+    #[error("prompt has {size} tokens, exceeding the {maximum}-token bound")]
+    PromptTooLong {
+        /// Caller-supplied prompt-token count.
+        size: usize,
+        /// Inclusive safe prompt-token bound.
+        maximum: usize,
+    },
+
+    /// The supplied contexts do not satisfy the native MTP contract.
+    #[error("incompatible MTP contexts: {0}")]
+    IncompatibleContexts(&'static str),
+
     /// Caller passed a sequence id outside `[0, n_seq)`.
     #[error("sequence id {seq_id} out of range (n_seq = {n_seq})")]
     BadSeqId {
@@ -120,6 +147,37 @@ pub enum MtpSessionError {
     /// Invalid session configuration (e.g. `n_draft_max <= 0`).
     #[error("invalid MTP session config: {0}")]
     InvalidConfig(&'static str),
+
+    /// The target context failed to decode.
+    #[error("target decode failed: {0}")]
+    Decode(#[from] crate::DecodeError),
+
+    /// An operation requires all draft proposals to be completed first.
+    #[error("sequence {seq_id} still has an unaccepted draft proposal")]
+    ProposalPending {
+        /// Sequence with a pending proposal.
+        seq_id: i32,
+    },
+
+    /// `accept` was called without a preceding nonempty draft.
+    #[error("sequence {seq_id} has no draft proposal to accept")]
+    NoPendingProposal {
+        /// Sequence without a pending proposal.
+        seq_id: i32,
+    },
+
+    /// The accepted prefix exceeds the proposal length.
+    #[error("accepted {accepted} tokens from a {proposed}-token proposal")]
+    AcceptedTooMany {
+        /// Accepted prefix length.
+        accepted: u16,
+        /// Exact proposal length.
+        proposed: usize,
+    },
+
+    /// Exact speculative-state capture or restore failed.
+    #[error(transparent)]
+    State(#[from] SpeculativeStateError),
 }
 
 /// Parameters for [`MtpSession::new_with_config`].
@@ -194,21 +252,19 @@ impl MtpSessionConfig {
 /// Drops the underlying `mtp_session *` (and the C++ `common_speculative *`
 /// it holds) when freed.
 ///
-/// # Lifetime contract (manual)
-///
-/// The session holds raw pointers to both the target and draft
-/// [`LlamaContext`]s. **The caller must keep both contexts alive (i.e. not
-/// drop them) for as long as the session exists.**
-pub struct MtpSession {
+/// The session exclusively borrows both contexts for its Rust lifetime, so
+/// neither can be moved, accessed mutably, or dropped while native code retains
+/// their pointers. It is deliberately neither `Send` nor `Sync`.
+pub struct MtpSession<'ctx, 'model> {
     raw: NonNull<llama_cpp_sys_4::mtp_session>,
     config: MtpSessionConfig,
+    target: &'ctx mut LlamaContext<'model>,
+    draft: &'ctx mut LlamaContext<'model>,
+    pending_proposals: Vec<Option<usize>>,
+    not_send_sync: PhantomData<Rc<()>>,
 }
 
-// SAFETY: the underlying C++ session owns its own state and is not tied to
-// any TLS. Concurrent calls from multiple threads are NOT safe.
-unsafe impl Send for MtpSession {}
-
-impl MtpSession {
+impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     /// Construct an MTP draft session with upstream defaults for `n_min` and
     /// `p_min`.
     ///
@@ -217,15 +273,15 @@ impl MtpSession {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut session = MtpSession::new(&target, &draft, 1, 3)?;
+    /// let mut session = MtpSession::new(&mut target, &mut draft, 1, 3)?;
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`MtpSessionError::Init`] or [`MtpSessionError::InvalidConfig`].
     pub fn new(
-        target: &LlamaContext<'_>,
-        draft: &LlamaContext<'_>,
+        target: &'ctx mut LlamaContext<'model>,
+        draft: &'ctx mut LlamaContext<'model>,
         n_seq: u32,
         n_draft_max: i32,
     ) -> Result<Self, MtpSessionError> {
@@ -244,23 +300,22 @@ impl MtpSession {
     /// ```ignore
     /// let config = MtpSessionConfig::new(1, 1)
     ///     .with_p_min(0.0); // match upstream default after #23269
-    /// let session = MtpSession::new_with_config(&target, &draft, config)?;
+    /// let session = MtpSession::new_with_config(&mut target, &mut draft, config)?;
     /// ```
     ///
     /// # Errors
     ///
     /// Returns [`MtpSessionError::Init`] or [`MtpSessionError::InvalidConfig`].
     pub fn new_with_config(
-        target: &LlamaContext<'_>,
-        draft: &LlamaContext<'_>,
+        target: &'ctx mut LlamaContext<'model>,
+        draft: &'ctx mut LlamaContext<'model>,
         config: MtpSessionConfig,
     ) -> Result<Self, MtpSessionError> {
-        if config.n_seq == 0 {
-            return Err(MtpSessionError::InvalidConfig("n_seq must be > 0"));
-        }
-        if config.n_draft_max <= 0 {
-            return Err(MtpSessionError::InvalidConfig("n_draft_max must be > 0"));
-        }
+        validate_config(config.n_seq, config.n_draft_max, config.n_min, config.p_min)
+            .map_err(MtpSessionError::InvalidConfig)?;
+        validate_contexts(target, draft, config)?;
+        let sequence_slots = usize::try_from(config.n_seq)
+            .map_err(|_| MtpSessionError::InvalidConfig("n_seq exceeds usize"))?;
 
         // `MTP_SPEC_TYPE_*` is `c_uint` under clang/gcc and `c_int` under MSVC;
         // `as i32` compiles on both. The allow covers the clang/gcc case.
@@ -281,7 +336,14 @@ impl MtpSession {
             )
         };
         let raw = NonNull::new(raw).ok_or(MtpSessionError::Init)?;
-        Ok(Self { raw, config })
+        Ok(Self {
+            raw,
+            config,
+            target,
+            draft,
+            pending_proposals: vec![None; sequence_slots],
+            not_send_sync: PhantomData,
+        })
     }
 
     /// Session configuration passed at construction.
@@ -334,6 +396,65 @@ impl MtpSession {
         self.config.n_seq
     }
 
+    /// Returns shared access to the target context for reading logits,
+    /// embeddings, and model metadata.
+    #[must_use]
+    pub fn target_context(&self) -> &LlamaContext<'model> {
+        self.target
+    }
+
+    /// Returns exclusive access to the target context while this wrapper
+    /// retains native pointer ownership.
+    #[must_use]
+    pub fn target_context_mut(&mut self) -> &mut LlamaContext<'model> {
+        self.target
+    }
+
+    /// Returns shared access to the draft context for metadata inspection.
+    #[must_use]
+    pub fn draft_context(&self) -> &LlamaContext<'model> {
+        self.draft
+    }
+
+    /// Returns exclusive access to the draft context while this wrapper
+    /// retains native pointer ownership.
+    #[must_use]
+    pub fn draft_context_mut(&mut self) -> &mut LlamaContext<'model> {
+        self.draft
+    }
+
+    /// Decodes on the target and immediately harvests the same batch into MTP.
+    ///
+    /// This is the causal target boundary required by the native draft
+    /// implementation. A failed decode is never passed to `process`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a target [`crate::DecodeError`] or native process failure.
+    pub fn decode_target_and_process(
+        &mut self,
+        batch: &mut LlamaBatch,
+    ) -> Result<(), MtpSessionError> {
+        self.decode_target(batch)?;
+        self.process(batch)
+    }
+
+    /// Decodes one batch on the exclusively held target context.
+    ///
+    /// Use [`Self::decode_target_and_process`] unless mechanics must run
+    /// between target decode and draft-state harvesting. This method remains
+    /// available while a draft proposal is pending because that is the target
+    /// verification phase; proposal creation, begin, and state access retain
+    /// their stricter lifecycle checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns a target [`crate::DecodeError`].
+    pub fn decode_target(&mut self, batch: &mut LlamaBatch) -> Result<(), MtpSessionError> {
+        self.target.decode(batch)?;
+        Ok(())
+    }
+
     /// Log speculative-decoding statistics (draft/accept counts and timings) via
     /// llama.cpp `LOG_INF`. Install a log callback with [`crate::log_set`] to
     /// capture output.
@@ -365,13 +486,23 @@ impl MtpSession {
     /// Returns [`MtpSessionError::BadSeqId`] if `seq_id` is out of range.
     pub fn begin(&mut self, seq_id: i32, prompt: &[LlamaToken]) -> Result<(), MtpSessionError> {
         self.check_seq(seq_id)?;
-        unsafe {
+        self.require_quiescent()?;
+        if prompt.len() > MAX_SPECULATIVE_PROMPT_TOKENS {
+            return Err(MtpSessionError::PromptTooLong {
+                size: prompt.len(),
+                maximum: MAX_SPECULATIVE_PROMPT_TOKENS,
+            });
+        }
+        let ok = unsafe {
             llama_cpp_sys_4::mtp_session_begin(
                 self.raw.as_ptr(),
                 seq_id,
                 prompt.as_ptr().cast(),
                 prompt.len(),
-            );
+            )
+        };
+        if !ok {
+            return Err(MtpSessionError::Begin);
         }
         Ok(())
     }
@@ -427,12 +558,16 @@ impl MtpSession {
         id_last: LlamaToken,
     ) -> Result<Vec<LlamaToken>, MtpSessionError> {
         self.check_seq(seq_id)?;
+        let sequence_index = self.sequence_index(seq_id)?;
+        if self.pending_proposals[sequence_index].is_some() {
+            return Err(MtpSessionError::ProposalPending { seq_id });
+        }
 
         let cap = usize::try_from(self.config.n_draft_max.max(0)).unwrap_or(0);
         let mut buf: Vec<i32> = vec![0; cap];
         let mut out_n = i32::try_from(cap).unwrap_or(i32::MAX);
 
-        unsafe {
+        let ok = unsafe {
             llama_cpp_sys_4::mtp_session_draft(
                 self.raw.as_ptr(),
                 seq_id,
@@ -440,11 +575,17 @@ impl MtpSession {
                 id_last.0,
                 buf.as_mut_ptr(),
                 &raw mut out_n,
-            );
+            )
+        };
+        if !ok {
+            return Err(MtpSessionError::Draft);
         }
 
         let n = usize::try_from(out_n.max(0)).unwrap_or(0);
         buf.truncate(n);
+        if n > 0 {
+            self.pending_proposals[sequence_index] = Some(n);
+        }
         Ok(buf.into_iter().map(LlamaToken).collect())
     }
 
@@ -464,8 +605,149 @@ impl MtpSession {
     /// Returns [`MtpSessionError::BadSeqId`] if `seq_id` is out of range.
     pub fn accept(&mut self, seq_id: i32, n_accepted: u16) -> Result<(), MtpSessionError> {
         self.check_seq(seq_id)?;
-        unsafe {
-            llama_cpp_sys_4::mtp_session_accept(self.raw.as_ptr(), seq_id, n_accepted);
+        let sequence_index = self.sequence_index(seq_id)?;
+        let proposed = self.pending_proposals[sequence_index]
+            .ok_or(MtpSessionError::NoPendingProposal { seq_id })?;
+        if usize::from(n_accepted) > proposed {
+            return Err(MtpSessionError::AcceptedTooMany {
+                accepted: n_accepted,
+                proposed,
+            });
+        }
+        let ok =
+            unsafe { llama_cpp_sys_4::mtp_session_accept(self.raw.as_ptr(), seq_id, n_accepted) };
+        if !ok {
+            return Err(MtpSessionError::Accept);
+        }
+        self.pending_proposals[sequence_index] = None;
+        Ok(())
+    }
+
+    /// Returns `true` when every draft proposal has been completed.
+    #[must_use]
+    pub fn is_quiescent(&self) -> bool {
+        self.pending_proposals.iter().all(Option::is_none)
+            && unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) }
+    }
+
+    /// Captures versioned per-sequence speculative continuation state.
+    ///
+    /// Target and draft context bytes are separate and must be checkpointed at
+    /// the same quiescent boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid sequence, pending proposal, incomplete
+    /// native support, or excessive state.
+    pub fn speculative_state(&self, seq_id: i32) -> Result<Vec<u8>, MtpSessionError> {
+        self.check_seq(seq_id)?;
+        self.require_quiescent()?;
+        Ok(capture_state(self.raw, seq_id)?)
+    }
+
+    /// Restores versioned per-sequence speculative continuation state.
+    ///
+    /// Restore the corresponding target and draft context bytes before calling
+    /// this method.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid sequence, pending proposal, excessive
+    /// input, or any version/configuration/state mismatch.
+    pub fn restore_speculative_state(
+        &mut self,
+        seq_id: i32,
+        state: &[u8],
+    ) -> Result<(), MtpSessionError> {
+        self.check_seq(seq_id)?;
+        self.require_quiescent()?;
+        restore_state(self.raw, seq_id, state)?;
+        Ok(())
+    }
+
+    /// Removes a target-context KV range.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversion error when an identifier or position exceeds
+    /// native `i32` bounds.
+    pub fn clear_target_kv_cache_seq(
+        &mut self,
+        seq_id: Option<u32>,
+        p0: Option<u32>,
+        p1: Option<u32>,
+    ) -> Result<bool, crate::context::kv_cache::KvCacheConversionError> {
+        self.target.clear_kv_cache_seq(seq_id, p0, p1)
+    }
+
+    /// Removes a draft-context KV range.
+    ///
+    /// # Errors
+    ///
+    /// Returns a conversion error when an identifier or position exceeds
+    /// native `i32` bounds.
+    pub fn clear_draft_kv_cache_seq(
+        &mut self,
+        seq_id: Option<u32>,
+        p0: Option<u32>,
+        p1: Option<u32>,
+    ) -> Result<bool, crate::context::kv_cache::KvCacheConversionError> {
+        self.draft.clear_kv_cache_seq(seq_id, p0, p1)
+    }
+
+    /// Returns the target context's exact sequence-state byte count.
+    pub fn target_state_seq_get_size_ext(&mut self, seq_id: i32, flags: u32) -> usize {
+        self.target.state_seq_get_size_ext(seq_id, flags)
+    }
+
+    /// Copies target context sequence state with exact native flags.
+    pub fn target_state_seq_get_data_ext(
+        &mut self,
+        dst: &mut [u8],
+        seq_id: i32,
+        flags: u32,
+    ) -> usize {
+        self.target.state_seq_get_data_ext(dst, seq_id, flags)
+    }
+
+    /// Restores target context sequence state with exact native flags.
+    pub fn target_state_seq_set_data_ext(&mut self, src: &[u8], seq_id: i32, flags: u32) -> usize {
+        self.target.state_seq_set_data_ext(src, seq_id, flags)
+    }
+
+    /// Returns the draft context's exact sequence-state byte count.
+    pub fn draft_state_seq_get_size_ext(&mut self, seq_id: i32, flags: u32) -> usize {
+        self.draft.state_seq_get_size_ext(seq_id, flags)
+    }
+
+    /// Copies draft context sequence state with exact native flags.
+    pub fn draft_state_seq_get_data_ext(
+        &mut self,
+        dst: &mut [u8],
+        seq_id: i32,
+        flags: u32,
+    ) -> usize {
+        self.draft.state_seq_get_data_ext(dst, seq_id, flags)
+    }
+
+    /// Restores draft context sequence state with exact native flags.
+    pub fn draft_state_seq_set_data_ext(&mut self, src: &[u8], seq_id: i32, flags: u32) -> usize {
+        self.draft.state_seq_set_data_ext(src, seq_id, flags)
+    }
+
+    fn require_quiescent(&self) -> Result<(), MtpSessionError> {
+        if let Some((index, _)) = self
+            .pending_proposals
+            .iter()
+            .enumerate()
+            .find(|(_, proposal)| proposal.is_some())
+        {
+            return Err(MtpSessionError::ProposalPending {
+                seq_id: i32::try_from(index).unwrap_or(i32::MAX),
+            });
+        }
+        if !unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) } {
+            return Err(MtpSessionError::State(SpeculativeStateError::NotQuiescent));
         }
         Ok(())
     }
@@ -479,15 +761,53 @@ impl MtpSession {
         }
         Ok(())
     }
+
+    fn sequence_index(&self, seq_id: i32) -> Result<usize, MtpSessionError> {
+        self.check_seq(seq_id)?;
+        usize::try_from(seq_id)
+            .map_err(|_| MtpSessionError::InvalidConfig("sequence id exceeds usize"))
+    }
 }
 
-impl Drop for MtpSession {
+fn validate_contexts(
+    target: &LlamaContext<'_>,
+    draft: &LlamaContext<'_>,
+    config: MtpSessionConfig,
+) -> Result<(), MtpSessionError> {
+    if target.context_type() != LlamaContextType::Default
+        || draft.context_type() != LlamaContextType::Mtp
+    {
+        return Err(MtpSessionError::IncompatibleContexts(
+            "target must be Default and draft must be Mtp",
+        ));
+    }
+    if target.n_seq_max() < config.n_seq || draft.n_seq_max() != config.n_seq {
+        return Err(MtpSessionError::IncompatibleContexts(
+            "target sequence capacity is too small or draft capacity differs from n_seq",
+        ));
+    }
+    let required_recurrent = u32::try_from(config.n_draft_max)
+        .map_err(|_| MtpSessionError::InvalidConfig("n_draft_max exceeds u32"))?;
+    if draft.n_rs_seq() < required_recurrent {
+        return Err(MtpSessionError::IncompatibleContexts(
+            "draft recurrent-state capacity is smaller than n_draft_max",
+        ));
+    }
+    if draft.model.n_embd_out() != target.model.n_embd() {
+        return Err(MtpSessionError::IncompatibleContexts(
+            "draft output width differs from target hidden width",
+        ));
+    }
+    Ok(())
+}
+
+impl Drop for MtpSession<'_, '_> {
     fn drop(&mut self) {
         unsafe { llama_cpp_sys_4::mtp_session_free(self.raw.as_ptr()) }
     }
 }
 
-impl std::fmt::Debug for MtpSession {
+impl std::fmt::Debug for MtpSession<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MtpSession")
             .field("config", &self.config)

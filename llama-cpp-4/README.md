@@ -227,29 +227,52 @@ for entry in ctx.memory_breakdown() {
 }
 ```
 
-### Tensor capture (hidden states)
+### Checked tensor capture (hidden states)
 
-Hook `cb_eval` during decode to copy per-layer outputs (`"l_out-N"`) or other
-named graph nodes:
+Attach owned, bounded exact selectors to copy per-layer outputs (`"l_out-N"`)
+or other named graph nodes during decode:
 
 ```rust
 use llama_cpp_4::prelude::*;
 
-let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
-let ctx_params = LlamaContextParams::default().with_tensor_capture(&mut capture);
+let selector = TensorSelector::layer_output(
+    13,
+    model.n_embd() as usize,
+    512,
+    TensorAccess::ReadOnly,
+    true,
+)?;
+let transactions = TensorTransactions::capture(vec![selector])?;
+let ctx_params =
+    LlamaContextParams::default().with_tensor_transactions(transactions);
 let mut ctx = model.new_context(&backend, ctx_params)?;
 
 // ... fill batch, decode ...
 ctx.decode(&mut batch)?;
 
-if let Some(layer) = capture.get_layer(13) {
-    println!("{} tokens × {} dims", layer.n_tokens(), layer.n_embd());
-    let hidden = layer.token_embedding(0).unwrap();
+if let Some(layer) = ctx
+    .tensor_transactions()
+    .and_then(|transactions| transactions.captures().first())
+{
+    println!("{} rows × {} elements", layer.shape.rows, layer.shape.row_elements);
 }
 ```
 
 See also [`context::tensor_capture`](src/context/tensor_capture.rs) and
 `examples/eagle` (EAGLE-3 uses specific anchor layers).
+
+### Checked speculative sessions
+
+`MtpSession` and `Eagle3Session` exclusively borrow their target and draft
+contexts and are neither `Send` nor `Sync`. Construction validates context
+types, sequence capacity, recurrent-state capacity where required, hidden-row
+widths, and EAGLE-3 extraction-layer metadata before entering the native shim.
+Prompt copies, proposal bounds, and opaque continuation state are bounded.
+
+The shim contains C++ exceptions at every MTP/EAGLE-3 lifecycle entry point.
+Begin, process, draft, accept, and state failures return typed Rust errors
+instead of unwinding across the C ABI. Exact continuation state can be read or
+restored only after every proposal has been resolved.
 
 ### LoRA adapters
 

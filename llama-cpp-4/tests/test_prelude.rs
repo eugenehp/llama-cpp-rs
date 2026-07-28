@@ -7,7 +7,9 @@ fn prelude_core_types_are_in_scope() {
     fn assert_send<T: Send>() {}
     assert_send::<LlamaBackend>();
     assert_send::<LlamaModel>();
-    assert_send::<LlamaContextParams>();
+    // Context parameters may own callback and sampler state whose native
+    // pointers are deliberately confined to the constructing thread.
+    let _ = LlamaContextParams::default();
     assert_send::<TensorCapture>();
 }
 

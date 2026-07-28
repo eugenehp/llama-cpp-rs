@@ -9,11 +9,12 @@
 
 use std::fmt::{Debug, Formatter};
 use std::num::NonZeroI32;
+use std::pin::Pin;
 use std::ptr::NonNull;
 use std::slice;
 
 use llama_cpp_sys_4::llama_pooling_type;
-use params::LlamaPoolingType;
+use params::{LlamaContextType, LlamaPoolingType};
 use perf::PerfContextData;
 
 use crate::llama_batch::LlamaBatch;
@@ -32,9 +33,16 @@ pub mod params;
 pub mod perf;
 pub mod session;
 pub mod tensor_capture;
+pub mod tensor_transaction;
 
 pub use memory_breakdown::MemoryBreakdownEntry;
 pub use tensor_capture::{CapturedTensor, TensorCapture};
+pub use tensor_transaction::{
+    CapturedTensorData, TensorAccess, TensorBatchRow, TensorCallbackFailure, TensorDataMut,
+    TensorElementType, TensorRowMapping, TensorSelector, TensorShape, TensorTransaction,
+    TensorTransactionError, TensorTransactionHandler, TensorTransactions, TensorWriteback,
+    TransactionalTensorCapture,
+};
 
 /// A safe wrapper around the `llama_context` C++ context.
 ///
@@ -63,6 +71,8 @@ pub struct LlamaContext<'a> {
     pub model: &'a LlamaModel,
     initialized_logits: Vec<i32>,
     embeddings_enabled: bool,
+    context_type: LlamaContextType,
+    tensor_transactions: Option<Pin<Box<TensorTransactions>>>,
 }
 
 impl Debug for LlamaContext<'_> {
@@ -86,6 +96,7 @@ impl<'model> LlamaContext<'model> {
     /// - `llama_context`: A non-null pointer to an existing `llama_cpp_sys_4::llama_context` representing
     ///   the context created in previous steps. This context is necessary for interacting with the model.
     /// - `embeddings_enabled`: A boolean flag indicating whether embeddings are enabled in this context.
+    /// - `context_type`: The exact graph/context mode selected at allocation.
     ///
     /// # Returns
     ///
@@ -98,20 +109,36 @@ impl<'model> LlamaContext<'model> {
     /// ```ignore
     /// let llama_model = LlamaModel::load_from_file(&backend, "path/to/model", &params).unwrap();
     /// let context_ptr = NonNull::new(some_llama_context_ptr).unwrap();
-    /// let context = LlamaContext::new(&llama_model, context_ptr, true);
+    /// let context = LlamaContext::new(
+    ///     &llama_model,
+    ///     context_ptr,
+    ///     true,
+    ///     LlamaContextType::Default,
+    ///     None,
+    /// );
     /// // Now you can use the context
     /// ```
     pub(crate) fn new(
         llama_model: &'model LlamaModel,
         llama_context: NonNull<llama_cpp_sys_4::llama_context>,
         embeddings_enabled: bool,
+        context_type: LlamaContextType,
+        tensor_transactions: Option<Pin<Box<TensorTransactions>>>,
     ) -> Self {
         Self {
             context: llama_context,
             model: llama_model,
             initialized_logits: Vec::new(),
             embeddings_enabled,
+            context_type,
+            tensor_transactions,
         }
+    }
+
+    /// Returns the context type selected at native allocation.
+    #[must_use]
+    pub fn context_type(&self) -> LlamaContextType {
+        self.context_type
     }
 
     /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to `n_ubatch`.
@@ -144,6 +171,14 @@ impl<'model> LlamaContext<'model> {
     pub fn decode(&mut self, batch: &mut LlamaBatch) -> Result<(), DecodeError> {
         let result =
             unsafe { llama_cpp_sys_4::llama_decode(self.context.as_ptr(), batch.llama_batch) };
+        if let Some(failure) = self
+            .tensor_transactions
+            .as_ref()
+            .and_then(|transactions| transactions.failure())
+            .cloned()
+        {
+            return Err(DecodeError::TensorCallback(failure));
+        }
 
         match NonZeroI32::new(result) {
             None => {
@@ -153,6 +188,21 @@ impl<'model> LlamaContext<'model> {
             }
             Some(error) => Err(DecodeError::from(error)),
         }
+    }
+
+    /// Returns the owned tensor transaction program attached to this context.
+    #[must_use]
+    pub fn tensor_transactions(&self) -> Option<&TensorTransactions> {
+        self.tensor_transactions.as_deref()
+    }
+
+    /// Returns the owned tensor transaction program attached to this context.
+    ///
+    /// Retained captures can be removed with [`TensorTransactions::take_captures`].
+    pub fn tensor_transactions_mut(&mut self) -> Option<&mut TensorTransactions> {
+        self.tensor_transactions
+            .as_mut()
+            .map(|transactions| transactions.as_mut().get_mut())
     }
 
     /// Encodes the batch.

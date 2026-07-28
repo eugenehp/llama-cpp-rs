@@ -153,7 +153,12 @@ pub use crate::context::params::{
     LlamaAttentionType, LlamaContextParams, LlamaContextType, LlamaFlashAttnType, LlamaPoolingType,
     ParamsCloneError, RopeScalingType,
 };
-pub use crate::context::{CapturedTensor, LlamaContext, MemoryBreakdownEntry, TensorCapture};
+pub use crate::context::{
+    CapturedTensor, CapturedTensorData, LlamaContext, MemoryBreakdownEntry, TensorAccess,
+    TensorBatchRow, TensorCallbackFailure, TensorCapture, TensorDataMut, TensorElementType,
+    TensorRowMapping, TensorSelector, TensorShape, TensorTransaction, TensorTransactionError,
+    TensorTransactionHandler, TensorTransactions, TensorWriteback, TransactionalTensorCapture,
+};
 pub use crate::llama_backend::LlamaBackend;
 pub use crate::llama_batch::{BatchAddError, LlamaBatch};
 pub use crate::model::params::kv_overrides::ParamOverrideValue;
@@ -162,6 +167,7 @@ pub use crate::model::{
     AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaModel, Special,
 };
 pub use crate::sampling::{LlamaSampler, LlamaSamplerParams};
+pub use crate::speculative::{SpeculativeStateError, MAX_SPECULATIVE_STATE_BYTES};
 pub use crate::token::data_array::LlamaTokenDataArray;
 pub use crate::token::detokenizer::{DetokenizeError, StreamDetokenizer};
 pub use crate::token::LlamaToken;

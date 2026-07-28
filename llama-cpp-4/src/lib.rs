@@ -99,6 +99,7 @@ pub mod mtp;
 pub mod prelude;
 pub mod quantize;
 pub mod sampling;
+pub mod speculative;
 pub mod token;
 pub mod token_type;
 
@@ -177,6 +178,9 @@ pub enum LlamaContextLoadError {
 /// Failed to decode a batch.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum DecodeError {
+    /// A Rust tensor callback failed or unwound after native execution began.
+    #[error(transparent)]
+    TensorCallback(#[from] context::TensorCallbackFailure),
     /// No kv cache slot was available.
     #[error("Decode Error 1: NoKvCacheSlot")]
     NoKvCacheSlot,
@@ -617,12 +621,42 @@ pub unsafe fn opt_param_filter_all(
 pub use context::params::LlamaContextParams;
 /// One captured intermediate tensor from [`TensorCapture`].
 pub use context::CapturedTensor;
+/// Typed retained storage from an owned tensor transaction.
+pub use context::CapturedTensorData;
 /// An inference context tied to a model.
 pub use context::LlamaContext;
 /// Per-buffer memory usage entry from [`LlamaContext::memory_breakdown`].
 pub use context::MemoryBreakdownEntry;
+/// Access granted to an exact tensor selector.
+pub use context::TensorAccess;
+/// Exact sequence and causal-position metadata for one tensor row.
+pub use context::TensorBatchRow;
+/// A contained tensor callback failure.
+pub use context::TensorCallbackFailure;
 /// Hook `cb_eval` during decode to copy named graph tensors (layer hidden states, …).
 pub use context::TensorCapture;
+/// Typed Rust-owned tensor storage supplied to a transaction handler.
+pub use context::TensorDataMut;
+/// Element representation required by an exact tensor selector.
+pub use context::TensorElementType;
+/// Mapping between selected tensor rows and the decode batch.
+pub use context::TensorRowMapping;
+/// Exact bounded graph-node contract.
+pub use context::TensorSelector;
+/// Validated tensor dimensions.
+pub use context::TensorShape;
+/// One synchronous owned tensor transaction.
+pub use context::TensorTransaction;
+/// Error returned by a transaction handler or selector validator.
+pub use context::TensorTransactionError;
+/// Safe synchronous tensor transaction handler.
+pub use context::TensorTransactionHandler;
+/// Owned pinned tensor callback program.
+pub use context::TensorTransactions;
+/// Native write-back decision returned by a transaction handler.
+pub use context::TensorWriteback;
+/// Complete retained tensor from one transaction.
+pub use context::TransactionalTensorCapture;
 /// Initialise the llama.cpp backend and hardware drivers.
 pub use llama_backend::LlamaBackend;
 /// Micro-batch submitted to [`LlamaContext::decode`].
@@ -637,5 +671,7 @@ pub use model::LlamaModel;
 pub use model::Special;
 /// Sampler chain for token selection.
 pub use sampling::LlamaSampler;
+/// Failure while capturing or restoring versioned speculative state.
+pub use speculative::SpeculativeStateError;
 /// A single vocabulary token id.
 pub use token::LlamaToken;

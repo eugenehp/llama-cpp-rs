@@ -305,12 +305,25 @@ impl LlamaVocab {
     ///
     /// Returns an error if the text pointer is null or not valid UTF-8.
     pub fn get_text(&self, token: LlamaToken) -> Result<&str, StringFromModelError> {
+        let bytes = self.get_text_bytes(token)?;
+        std::str::from_utf8(bytes).map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Get the exact byte representation stored for a vocabulary token.
+    ///
+    /// Unlike [`Self::get_text`], this method does not require the token text
+    /// to be valid UTF-8.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if llama.cpp reports a null text pointer.
+    pub fn get_text_bytes(&self, token: LlamaToken) -> Result<&[u8], StringFromModelError> {
         let ptr = unsafe { llama_cpp_sys_4::llama_vocab_get_text(self.vocab.as_ref(), token.0) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
         let cstr = unsafe { CStr::from_ptr(ptr) };
-        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+        Ok(cstr.to_bytes())
     }
 
     /// Get the score of a token.
@@ -2007,7 +2020,7 @@ impl LlamaModel {
     pub fn new_context(
         &self,
         _: &LlamaBackend,
-        params: LlamaContextParams,
+        mut params: LlamaContextParams,
     ) -> Result<LlamaContext<'_>, LlamaContextLoadError> {
         // Apply TurboQuant attn-rotation preference before the KV cache is
         // initialised inside llama_init_from_model.
@@ -2023,7 +2036,9 @@ impl LlamaModel {
             // (respect explicit user env var).
         }
 
+        let context_type = params.ctx_type();
         let context_params = params.context_params;
+        let embeddings_enabled = params.embeddings();
         let context = unsafe { llama_init_from_model(self.model.as_ptr(), context_params) };
 
         // Restore the env-var to its previous state.
@@ -2037,7 +2052,14 @@ impl LlamaModel {
         }
 
         let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
-        Ok(LlamaContext::new(self, context, params.embeddings()))
+        let tensor_transactions = params.tensor_transactions.take();
+        Ok(LlamaContext::new(
+            self,
+            context,
+            embeddings_enabled,
+            context_type,
+            tensor_transactions,
+        ))
     }
 
     /// Apply the model's chat template to a sequence of messages.
