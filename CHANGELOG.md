@@ -12,6 +12,18 @@
 - Allocation-reusing tokenization and raw-token-piece sinks, plus a
   count-only tokenizer query for coordinator-owned bounded utility work.
 
+### Breaking
+
+- `MtpSession` and `Eagle3Session` now exclusively borrow mutable target and
+  draft contexts, are neither `Send` nor `Sync`, and report lifecycle failures
+  through typed `Result` values. Existing speculative loops must use the
+  session's context accessors and checked decode helpers.
+- `LlamaContextParams::with_tensor_capture` is now `unsafe` because it installs
+  a pointer to caller-borrowed callback state without retaining that borrow.
+  New code should use the safe, owned `with_tensor_transactions` API.
+- The default feature set no longer enables `dynamic-link`. Callers that
+  require shared llama.cpp libraries must select that feature explicitly.
+
 ### Changed
 
 - Forward-port the binding and native patches to literal llama.cpp revision
