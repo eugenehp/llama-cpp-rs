@@ -21,8 +21,6 @@
 - `LlamaContextParams::with_tensor_capture` is now `unsafe` because it installs
   a pointer to caller-borrowed callback state without retaining that borrow.
   New code should use the safe, owned `with_tensor_transactions` API.
-- The default feature set no longer enables `dynamic-link`. Callers that
-  require shared llama.cpp libraries must select that feature explicitly.
 
 ### Changed
 
@@ -33,8 +31,6 @@
   postcondition even when an OUT_DIR sentinel or shared CMake cache exists.
 - Resolve shared runtime assets against Cargo's active target/profile
   directory even when `build.build-dir` places `OUT_DIR` elsewhere.
-- Honor the documented static-link default in `llama-cpp-4`; shared
-  `libllama` artifacts now require the explicit `dynamic-link` feature.
 - Fall back from unverified prebuilt archives to a source build; explicit
   unverifiable `LLAMA_PREBUILT_DIR` inputs now fail closed.
 
