@@ -8,6 +8,22 @@ use std::ptr::null;
 
 pub mod kv_overrides;
 
+/// Exact model-file loading strategy exposed by llama.cpp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum LlamaLoadMode {
+    /// No memory mapping, locking, or direct I/O.
+    None = llama_cpp_sys_4::LLAMA_LOAD_MODE_NONE,
+    /// Memory-map model files when supported.
+    Mmap = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP,
+    /// Read model files normally and lock loaded pages in memory.
+    Mlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK,
+    /// Memory-map model files and lock mapped pages in memory.
+    MmapMlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK,
+    /// Use direct I/O when supported.
+    DirectIo = llama_cpp_sys_4::LLAMA_LOAD_MODE_DIRECT_IO,
+}
+
 /// A safe wrapper around `llama_model_params`.
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaModelParams {
@@ -21,8 +37,7 @@ impl Debug for LlamaModelParams {
             .field("n_gpu_layers", &self.params.n_gpu_layers)
             .field("main_gpu", &self.params.main_gpu)
             .field("vocab_only", &self.params.vocab_only)
-            .field("use_mmap", &self.params.use_mmap)
-            .field("use_mlock", &self.params.use_mlock)
+            .field("load_mode", &self.load_mode())
             .field("kv_overrides", &"vec of kv_overrides")
             .finish()
     }
@@ -126,16 +141,34 @@ impl LlamaModelParams {
         self.params.vocab_only
     }
 
+    /// Returns the exact model-file loading strategy.
+    #[must_use]
+    pub fn load_mode(&self) -> LlamaLoadMode {
+        match self.params.load_mode {
+            llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP => LlamaLoadMode::Mmap,
+            llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK => LlamaLoadMode::Mlock,
+            llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK => LlamaLoadMode::MmapMlock,
+            llama_cpp_sys_4::LLAMA_LOAD_MODE_DIRECT_IO => LlamaLoadMode::DirectIo,
+            _ => LlamaLoadMode::None,
+        }
+    }
+
     /// use mmap if possible
     #[must_use]
     pub fn use_mmap(&self) -> bool {
-        self.params.use_mmap
+        matches!(
+            self.load_mode(),
+            LlamaLoadMode::Mmap | LlamaLoadMode::MmapMlock
+        )
     }
 
     /// force system to keep model in RAM
     #[must_use]
     pub fn use_mlock(&self) -> bool {
-        self.params.use_mlock
+        matches!(
+            self.load_mode(),
+            LlamaLoadMode::Mlock | LlamaLoadMode::MmapMlock
+        )
     }
 
     /// sets the number of gpu layers to offload to the GPU.
@@ -168,10 +201,23 @@ impl LlamaModelParams {
         self
     }
 
+    /// Sets the exact model-file loading strategy.
+    #[must_use]
+    pub fn with_load_mode(mut self, load_mode: LlamaLoadMode) -> Self {
+        self.params.load_mode = load_mode as llama_cpp_sys_4::llama_load_mode;
+        self
+    }
+
     /// sets `use_mlock`
     #[must_use]
     pub fn with_use_mlock(mut self, use_mlock: bool) -> Self {
-        self.params.use_mlock = use_mlock;
+        let load_mode = match (self.use_mmap(), use_mlock) {
+            (true, true) => LlamaLoadMode::MmapMlock,
+            (true, false) => LlamaLoadMode::Mmap,
+            (false, true) => LlamaLoadMode::Mlock,
+            (false, false) => LlamaLoadMode::None,
+        };
+        self.params.load_mode = load_mode as llama_cpp_sys_4::llama_load_mode;
         self
     }
 }
@@ -180,9 +226,6 @@ impl LlamaModelParams {
 /// ```
 /// # use llama_cpp_4::model::params::LlamaModelParams;
 /// let params = LlamaModelParams::default();
-/// #[cfg(not(target_os = "macos"))]
-/// assert_eq!(params.n_gpu_layers(), 0, "n_gpu_layers should be 0");
-/// #[cfg(target_os = "macos")]
 /// assert_eq!(params.n_gpu_layers(), -1, "n_gpu_layers should be -1 (all layers)");
 /// assert_eq!(params.main_gpu(), 0, "main_gpu should be 0");
 /// assert_eq!(params.vocab_only(), false, "vocab_only should be false");

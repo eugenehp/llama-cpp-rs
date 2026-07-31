@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Added
+
+- **Transactional tensor capture/write-back** (`llama-cpp-4`): the owned
+  `TensorTransactions` / `LlamaContextParams::with_tensor_transactions` API —
+  bounded, Rust-owned capture of decode-time graph nodes with transactional
+  finite-`f32` write-back, decode lifecycle hooks, and a documented safe
+  ownership boundary (`llama-cpp-4/TENSOR_TRANSACTIONS_SAFETY.md`).
+- **Hardened speculative sessions** (`llama-cpp-4`): lifetime-bound,
+  non-thread-transferable MTP and EAGLE-3 sessions with bounded
+  prompt/proposal/state inputs, exact continuation-state capture/restore,
+  checked topology/capacity construction, and contained C++ failures.
+- **`LlamaLoadMode`** (`llama-cpp-4`): typed model load-mode enum with
+  `LlamaModelParams::load_mode()` / `with_load_mode()`, wrapping upstream's new
+  `load_mode` field ([#20834](https://github.com/ggml-org/llama.cpp/pull/20834)).
+- Allocation-reusing tokenization and raw-token-piece sinks, plus a count-only
+  tokenizer query for coordinator-owned bounded utility work.
+
+### Breaking
+
+- `MtpSession` and `Eagle3Session` now exclusively borrow mutable target and
+  draft contexts, are neither `Send` nor `Sync`, and report lifecycle failures
+  through typed `Result` values. Existing speculative loops must use the
+  session's context accessors and checked decode helpers.
+- `LlamaContextParams::with_tensor_capture` is now `unsafe` because it installs
+  a pointer to caller-borrowed callback state without retaining that borrow.
+  New code should use the safe, owned `with_tensor_transactions` API.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `15e755f30` (tag `b10209`) from
+  `571d0d54` (b10068). Adapts `LlamaModelParams` to upstream's new `load_mode`
+  enum (which replaced the `use_mmap` / `use_mlock` booleans); the existing
+  `use_mmap()` / `use_mlock()` / `with_use_mlock()` API is unchanged.
+- Forward-port the binding and native patches (`0003`–`0005`) to the vendored
+  llama.cpp revision, including EAGLE-3 v3 target extraction for `gpt-oss`.
+- Build `llama-common` for the speculative shim and verify the patched-source
+  postcondition even when an OUT_DIR sentinel or shared CMake cache exists.
+- Resolve shared runtime assets against Cargo's active target/profile directory
+  even when `build.build-dir` places `OUT_DIR` elsewhere.
+- Fall back from unverified prebuilt archives to a source build; explicit
+  unverifiable `LLAMA_PREBUILT_DIR` inputs now fail closed.
+
 ## [0.4.2] - 2026-07-12
 
 ### Added

@@ -285,10 +285,12 @@ fn integration_tensor_capture_last_layer() {
     let last_layer = (model.n_layer() - 1) as usize;
     let mut capture = TensorCapture::for_layers(&[last_layer]);
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(64))
-        .with_n_batch(64)
-        .with_tensor_capture(&mut capture);
+    let ctx_params = unsafe {
+        LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(64))
+            .with_n_batch(64)
+            .with_tensor_capture(&mut capture)
+    };
     let mut ctx = model.new_context(backend(), ctx_params).unwrap();
 
     let tokens = model.str_to_token("test", AddBos::Always).unwrap();

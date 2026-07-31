@@ -163,7 +163,7 @@ fn main() -> Result<()> {
 
     let mut draft_ctx = draft_ctx;
     let session_config = MtpSessionConfig::new(1, args.n_draft_max).with_p_min(args.p_min);
-    let mut session = MtpSession::new_with_config(&target_ctx, &draft_ctx, session_config)?;
+    let mut session = MtpSession::new_with_config(&mut target_ctx, &mut draft_ctx, session_config)?;
     println!(
         "MTP session: n_draft_max={}, p_min={}, need_embd={}, need_embd_pre_norm={}",
         session.n_draft_max(),
@@ -178,21 +178,12 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-    run_speculative(
-        &model,
-        &mut target_ctx,
-        &mut draft_ctx,
-        &mut session,
-        &args.prompt,
-        n_predict,
-    )
+    run_speculative(&model, &mut session, &args.prompt, n_predict)
 }
 
 fn run_speculative(
     model: &LlamaModel,
-    target_ctx: &mut llama_cpp_4::context::LlamaContext<'_>,
-    draft_ctx: &mut llama_cpp_4::context::LlamaContext<'_>,
-    session: &mut MtpSession,
+    session: &mut MtpSession<'_, '_>,
     prompt: &str,
     n_predict: i32,
 ) -> Result<()> {
@@ -204,7 +195,7 @@ fn run_speculative(
     }
 
     // Prompt prefill: decode the whole prompt as a single batch.
-    let n_batch_max = target_ctx.n_batch() as usize;
+    let n_batch_max = session.target_context().n_batch() as usize;
     let prefill_capacity = tokens.len().max(n_batch_max);
     let mut batch = LlamaBatch::new(prefill_capacity, 1);
     // Session init configures pre-norm extraction on both contexts (upstream
@@ -215,15 +206,14 @@ fn run_speculative(
     for (i, tok) in tokens.iter().copied().enumerate() {
         batch.add(tok, i as i32, &[0], i == last_idx)?;
     }
-    target_ctx.decode(&mut batch).context("prefill failed")?;
     session
-        .process(&batch)
-        .context("MTP process(prefill) failed")?;
+        .decode_target_and_process(&mut batch)
+        .context("MTP target prefill/process failed")?;
     session.begin(0, &tokens)?;
 
     // Sample the first token from the prefill.
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
-    let mut last_token = sampler.sample(target_ctx, batch.n_tokens() - 1);
+    let mut last_token = sampler.sample(session.target_context(), batch.n_tokens() - 1);
     sampler.accept(last_token);
 
     let mut output_text = String::new();
@@ -269,29 +259,26 @@ fn run_speculative(
         // positions on the draft side but with target's pre-norm h injected.
         // n_rs_seq on the draft context lets that recurrent-state rollback
         // succeed even though M-RoPE positions can't normally be re-written.
-        draft_ctx
-            .clear_kv_cache_seq(Some(0), Some(n_past as u32), None)
+        session
+            .clear_draft_kv_cache_seq(Some(0), Some(n_past as u32), None)
             .context("draft KV rollback failed")?;
 
-        target_ctx
-            .decode(&mut verify)
-            .context("verify decode failed")?;
         session
-            .process(&verify)
-            .context("MTP process(verify) failed")?;
+            .decode_target_and_process(&mut verify)
+            .context("MTP target verify/process failed")?;
 
         // Sample target at each output position and find the longest matching
         // prefix of the drafts. Output index 0 corresponds to the logits
         // following last_token (i.e. predicts draft[0]).
         let mut n_accepted: usize = 0;
-        let mut next_token = sampler.sample(target_ctx, 0);
+        let mut next_token = sampler.sample(session.target_context(), 0);
         sampler.accept(next_token);
 
         for (i, draft) in drafts.iter().enumerate() {
             if next_token == *draft {
                 n_accepted = i + 1;
                 if i + 1 < n_verify as usize {
-                    next_token = sampler.sample(target_ctx, (i + 1) as i32);
+                    next_token = sampler.sample(session.target_context(), (i + 1) as i32);
                     sampler.accept(next_token);
                 }
             } else {
@@ -311,8 +298,8 @@ fn run_speculative(
         // target and draft KVs both reach [0..n_past+drafts.len()]; keep only
         // up to position new_n_past - 1.
         if (n_accepted as i32) < drafts.len() as i32 {
-            let ok = target_ctx
-                .clear_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
+            let ok = session
+                .clear_target_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
                 .context("target KV rollback errored")?;
             if !ok {
                 return Err(anyhow!(
@@ -320,8 +307,8 @@ fn run_speculative(
                      ensure with_n_rs_seq(>0) is set on the target context"
                 ));
             }
-            let ok = draft_ctx
-                .clear_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
+            let ok = session
+                .clear_draft_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
                 .context("draft KV rollback errored")?;
             if !ok {
                 return Err(anyhow!(

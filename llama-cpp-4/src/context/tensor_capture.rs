@@ -25,8 +25,11 @@
 //!
 //! 1. Build a [`TensorCapture`] with the filter you need ([`TensorCapture::for_layers`]
 //!    is the common case).
-//! 2. Pass it to [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture). The capture must
-//!    **outlive** the [`LlamaContext`](crate::LlamaContext).
+//! 2. Pass it to the legacy unsafe
+//!    [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture).
+//!    The capture must remain at a stable address and outlive the
+//!    [`LlamaContext`](crate::LlamaContext). Prefer the owned, checked
+//!    [`TensorTransactions`](crate::TensorTransactions) API in new code.
 //! 3. Run [`LlamaContext::decode`](crate::LlamaContext::decode) as usual.
 //! 4. Read [`CapturedTensor`] values via [`TensorCapture::get_layer`],
 //!    [`TensorCapture::get`], or [`TensorCapture::iter`].
@@ -49,9 +52,11 @@
 //!     .unwrap();
 //!
 //!     let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
-//!     let ctx_params = LlamaContextParams::default()
-//!         .with_n_ctx(NonZeroU32::new(512))
-//!         .with_tensor_capture(&mut capture);
+//!     let ctx_params = unsafe {
+//!         LlamaContextParams::default()
+//!             .with_n_ctx(NonZeroU32::new(512))
+//!             .with_tensor_capture(&mut capture)
+//!     };
 //!     let mut ctx = model.new_context(&backend, ctx_params).unwrap();
 //!
 //!     let tokens = model.str_to_token("Hello", AddBos::Always).unwrap();
@@ -149,15 +154,18 @@ enum CaptureFilter {
 
 /// Captures intermediate tensors during [`crate::LlamaContext::decode`].
 ///
-/// Attach with [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture) before creating the
-/// context. The same instance can be reused across decodes if you call
-/// [`Self::clear`] between passes.
+/// Attach with the legacy unsafe
+/// [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture)
+/// before creating the context. The same instance can be reused across decodes
+/// if you call [`Self::clear`] between passes.
 ///
 /// # Lifetime
 ///
-/// The capture must outlive the [`crate::LlamaContext`] it is wired into;
-/// [`LlamaContextParams::with_tensor_capture`](crate::LlamaContextParams::with_tensor_capture) takes `&mut TensorCapture` to
-/// enforce this at compile time.
+/// The capture must remain at a stable address and outlive the
+/// [`crate::LlamaContext`] it is wired into. This requirement is not enforced
+/// by the returned params; callers must uphold the unsafe constructor's
+/// contract. Prefer [`crate::TensorTransactions`], whose state is pinned and
+/// owned by the context.
 pub struct TensorCapture {
     filter: CaptureFilter,
     captured: HashMap<String, CapturedTensor>,

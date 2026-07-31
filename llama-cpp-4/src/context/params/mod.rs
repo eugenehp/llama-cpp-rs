@@ -9,9 +9,14 @@ mod types;
 pub use types::*;
 
 use std::num::NonZeroU32;
+use std::pin::Pin;
 
 use thiserror::Error;
 
+use super::tensor_transaction::{
+    tensor_transaction_callback, tensor_transaction_decode_begin, tensor_transaction_decode_end,
+    TensorTransactions,
+};
 use crate::sampling::LlamaSampler;
 
 /// Error returned when [`LlamaContextParams::try_clone`] cannot duplicate state.
@@ -20,6 +25,9 @@ pub enum ParamsCloneError {
     /// Per-sequence sampler chains cannot be duplicated.
     #[error("cannot clone params that own per-sequence sampler chains")]
     SamplerChains,
+    /// Owned tensor transaction handlers cannot be duplicated.
+    #[error("cannot clone params that own tensor transactions")]
+    TensorTransactions,
 }
 
 /// Builder for [`llama_context_params`](llama_cpp_sys_4::llama_context_params).
@@ -59,11 +67,8 @@ pub struct LlamaContextParams {
     /// Keeps sampler chains alive while `context_params.samplers` points at them.
     owned_samplers: Vec<LlamaSampler>,
     sampler_configs: Vec<llama_cpp_sys_4::llama_sampler_seq_config>,
+    pub(crate) tensor_transactions: Option<Pin<Box<TensorTransactions>>>,
 }
-
-/// SAFETY: we do not currently allow setting or reading the pointers that cause this to not be automatically send or sync.
-unsafe impl Send for LlamaContextParams {}
-unsafe impl Sync for LlamaContextParams {}
 
 impl LlamaContextParams {
     /// Set the side of the context
@@ -466,8 +471,17 @@ impl LlamaContextParams {
     /// named nodes, prefix, or all). After `decode()`, read results from the
     /// capture — see [`crate::TensorCapture`] and [`crate::context::tensor_capture`].
     ///
-    /// The capture must outlive the context. Call [`TensorCapture::clear`](crate::TensorCapture::clear) before
-    /// reusing it on another batch.
+    /// The capture must outlive the context. Call
+    /// [`TensorCapture::clear`](crate::TensorCapture::clear) before reusing it
+    /// on another batch. Prefer [`Self::with_tensor_transactions`], which
+    /// transfers owned pinned callback state into the context.
+    ///
+    /// # Safety
+    ///
+    /// The caller must keep `capture` at a stable address until after the
+    /// resulting context is dropped. It must not be accessed concurrently with
+    /// any context operation that can invoke the callback. The reference
+    /// accepted here does not remain borrowed by the returned params.
     ///
     /// # Example
     ///
@@ -484,17 +498,40 @@ impl LlamaContextParams {
     ///     .unwrap();
     ///
     ///     let mut capture = TensorCapture::for_layers(&[13, 20, 27]);
-    ///     let ctx_params = LlamaContextParams::default().with_tensor_capture(&mut capture);
+    ///     let ctx_params = unsafe {
+    ///         LlamaContextParams::default().with_tensor_capture(&mut capture)
+    ///     };
     ///     let _ctx = model.new_context(&backend, ctx_params).unwrap();
     /// }
     /// ```
     #[must_use]
-    pub fn with_tensor_capture(self, capture: &mut super::tensor_capture::TensorCapture) -> Self {
+    pub unsafe fn with_tensor_capture(
+        self,
+        capture: &mut super::tensor_capture::TensorCapture,
+    ) -> Self {
         self.with_cb_eval(Some(super::tensor_capture::tensor_capture_callback))
             .with_cb_eval_user_data(
                 std::ptr::from_mut::<super::tensor_capture::TensorCapture>(capture)
                     .cast::<std::ffi::c_void>(),
             )
+    }
+
+    /// Attaches bounded owned tensor transactions to the context.
+    ///
+    /// The transaction state is pinned before its address is installed in the
+    /// native callback parameters. On successful context creation ownership
+    /// moves into [`crate::LlamaContext`] and remains there until after
+    /// `llama_free`.
+    #[must_use]
+    pub fn with_tensor_transactions(mut self, transactions: TensorTransactions) -> Self {
+        let mut transactions = Box::pin(transactions);
+        let user_data = std::ptr::from_mut(transactions.as_mut().get_mut()).cast();
+        self.context_params.cb_eval = Some(tensor_transaction_callback);
+        self.context_params.cb_eval_user_data = user_data;
+        self.context_params.cb_decode_begin = Some(tensor_transaction_decode_begin);
+        self.context_params.cb_decode_end = Some(tensor_transaction_decode_end);
+        self.tensor_transactions = Some(transactions);
+        self
     }
 
     /// Set the storage type for the **K** (key) KV cache tensors.
@@ -620,13 +657,17 @@ impl LlamaContextParams {
     /// # Errors
     ///
     /// Returns [`ParamsCloneError::SamplerChains`] when per-sequence sampler
-    /// chains are attached and cannot be duplicated.
+    /// chains are attached and cannot be duplicated, or
+    /// [`ParamsCloneError::TensorTransactions`] when an owned callback program
+    /// is attached.
     pub fn try_clone(&self) -> Result<Self, ParamsCloneError> {
-        if self.sampler_configs.is_empty() {
-            Ok(self.clone())
-        } else {
-            Err(ParamsCloneError::SamplerChains)
+        if !self.sampler_configs.is_empty() {
+            return Err(ParamsCloneError::SamplerChains);
         }
+        if self.tensor_transactions.is_some() {
+            return Err(ParamsCloneError::TensorTransactions);
+        }
+        Ok(self.clone())
     }
 }
 
@@ -646,6 +687,7 @@ impl Default for LlamaContextParams {
             attn_rot_disabled: false,
             owned_samplers: Vec::new(),
             sampler_configs: Vec::new(),
+            tensor_transactions: None,
         }
     }
 }
@@ -661,11 +703,18 @@ impl Clone for LlamaContextParams {
         // Sampler chains cannot be duplicated here; cloned params omit them.
         context_params.samplers = std::ptr::null_mut();
         context_params.n_samplers = 0;
+        if self.tensor_transactions.is_some() {
+            context_params.cb_eval = None;
+            context_params.cb_eval_user_data = std::ptr::null_mut();
+            context_params.cb_decode_begin = None;
+            context_params.cb_decode_end = None;
+        }
         Self {
             context_params,
             attn_rot_disabled: self.attn_rot_disabled,
             owned_samplers: Vec::new(),
             sampler_configs: Vec::new(),
+            tensor_transactions: None,
         }
     }
 }

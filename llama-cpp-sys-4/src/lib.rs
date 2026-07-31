@@ -4,7 +4,11 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
-#[allow(unnecessary_transmutes)]
+#[allow(
+    unnecessary_transmutes,
+    clippy::missing_safety_doc,
+    clippy::ptr_offset_with_cast
+)]
 mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }

@@ -133,19 +133,19 @@ fn main() -> Result<()> {
     );
 
     let session_config = Eagle3SessionConfig::new(1, args.n_draft_max).with_p_min(args.p_min);
-    let mut session = match Eagle3Session::new_with_config(&target_ctx, &draft_ctx, session_config)
-    {
-        Ok(s) => s,
-        Err(e) => {
-            println!("\nEAGLE-3 session could not be created: {e}");
-            println!(
-                "(Is `{}` a valid EAGLE-3 draft model for this target? It must be",
-                args.draft.display()
-            );
-            println!(" converted with `convert_hf_to_gguf.py --target-model-dir <target>`.)");
-            return Ok(());
-        }
-    };
+    let mut session =
+        match Eagle3Session::new_with_config(&mut target_ctx, &mut draft_ctx, session_config) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("\nEAGLE-3 session could not be created: {e}");
+                println!(
+                    "(Is `{}` a valid EAGLE-3 draft model for this target? It must be",
+                    args.draft.display()
+                );
+                println!(" converted with `convert_hf_to_gguf.py --target-model-dir <target>`.)");
+                return Ok(());
+            }
+        };
 
     println!(
         "EAGLE-3 session: n_draft_max={}, p_min={}, need_embd={}, need_embd_pre_norm={}",
@@ -163,21 +163,12 @@ fn main() -> Result<()> {
         return Ok(());
     };
 
-    run_speculative(
-        &target_model,
-        &mut target_ctx,
-        &mut draft_ctx,
-        &mut session,
-        &args.prompt,
-        n_predict,
-    )
+    run_speculative(&target_model, &mut session, &args.prompt, n_predict)
 }
 
 fn run_speculative(
     model: &LlamaModel,
-    target_ctx: &mut LlamaContext<'_>,
-    draft_ctx: &mut LlamaContext<'_>,
-    session: &mut Eagle3Session,
+    session: &mut Eagle3Session<'_, '_, '_>,
     prompt: &str,
     n_predict: i32,
 ) -> Result<()> {
@@ -189,25 +180,22 @@ fn run_speculative(
     }
 
     // Prompt prefill: decode the whole prompt as a single batch on the target.
-    let n_batch_max = target_ctx.n_batch() as usize;
+    let n_batch_max = session.target_context().n_batch() as usize;
     let prefill_capacity = tokens.len().max(n_batch_max);
     let mut batch = LlamaBatch::new(prefill_capacity, 1);
     let last_idx = tokens.len() - 1;
     for (i, tok) in tokens.iter().copied().enumerate() {
         batch.add(tok, i as i32, &[0], i == last_idx)?;
     }
-    target_ctx.decode(&mut batch).context("prefill failed")?;
-    // EAGLE-3 harvests the target's extracted hidden states from each decoded
-    // batch; hand every target decode to the session.
     session
-        .process(&batch)
-        .context("EAGLE-3 process(prefill) failed")?;
+        .decode_target_and_process(&mut batch)
+        .context("EAGLE-3 target prefill/process failed")?;
     session.begin(0, &tokens)?;
 
     // Greedy sampling keeps draft/verify token-exact so acceptance reflects the
     // draft quality rather than sampling noise.
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
-    let mut last_token = sampler.sample(target_ctx, batch.n_tokens() - 1);
+    let mut last_token = sampler.sample(session.target_context(), batch.n_tokens() - 1);
     sampler.accept(last_token);
 
     let emit = |s: &str| {
@@ -245,17 +233,17 @@ fn run_speculative(
         }
         let n_verify = verify.n_tokens();
 
-        target_ctx
-            .decode(&mut verify)
-            .context("verify decode failed")?;
+        session
+            .decode_target(&mut verify)
+            .context("target verify decode failed")?;
 
         // draft() autoregressively advanced the draft context's KV at the
         // speculative positions (>= n_past). process(verify) re-decodes those
         // same positions with the target's harvested features, so roll the
         // draft KV back to n_past first to avoid a position collision
         // (mirrors the MTP example).
-        draft_ctx
-            .clear_kv_cache_seq(Some(0), Some(n_past as u32), None)
+        session
+            .clear_draft_kv_cache_seq(Some(0), Some(n_past as u32), None)
             .context("draft KV rollback before process failed")?;
 
         session
@@ -265,13 +253,13 @@ fn run_speculative(
         // Longest accepted prefix: sample the target at each output position and
         // compare against the corresponding draft. Output 0 predicts draft[0].
         let mut n_accepted: usize = 0;
-        let mut next_token = sampler.sample(target_ctx, 0);
+        let mut next_token = sampler.sample(session.target_context(), 0);
         sampler.accept(next_token);
         for (i, draft) in drafts.iter().enumerate() {
             if next_token == *draft {
                 n_accepted = i + 1;
                 if i + 1 < n_verify as usize {
-                    next_token = sampler.sample(target_ctx, (i + 1) as i32);
+                    next_token = sampler.sample(session.target_context(), (i + 1) as i32);
                     sampler.accept(next_token);
                 }
             } else {
@@ -285,8 +273,8 @@ fn run_speculative(
         // Trim the rejected suffix from both KV caches so the next round starts
         // from a consistent state.
         if (n_accepted as i32) < drafts.len() as i32 {
-            let ok = target_ctx
-                .clear_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
+            let ok = session
+                .clear_target_kv_cache_seq(Some(0), Some(new_n_past as u32), None)
                 .context("target KV rollback errored")?;
             if !ok {
                 return Err(anyhow!(
@@ -294,7 +282,7 @@ fn run_speculative(
                      for recurrent/hybrid targets pass --n-rs-seq >= n-draft-max"
                 ));
             }
-            let _ = draft_ctx.clear_kv_cache_seq(Some(0), Some(new_n_past as u32), None);
+            let _ = session.clear_draft_kv_cache_seq(Some(0), Some(new_n_past as u32), None);
         }
 
         // Only report acceptance when a draft was actually produced. EAGLE-3

@@ -1,0 +1,83 @@
+diff --git a/include/llama.h b/include/llama.h
+index 3c6d22be8..756ee1d1c 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -344,6 +344,16 @@ extern "C" {
+         struct llama_sampler * sampler;
+     };
+ 
++    // Exact decode lifecycle hooks used by safe callback owners. The begin
++    // callback runs before native state mutation. The end callback runs after
++    // every attempted decode and receives whether native decode succeeded.
++    typedef bool (*llama_decode_begin_callback)(
++            const struct llama_batch * batch,
++            void * user_data);
++    typedef bool (*llama_decode_end_callback)(
++            bool native_succeeded,
++            void * user_data);
++
+     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
+     //       https://github.com/ggml-org/llama.cpp/pull/7544
+     struct llama_context_params {
+@@ -374,6 +384,8 @@ extern "C" {
+ 
+         ggml_backend_sched_eval_callback cb_eval;
+         void * cb_eval_user_data;
++        llama_decode_begin_callback cb_decode_begin;
++        llama_decode_end_callback   cb_decode_end;
+ 
+         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
+         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 9b399d609..fde26f0c2 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -136,6 +136,8 @@ llama_context::llama_context(
+ 
+     cparams.cb_eval           = params.cb_eval;
+     cparams.cb_eval_user_data = params.cb_eval_user_data;
++    cparams.cb_decode_begin   = params.cb_decode_begin;
++    cparams.cb_decode_end     = params.cb_decode_end;
+ 
+     cparams.ctx_other = nullptr;
+ 
+@@ -3489,6 +3491,8 @@ llama_context_params llama_context_default_params() {
+         /*.defrag_thold                =*/ -1.0f,
+         /*.cb_eval                     =*/ nullptr,
+         /*.cb_eval_user_data           =*/ nullptr,
++        /*.cb_decode_begin             =*/ nullptr,
++        /*.cb_decode_end               =*/ nullptr,
+         /*.type_k                      =*/ GGML_TYPE_F16,
+         /*.type_v                      =*/ GGML_TYPE_F16,
+         /*.abort_callback              =*/ nullptr,
+@@ -4074,7 +4078,17 @@ int32_t llama_encode(
+ int32_t llama_decode(
+         llama_context * ctx,
+           llama_batch   batch) {
++    const auto & cparams = ctx->get_cparams();
++    if (cparams.cb_decode_begin &&
++            !cparams.cb_decode_begin(&batch, cparams.cb_eval_user_data)) {
++        return -4;
++    }
++
+     const int ret = ctx->decode(batch);
++    if (cparams.cb_decode_end &&
++            !cparams.cb_decode_end(ret == 0, cparams.cb_eval_user_data)) {
++        return -4;
++    }
+     if (ret != 0 && ret != 1) {
+         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
+     }
+diff --git a/src/llama-cparams.h b/src/llama-cparams.h
+index 5018170ed..2ee790b79 100644
+--- a/src/llama-cparams.h
++++ b/src/llama-cparams.h
+@@ -60,6 +60,8 @@ struct llama_cparams {
+ 
+     ggml_backend_sched_eval_callback cb_eval;
+     void * cb_eval_user_data;
++    llama_decode_begin_callback cb_decode_begin;
++    llama_decode_end_callback   cb_decode_end;
+ 
+     llama_context * ctx_other;
+ };

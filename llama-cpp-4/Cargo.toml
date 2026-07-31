@@ -17,6 +17,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }
+criterion = { workspace = true }
 
 [features]
 default = ["openmp", "mtmd", "dynamic-link"]
@@ -44,6 +45,10 @@ workspace = true
 [package.metadata.docs.rs]
 all-features = false
 features = ["mtmd", "ggml", "rpc"]
+
+[[bench]]
+name = "tensor_transactions"
+harness = false
 
 [[example]]
 name = "usage"
