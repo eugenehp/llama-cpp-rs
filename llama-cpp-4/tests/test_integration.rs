@@ -309,3 +309,112 @@ fn integration_tensor_capture_last_layer() {
     assert!(layer.n_tokens() > 0);
     assert_eq!(layer.data.len(), layer.n_embd() * layer.n_tokens());
 }
+
+/// Owned tensor-transaction capture over a real decode: exercises the refactored
+/// FFI hot path (`read_tensor` uninitialized fill, byte-name matching,
+/// index-keyed row bookkeeping, retained capture).
+#[test]
+fn integration_tensor_transactions_capture() {
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let _guard = decode_guard();
+
+    let n_embd = model.n_embd() as usize;
+    // Layer 0 is always computed for every submitted token (the last layer can
+    // be pruned to output positions, which would fail the row-coverage check).
+    let selector =
+        TensorSelector::layer_output(0, n_embd, 64, TensorAccess::ReadOnly, true).unwrap();
+    let transactions = TensorTransactions::capture(vec![selector]).unwrap();
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(64))
+        .with_n_batch(64)
+        .with_tensor_transactions(transactions);
+    let mut ctx = model.new_context(backend(), ctx_params).unwrap();
+
+    let tokens = model
+        .str_to_token("Once upon a time", AddBos::Always)
+        .unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
+    }
+    ctx.decode(&mut batch).unwrap();
+
+    let transactions = ctx.tensor_transactions().expect("owned transactions");
+    assert!(
+        transactions.failure().is_none(),
+        "callback failure: {:?}",
+        transactions.failure()
+    );
+    let captures = transactions.captures();
+    assert_eq!(captures.len(), 1, "one retained tensor for one decode");
+    let capture = &captures[0];
+    assert_eq!(capture.name, "l_out-0");
+    assert_eq!(capture.shape.row_elements, n_embd);
+    assert_eq!(capture.shape.rows, tokens.len());
+    assert_eq!(capture.rows.len(), tokens.len());
+    match &capture.data {
+        CapturedTensorData::F32(values) => {
+            assert_eq!(values.len(), n_embd * tokens.len());
+            assert!(values.iter().all(|value| value.is_finite()));
+        }
+        other => panic!("expected f32 capture, got {other:?}"),
+    }
+}
+
+/// Owned transactional write-back driven by a *closure* handler: exercises the
+/// blanket `FnMut` impl, both finiteness scans, and the commit (`copy_tensor_set`)
+/// path end-to-end.
+#[test]
+fn integration_tensor_transactions_readwrite_commits() {
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let _guard = decode_guard();
+
+    let n_embd = model.n_embd() as usize;
+    let selector =
+        TensorSelector::layer_output(0, n_embd, 64, TensorAccess::ReadWriteF32, false).unwrap();
+
+    // A closure is a handler (blanket impl). Clamp to a huge finite range: a
+    // no-op for real residual values that still drives the write-back path.
+    let transactions = TensorTransactions::new(vec![selector], |mut txn: TensorTransaction<'_>| {
+        if let TensorDataMut::F32(values) = &mut txn.data {
+            for value in values.iter_mut() {
+                *value = value.clamp(-1.0e30, 1.0e30);
+            }
+        }
+        Ok(TensorWriteback::Commit)
+    })
+    .unwrap();
+
+    let ctx_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(64))
+        .with_n_batch(64)
+        .with_tensor_transactions(transactions);
+    let mut ctx = model.new_context(backend(), ctx_params).unwrap();
+
+    let tokens = model.str_to_token("hello world", AddBos::Always).unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
+    }
+    ctx.decode(&mut batch).unwrap();
+
+    let transactions = ctx.tensor_transactions().expect("owned transactions");
+    assert!(
+        transactions.failure().is_none(),
+        "callback failure: {:?}",
+        transactions.failure()
+    );
+    // Non-retaining selector: the commit path ran, nothing is captured.
+    assert!(transactions.captures().is_empty());
+}

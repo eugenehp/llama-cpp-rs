@@ -187,6 +187,11 @@ pub enum DecodeError {
     /// The number of tokens in the batch was 0.
     #[error("Decode Error -1: n_tokens == 0")]
     NTokensZero,
+    /// A decode lifecycle hook vetoed the decode (native returned `-4`). The
+    /// specific cause is normally surfaced via [`DecodeError::TensorCallback`];
+    /// this is the fallback when no Rust-side failure was recorded.
+    #[error("Decode Error -4: vetoed by a decode lifecycle hook")]
+    VetoedByDecodeHook,
     /// An unknown error occurred.
     #[error("Decode Error {0}: unknown")]
     Unknown(c_int),
@@ -226,6 +231,7 @@ impl From<NonZeroI32> for DecodeError {
         match value.get() {
             1 => DecodeError::NoKvCacheSlot,
             -1 => DecodeError::NTokensZero,
+            -4 => DecodeError::VetoedByDecodeHook,
             i => DecodeError::Unknown(i),
         }
     }
@@ -661,6 +667,7 @@ pub use context::TensorCapture;
 pub use context::TensorDataMut;
 /// Element representation required by an exact tensor selector.
 pub use context::TensorElementType;
+pub use context::TensorFiniteValidation;
 /// Mapping between selected tensor rows and the decode batch.
 pub use context::TensorRowMapping;
 /// Exact bounded graph-node contract.

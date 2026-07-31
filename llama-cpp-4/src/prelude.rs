@@ -156,8 +156,9 @@ pub use crate::context::params::{
 pub use crate::context::{
     CapturedTensor, CapturedTensorData, LlamaContext, MemoryBreakdownEntry, TensorAccess,
     TensorBatchRow, TensorCallbackFailure, TensorCapture, TensorDataMut, TensorElementType,
-    TensorRowMapping, TensorSelector, TensorShape, TensorTransaction, TensorTransactionError,
-    TensorTransactionHandler, TensorTransactions, TensorWriteback, TransactionalTensorCapture,
+    TensorFiniteValidation, TensorRowMapping, TensorSelector, TensorShape, TensorTransaction,
+    TensorTransactionError, TensorTransactionHandler, TensorTransactions, TensorWriteback,
+    TransactionalTensorCapture,
 };
 pub use crate::llama_backend::LlamaBackend;
 pub use crate::llama_batch::{BatchAddError, LlamaBatch};

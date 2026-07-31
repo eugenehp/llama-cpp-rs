@@ -2,13 +2,18 @@
 
 ## Unreleased
 
+## [0.4.3] - 2026-07-31
+
 ### Added
 
 - **Transactional tensor capture/write-back** (`llama-cpp-4`): the owned
   `TensorTransactions` / `LlamaContextParams::with_tensor_transactions` API —
   bounded, Rust-owned capture of decode-time graph nodes with transactional
   finite-`f32` write-back, decode lifecycle hooks, and a documented safe
-  ownership boundary (`llama-cpp-4/TENSOR_TRANSACTIONS_SAFETY.md`).
+  ownership boundary (`llama-cpp-4/TENSOR_TRANSACTIONS_SAFETY.md`). Handlers may
+  be plain closures (`FnMut(TensorTransaction) -> Result<TensorWriteback, _>`);
+  per-selector finiteness validation is configurable via `TensorFiniteValidation`
+  (`Strict` / `OutputOnly` / `Trusted`).
 - **Hardened speculative sessions** (`llama-cpp-4`): lifetime-bound,
   non-thread-transferable MTP and EAGLE-3 sessions with bounded
   prompt/proposal/state inputs, exact continuation-state capture/restore,
@@ -18,6 +23,8 @@
   `load_mode` field ([#20834](https://github.com/ggml-org/llama.cpp/pull/20834)).
 - Allocation-reusing tokenization and raw-token-piece sinks, plus a count-only
   tokenizer query for coordinator-owned bounded utility work.
+- **`DecodeError::VetoedByDecodeHook`** (`llama-cpp-4`): a distinct error for a
+  decode-lifecycle hook that vetoes a decode (native return `-4`).
 
 ### Breaking
 
@@ -43,6 +50,11 @@
   even when `build.build-dir` places `OUT_DIR` elsewhere.
 - Fall back from unverified prebuilt archives to a source build; explicit
   unverifiable `LLAMA_PREBUILT_DIR` inputs now fail closed.
+- **ABI-robust decode-lifecycle hooks**: the native patch now appends
+  `cb_decode_begin` / `cb_decode_end` to the end of `llama_context_params` so
+  every upstream field keeps its original offset, and a link-time guard
+  (`llama_cpp_rs_decode_hooks_abi_v1`) makes an unpatched or ABI-mismatched
+  prebuilt `libllama` fail to link rather than silently misread the struct.
 
 ## [0.4.2] - 2026-07-12
 

@@ -8,7 +8,6 @@
 //! back exactly once only after the handler returns successfully and every
 //! output value passes validation.
 
-use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -69,6 +68,36 @@ pub enum TensorRowMapping {
     BatchTokens,
 }
 
+/// How aggressively a selector validates that `f32` values are finite.
+///
+/// Finiteness validation is a full pass over the tensor copy. For a
+/// `ReadWriteF32` selector the strict policy scans the native values *and* the
+/// committed output, so a large mutable capture pays for two passes per
+/// callback. Relax the policy when the caller already trusts the data.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TensorFiniteValidation {
+    /// Reject a non-finite native value before the handler runs and a
+    /// non-finite handler output before commit. This is the default.
+    #[default]
+    Strict,
+    /// Skip the pre-handler scan; still reject a non-finite committed output.
+    OutputOnly,
+    /// Skip both scans. The caller guarantees finite values.
+    Trusted,
+}
+
+impl TensorFiniteValidation {
+    /// Whether the native values are scanned before the handler runs.
+    const fn checks_input(self) -> bool {
+        matches!(self, Self::Strict)
+    }
+
+    /// Whether the committed output is scanned before write-back.
+    const fn checks_output(self) -> bool {
+        matches!(self, Self::Strict | Self::OutputOnly)
+    }
+}
+
 /// Exact bounded graph-node contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TensorSelector {
@@ -79,6 +108,7 @@ pub struct TensorSelector {
     access: TensorAccess,
     row_mapping: TensorRowMapping,
     retain: bool,
+    finite: TensorFiniteValidation,
 }
 
 impl TensorSelector {
@@ -106,9 +136,27 @@ impl TensorSelector {
             access,
             row_mapping,
             retain,
+            finite: TensorFiniteValidation::default(),
         };
         selector.validate()?;
         Ok(selector)
+    }
+
+    /// Sets how aggressively `f32` values are validated as finite.
+    ///
+    /// Defaults to [`TensorFiniteValidation::Strict`]. Relaxing this trades a
+    /// full pass (or two, for `ReadWriteF32`) over the tensor for the caller's
+    /// guarantee that the values are already finite.
+    #[must_use]
+    pub const fn with_finite_validation(mut self, finite: TensorFiniteValidation) -> Self {
+        self.finite = finite;
+        self
+    }
+
+    /// Returns the finiteness-validation policy.
+    #[must_use]
+    pub const fn finite_validation(&self) -> TensorFiniteValidation {
+        self.finite
     }
 
     /// Constructs one exact residual layer-output selector.
@@ -301,6 +349,20 @@ pub trait TensorTransactionHandler: Send {
     ) -> Result<TensorWriteback, TensorTransactionError>;
 }
 
+/// Any suitable closure is a handler, so callers can pass one directly to
+/// [`TensorTransactions::new`] instead of defining a dedicated type.
+impl<F> TensorTransactionHandler for F
+where
+    F: FnMut(TensorTransaction<'_>) -> Result<TensorWriteback, TensorTransactionError> + Send,
+{
+    fn apply(
+        &mut self,
+        transaction: TensorTransaction<'_>,
+    ) -> Result<TensorWriteback, TensorTransactionError> {
+        self(transaction)
+    }
+}
+
 /// Error returned by a tensor transaction handler or selector validator.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
@@ -420,7 +482,12 @@ pub struct TensorTransactions {
     pending_captures: Vec<TransactionalTensorCapture>,
     pending_retained_bytes: usize,
     batch_rows: Vec<TensorBatchRow>,
-    rows_seen: BTreeMap<String, usize>,
+    /// Rows covered so far this decode, indexed by selector position (the
+    /// selectors are sorted, so the index is stable and avoids a keyed map).
+    rows_seen: Vec<usize>,
+    /// Reused scratch for the pre-handler rollback copy of a `ReadWriteF32`
+    /// tensor, so a mutable selector does not allocate every callback.
+    rollback_f32: Vec<f32>,
     failure: Option<TensorCallbackFailure>,
     decode_active: bool,
 }
@@ -514,6 +581,7 @@ impl TensorTransactions {
                 "a transaction handler requires at least one mutable selector",
             ));
         }
+        let selector_count = selectors.len();
         Ok(Self {
             selectors,
             handler,
@@ -522,7 +590,8 @@ impl TensorTransactions {
             pending_captures: Vec::new(),
             pending_retained_bytes: 0,
             batch_rows: Vec::new(),
-            rows_seen: BTreeMap::new(),
+            rows_seen: vec![0; selector_count],
+            rollback_f32: Vec::new(),
             failure: None,
             decode_active: false,
         })
@@ -572,7 +641,7 @@ impl TensorTransactions {
         }
         self.pending_captures.clear();
         self.pending_retained_bytes = 0;
-        self.rows_seen.clear();
+        self.rows_seen.fill(0);
         self.batch_rows = copy_batch_rows(batch)?;
         self.decode_active = true;
         Ok(())
@@ -595,8 +664,8 @@ impl TensorTransactions {
             self.pending_retained_bytes = 0;
             return Ok(());
         }
-        for selector in &self.selectors {
-            let rows = self.rows_seen.get(selector.name()).copied().unwrap_or(0);
+        for (index, selector) in self.selectors.iter().enumerate() {
+            let rows = self.rows_seen[index];
             let complete = match selector.row_mapping {
                 TensorRowMapping::BatchTokens => rows == expected_rows,
             };
@@ -626,9 +695,9 @@ impl TensorTransactions {
         Ok(())
     }
 
-    fn selected(&self, name: &str) -> Option<usize> {
+    fn selected(&self, name: &[u8]) -> Option<usize> {
         self.selectors
-            .binary_search_by(|selector| selector.name().cmp(name))
+            .binary_search_by(|selector| selector.name().as_bytes().cmp(name))
             .ok()
     }
 
@@ -637,83 +706,100 @@ impl TensorTransactions {
         tensor: *mut llama_cpp_sys_4::ggml_tensor,
         selector_index: usize,
     ) -> Result<(), TensorTransactionError> {
-        let selector = self.selectors[selector_index].clone();
-        let shape = validate_tensor(tensor, &selector)?;
-        let start = match selector.row_mapping {
-            TensorRowMapping::BatchTokens => {
-                self.rows_seen.get(selector.name()).copied().unwrap_or(0)
+        // Disjoint field borrows so the per-callback path neither clones the
+        // whole selector nor allocates the batch rows on the common path.
+        let staged = {
+            let Self {
+                selectors,
+                handler,
+                batch_rows,
+                rows_seen,
+                rollback_f32,
+                ..
+            } = &mut *self;
+            let selector = &selectors[selector_index];
+            let shape = validate_tensor(tensor, selector)?;
+            let start = match selector.row_mapping {
+                TensorRowMapping::BatchTokens => rows_seen[selector_index],
+            };
+            let end = start
+                .checked_add(shape.rows)
+                .ok_or_else(|| TensorTransactionError::new("tensor row mapping overflowed"))?;
+            if end > batch_rows.len() {
+                return Err(TensorTransactionError::new(
+                    "tensor rows exceed submitted decode batch",
+                ));
             }
-        };
-        let end = start
-            .checked_add(shape.rows)
-            .ok_or_else(|| TensorTransactionError::new("tensor row mapping overflowed"))?;
-        if end > self.batch_rows.len() {
-            return Err(TensorTransactionError::new(
-                "tensor rows exceed submitted decode batch",
-            ));
-        }
-        let rows = self.batch_rows[start..end].to_vec();
 
-        match selector.element_type {
-            TensorElementType::F32 => {
-                let mut values = vec![0.0_f32; shape.elements];
-                copy_tensor_get(tensor, &mut values)?;
-                if values.iter().any(|value| !value.is_finite()) {
-                    return Err(TensorTransactionError::new(
-                        "selected f32 tensor contains a non-finite value",
-                    ));
-                }
-                if selector.access == TensorAccess::ReadWriteF32 {
-                    let original = selector.retain.then(|| values.clone());
-                    let handler = self.handler.as_deref_mut().ok_or_else(|| {
-                        TensorTransactionError::new("mutable tensor handler is unavailable")
-                    })?;
-                    let writeback = handler.apply(TensorTransaction {
-                        name: selector.name(),
-                        shape,
-                        rows: &rows,
-                        access: selector.access,
-                        data: TensorDataMut::F32(&mut values),
-                    })?;
-                    match writeback {
-                        TensorWriteback::Unchanged => {
-                            if let Some(original) = original {
-                                values = original;
-                            }
+            let captured: Option<CapturedTensorData> = match selector.element_type {
+                TensorElementType::F32 => {
+                    // The native copy fills the entire buffer, so it is left
+                    // uninitialized rather than zeroed first.
+                    let mut values = read_tensor::<f32>(tensor, shape.elements)?;
+                    if selector.finite.checks_input() && !all_finite(&values) {
+                        return Err(TensorTransactionError::new(
+                            "selected f32 tensor contains a non-finite value",
+                        ));
+                    }
+                    if selector.access == TensorAccess::ReadWriteF32 {
+                        // Keep a rollback copy only when the pre-handler values
+                        // are also retained; the scratch is reused each call.
+                        let rolled_back = selector.retain;
+                        if rolled_back {
+                            rollback_f32.clear();
+                            rollback_f32.extend_from_slice(&values);
                         }
-                        TensorWriteback::Commit => {
-                            if values.iter().any(|value| !value.is_finite()) {
-                                return Err(TensorTransactionError::new(
-                                    "transaction produced a non-finite f32 value",
-                                ));
+                        let handler = handler.as_deref_mut().ok_or_else(|| {
+                            TensorTransactionError::new("mutable tensor handler is unavailable")
+                        })?;
+                        let writeback = handler.apply(TensorTransaction {
+                            name: selector.name(),
+                            shape,
+                            rows: &batch_rows[start..end],
+                            access: selector.access,
+                            data: TensorDataMut::F32(&mut values),
+                        })?;
+                        match writeback {
+                            TensorWriteback::Unchanged => {
+                                if rolled_back {
+                                    values.clear();
+                                    values.extend_from_slice(rollback_f32);
+                                }
                             }
-                            copy_tensor_set(tensor, &values)?;
+                            TensorWriteback::Commit => {
+                                if selector.finite.checks_output() && !all_finite(&values) {
+                                    return Err(TensorTransactionError::new(
+                                        "transaction produced a non-finite f32 value",
+                                    ));
+                                }
+                                copy_tensor_set(tensor, &values)?;
+                            }
                         }
                     }
+                    selector.retain.then_some(CapturedTensorData::F32(values))
                 }
-                if selector.retain {
-                    self.retain(
-                        selector.name.clone(),
-                        shape,
-                        rows,
-                        CapturedTensorData::F32(values),
-                    )?;
+                TensorElementType::I32 => {
+                    let values = read_tensor::<i32>(tensor, shape.elements)?;
+                    selector.retain.then_some(CapturedTensorData::I32(values))
                 }
-            }
-            TensorElementType::I32 => {
-                let mut values = vec![0_i32; shape.elements];
-                copy_tensor_get(tensor, &mut values)?;
-                if selector.retain {
-                    self.retain(
-                        selector.name.clone(),
-                        shape,
-                        rows,
-                        CapturedTensorData::I32(values),
-                    )?;
-                }
-            }
+            };
+
+            rows_seen[selector_index] = end;
+
+            // Only the retained path pays for the owned name and row copies.
+            captured.map(|data| {
+                (
+                    selectors[selector_index].name().to_owned(),
+                    shape,
+                    batch_rows[start..end].to_vec(),
+                    data,
+                )
+            })
+        };
+
+        if let Some((name, shape, rows, data)) = staged {
+            self.retain(name, shape, rows, data)?;
         }
-        self.rows_seen.insert(selector.name, end);
         Ok(())
     }
 
@@ -817,18 +903,28 @@ fn validate_tensor(
     })
 }
 
-fn copy_tensor_get<T>(
+/// Reads a contiguous native tensor into a fresh, exactly-sized `Vec<T>`.
+///
+/// The buffer is left uninitialized and filled directly by the native copy —
+/// the previous implementation zeroed a `vec![0; n]` that was immediately
+/// overwritten. `T` must be a plain `Copy` element type (`f32`/`i32`).
+fn read_tensor<T: Copy>(
     tensor: *mut llama_cpp_sys_4::ggml_tensor,
-    values: &mut [T],
-) -> Result<(), TensorTransactionError> {
-    let bytes = size_of_val(values);
+    elements: usize,
+) -> Result<Vec<T>, TensorTransactionError> {
+    let bytes = elements
+        .checked_mul(size_of::<T>())
+        .ok_or_else(|| TensorTransactionError::new("native tensor byte count overflowed"))?;
     if bytes == 0 {
         return Err(TensorTransactionError::new(
             "cannot copy an empty native tensor",
         ));
     }
-    // SAFETY: `validate_tensor` proves the selected native tensor has exactly
-    // this contiguous byte size. `values` is live and exclusively borrowed.
+    let mut values: Vec<T> = Vec::with_capacity(elements);
+    // SAFETY: `validate_tensor` proved the native tensor is exactly `bytes`
+    // contiguous bytes; `Vec::with_capacity(elements)` reserves that many `T`
+    // slots and `ggml_backend_tensor_get` writes every one before `set_len`, so
+    // no uninitialized element is ever read. `T: Copy` has no drop glue.
     unsafe {
         llama_cpp_sys_4::ggml_backend_tensor_get(
             tensor,
@@ -836,8 +932,21 @@ fn copy_tensor_get<T>(
             0,
             bytes,
         );
+        values.set_len(elements);
     }
-    Ok(())
+    Ok(values)
+}
+
+/// Branchless finiteness scan. A finite `f32` has an exponent field that is not
+/// all ones (an all-ones exponent encodes `inf`/`nan`). The `|` fold lets the
+/// compiler vectorize the pass rather than emit a per-element `is_finite`.
+fn all_finite(values: &[f32]) -> bool {
+    const EXPONENT_MASK: u32 = 0x7F80_0000;
+    let mut non_finite = 0_u32;
+    for &value in values {
+        non_finite |= u32::from((value.to_bits() & EXPONENT_MASK) == EXPONENT_MASK);
+    }
+    non_finite == 0
 }
 
 fn copy_tensor_set<T>(
@@ -1005,17 +1114,12 @@ pub(crate) unsafe extern "C" fn tensor_transaction_callback(
         .iter()
         .position(|value| *value == 0)
         .unwrap_or(name_bytes.len());
+    // SAFETY: `c_char` and `u8` have identical byte width. Names are matched as
+    // raw bytes against the selector set, so the common per-node path skips
+    // UTF-8 validation entirely.
     let raw_name =
-        // SAFETY: `c_char` and `u8` have identical byte width.
         unsafe { std::slice::from_raw_parts(name_bytes.as_ptr().cast::<u8>(), length) };
-    let name = match std::str::from_utf8(raw_name) {
-        Ok(name) => name,
-        Err(error) => {
-            state.record_failure(None, false, format!("tensor name is not UTF-8: {error}"));
-            return false;
-        }
-    };
-    let Some(selector_index) = state.selected(name) else {
+    let Some(selector_index) = state.selected(raw_name) else {
         return false;
     };
     if ask {
@@ -1026,7 +1130,9 @@ pub(crate) unsafe extern "C" fn tensor_transaction_callback(
     match result {
         Ok(Ok(())) => true,
         Ok(Err(error)) => {
-            state.record_failure(Some(name), false, error.to_string());
+            // The matched selector name is valid UTF-8 by construction.
+            let name = state.selectors[selector_index].name().to_owned();
+            state.record_failure(Some(&name), false, error.to_string());
             true
         }
         Err(payload) => {
@@ -1041,7 +1147,8 @@ pub(crate) unsafe extern "C" fn tensor_transaction_callback(
                     |message| *message,
                 )
                 .to_owned();
-            state.record_failure(Some(name), true, message);
+            let name = state.selectors[selector_index].name().to_owned();
+            state.record_failure(Some(&name), true, message);
             true
         }
     }
@@ -1132,7 +1239,7 @@ mod tests {
                 position: 0,
                 sequence_ids: vec![0],
             }];
-            transactions.rows_seen.insert("l_out-1".to_owned(), 1);
+            transactions.rows_seen[0] = 1;
             transactions
                 .retain(
                     "l_out-1".to_owned(),
@@ -1162,5 +1269,49 @@ mod tests {
             CapturedTensorData::F32(ref values) if values == &[2.0]
         ));
         assert!(transactions.captures().is_empty());
+    }
+
+    #[test]
+    fn closures_are_handlers() {
+        // A closure is accepted directly, without a dedicated handler type.
+        let selector =
+            TensorSelector::layer_output(1, 4, 2, TensorAccess::ReadWriteF32, false).unwrap();
+        let transactions =
+            TensorTransactions::new(vec![selector], |mut txn: TensorTransaction<'_>| {
+                if let TensorDataMut::F32(values) = &mut txn.data {
+                    for value in values.iter_mut() {
+                        *value *= 2.0;
+                    }
+                }
+                Ok(TensorWriteback::Commit)
+            });
+        assert!(transactions.is_ok());
+    }
+
+    #[test]
+    fn all_finite_detects_non_finite() {
+        assert!(all_finite(&[0.0, 1.0, -1.0, f32::MAX, f32::MIN, -0.0]));
+        assert!(all_finite(&[]));
+        assert!(!all_finite(&[1.0, f32::INFINITY]));
+        assert!(!all_finite(&[f32::NEG_INFINITY]));
+        assert!(!all_finite(&[f32::NAN]));
+    }
+
+    #[test]
+    fn finite_validation_policy() {
+        assert!(TensorFiniteValidation::Strict.checks_input());
+        assert!(TensorFiniteValidation::Strict.checks_output());
+        assert!(!TensorFiniteValidation::OutputOnly.checks_input());
+        assert!(TensorFiniteValidation::OutputOnly.checks_output());
+        assert!(!TensorFiniteValidation::Trusted.checks_input());
+        assert!(!TensorFiniteValidation::Trusted.checks_output());
+
+        let selector = TensorSelector::layer_output(1, 4, 2, TensorAccess::ReadOnly, true)
+            .unwrap()
+            .with_finite_validation(TensorFiniteValidation::Trusted);
+        assert_eq!(
+            selector.finite_validation(),
+            TensorFiniteValidation::Trusted
+        );
     }
 }

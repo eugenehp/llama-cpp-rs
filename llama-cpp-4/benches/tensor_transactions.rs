@@ -99,8 +99,7 @@ fn bench_callback_write_path(c: &mut Criterion) {
                     // (1) fresh scratch allocation — current per-callback behavior
                     let mut values = vec![0.0_f32; n];
                     // (2) pre-handler finiteness validation
-                    let finite = values.iter().all(|v| v.is_finite());
-                    debug_assert!(finite);
+                    black_box(values.iter().all(|v| v.is_finite()));
                     // (3) rollback copy taken because the selector retains
                     let _original = values.clone();
                     // (4) handler dispatch (real trait-object call)
@@ -159,7 +158,7 @@ fn bench_buffer_strategy(c: &mut Criterion) {
             |b, &n| {
                 let mut values = vec![0.0_f32; n];
                 b.iter(|| {
-                    values.iter_mut().for_each(|value| *value = 0.0);
+                    values.fill(0.0);
                     for value in &mut values {
                         *value += 1.0;
                     }
@@ -172,19 +171,30 @@ fn bench_buffer_strategy(c: &mut Criterion) {
 }
 
 /// Isolated cost of the finiteness validation over one tensor copy — `process()`
-/// performs this up to twice per `ReadWriteF32` callback.
+/// performs this up to twice per `ReadWriteF32` callback. Compares the previous
+/// per-element `is_finite` against the new branchless exponent-mask fold.
 fn bench_finiteness_scan(c: &mut Criterion) {
+    // Mirror of the crate-internal `all_finite` so the improvement is visible.
+    #[inline]
+    fn all_finite_bitwise(values: &[f32]) -> bool {
+        const EXPONENT_MASK: u32 = 0x7F80_0000;
+        let mut non_finite = 0_u32;
+        for &value in values {
+            non_finite |= u32::from((value.to_bits() & EXPONENT_MASK) == EXPONENT_MASK);
+        }
+        non_finite == 0
+    }
+
     let mut group = c.benchmark_group("finiteness_scan");
     for elements in ELEMENT_COUNTS {
         let values = vec![1.0_f32; elements];
         group.throughput(Throughput::Elements(elements as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(elements),
-            &values,
-            |b, v| {
-                b.iter(|| black_box(v.iter().all(|value| value.is_finite())));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("is_finite", elements), &values, |b, v| {
+            b.iter(|| black_box(v.iter().all(|value| value.is_finite())));
+        });
+        group.bench_with_input(BenchmarkId::new("bitwise", elements), &values, |b, v| {
+            b.iter(|| black_box(all_finite_bitwise(v)));
+        });
     }
     group.finish();
 }

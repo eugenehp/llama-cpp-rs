@@ -1,8 +1,8 @@
 diff --git a/include/llama.h b/include/llama.h
-index 3c6d22be8..756ee1d1c 100644
+index a3ceecf5e..60a5003e4 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -344,6 +344,16 @@ extern "C" {
+@@ -344,6 +344,21 @@ extern "C" {
          struct llama_sampler * sampler;
      };
  
@@ -16,20 +16,29 @@ index 3c6d22be8..756ee1d1c 100644
 +            bool native_succeeded,
 +            void * user_data);
 +
++    // ABI guard: defined only in patched builds. The Rust binding references
++    // this symbol so an unpatched or ABI-mismatched prebuilt libllama fails at
++    // link time instead of silently disabling the decode hooks.
++    LLAMA_API int llama_cpp_rs_decode_hooks_abi_v1(void);
++
      // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
      //       https://github.com/ggml-org/llama.cpp/pull/7544
      struct llama_context_params {
-@@ -374,6 +384,8 @@ extern "C" {
- 
-         ggml_backend_sched_eval_callback cb_eval;
-         void * cb_eval_user_data;
+@@ -405,6 +420,12 @@ extern "C" {
+         // a source/target/parent context
+         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
+         struct llama_context * ctx_other;
++
++        // Exact decode lifecycle hooks. Appended at the end of the struct so
++        // every upstream field keeps its original offset — ABI-robust against a
++        // prebuilt libllama built without this patch.
 +        llama_decode_begin_callback cb_decode_begin;
 +        llama_decode_end_callback   cb_decode_end;
+     };
  
-         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
-         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+     struct llama_model_tensor_override {
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 9b399d609..fde26f0c2 100644
+index 5ef7becf6..1dac3b056 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -136,6 +136,8 @@ llama_context::llama_context(
@@ -41,16 +50,23 @@ index 9b399d609..fde26f0c2 100644
  
      cparams.ctx_other = nullptr;
  
-@@ -3489,6 +3491,8 @@ llama_context_params llama_context_default_params() {
-         /*.defrag_thold                =*/ -1.0f,
-         /*.cb_eval                     =*/ nullptr,
-         /*.cb_eval_user_data           =*/ nullptr,
+@@ -3514,6 +3516,8 @@ llama_context_params llama_context_default_params() {
+         /*.sampler                     =*/ nullptr,
+         /*.n_sampler                   =*/ 0,
+         /*.ctx_other                   =*/ nullptr,
 +        /*.cb_decode_begin             =*/ nullptr,
 +        /*.cb_decode_end               =*/ nullptr,
-         /*.type_k                      =*/ GGML_TYPE_F16,
-         /*.type_v                      =*/ GGML_TYPE_F16,
-         /*.abort_callback              =*/ nullptr,
-@@ -4074,7 +4078,17 @@ int32_t llama_encode(
+     };
+ 
+     return result;
+@@ -4094,10 +4098,24 @@ int32_t llama_encode(
+     return ret;
+ }
+ 
++int llama_cpp_rs_decode_hooks_abi_v1(void) {
++    return 1;
++}
++
  int32_t llama_decode(
          llama_context * ctx,
            llama_batch   batch) {
@@ -69,15 +85,15 @@ index 9b399d609..fde26f0c2 100644
          LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
      }
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index 5018170ed..2ee790b79 100644
+index 5018170ed..d0e8ddc30 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -60,6 +60,8 @@ struct llama_cparams {
- 
-     ggml_backend_sched_eval_callback cb_eval;
+@@ -62,4 +62,8 @@ struct llama_cparams {
      void * cb_eval_user_data;
-+    llama_decode_begin_callback cb_decode_begin;
-+    llama_decode_end_callback   cb_decode_end;
  
      llama_context * ctx_other;
++
++    // Exact decode lifecycle hooks (appended; see llama.h).
++    llama_decode_begin_callback cb_decode_begin;
++    llama_decode_end_callback   cb_decode_end;
  };

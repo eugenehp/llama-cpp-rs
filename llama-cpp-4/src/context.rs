@@ -39,9 +39,9 @@ pub use memory_breakdown::MemoryBreakdownEntry;
 pub use tensor_capture::{CapturedTensor, TensorCapture};
 pub use tensor_transaction::{
     CapturedTensorData, TensorAccess, TensorBatchRow, TensorCallbackFailure, TensorDataMut,
-    TensorElementType, TensorRowMapping, TensorSelector, TensorShape, TensorTransaction,
-    TensorTransactionError, TensorTransactionHandler, TensorTransactions, TensorWriteback,
-    TransactionalTensorCapture,
+    TensorElementType, TensorFiniteValidation, TensorRowMapping, TensorSelector, TensorShape,
+    TensorTransaction, TensorTransactionError, TensorTransactionHandler, TensorTransactions,
+    TensorWriteback, TransactionalTensorCapture,
 };
 
 /// A safe wrapper around the `llama_context` C++ context.

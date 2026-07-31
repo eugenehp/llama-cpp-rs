@@ -522,8 +522,25 @@ impl LlamaContextParams {
     /// native callback parameters. On successful context creation ownership
     /// moves into [`crate::LlamaContext`] and remains there until after
     /// `llama_free`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the linked `libllama` was not built with the decode-lifecycle
+    /// hooks patch — an ABI mismatch that would otherwise silently disable the
+    /// hooks or misread the context-params struct.
     #[must_use]
     pub fn with_tensor_transactions(mut self, transactions: TensorTransactions) -> Self {
+        // ABI guard: this symbol is defined only in a libllama built with the
+        // decode-lifecycle-hooks patch (0004). Referencing it makes an
+        // unpatched or ABI-mismatched prebuilt fail at link time — and, if it
+        // somehow linked, this assert fails — rather than silently dropping the
+        // hooks or reading a struct with a different layout.
+        assert_eq!(
+            unsafe { llama_cpp_sys_4::llama_cpp_rs_decode_hooks_abi_v1() },
+            1,
+            "libllama is missing the decode-hook ABI patch (0004)",
+        );
+
         let mut transactions = Box::pin(transactions);
         let user_data = std::ptr::from_mut(transactions.as_mut().get_mut()).cast();
         self.context_params.cb_eval = Some(tensor_transaction_callback);
