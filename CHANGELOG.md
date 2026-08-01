@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## [0.4.4] - 2026-07-31
+
+### Fixed
+- **Windows/MSVC build**: `LlamaLoadMode` and `SpeculativeStateError::Unknown`
+  assumed the `llama_load_mode` / `mtp_state_status` C enums were `u32`, but
+  bindgen types them as `i32` under MSVC — which broke the 0.4.3 build on
+  Windows. Both now coerce with `as _` (matching `token_type`), so the crate
+  builds on all targets again.
+
 ## [0.4.3] - 2026-07-31
 
 ### Added

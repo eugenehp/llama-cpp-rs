@@ -9,19 +9,23 @@ use std::ptr::null;
 pub mod kv_overrides;
 
 /// Exact model-file loading strategy exposed by llama.cpp.
+///
+/// The `llama_load_mode` constants are `u32` under the Itanium ABI (Linux/macOS)
+/// but `i32` under MSVC, so each discriminant uses `as _` to coerce to the
+/// `#[repr(u32)]` type on every target (matching [`token_type`](crate::token_type)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum LlamaLoadMode {
     /// No memory mapping, locking, or direct I/O.
-    None = llama_cpp_sys_4::LLAMA_LOAD_MODE_NONE,
+    None = llama_cpp_sys_4::LLAMA_LOAD_MODE_NONE as _,
     /// Memory-map model files when supported.
-    Mmap = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP,
+    Mmap = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP as _,
     /// Read model files normally and lock loaded pages in memory.
-    Mlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK,
+    Mlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK as _,
     /// Memory-map model files and lock mapped pages in memory.
-    MmapMlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK,
+    MmapMlock = llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK as _,
     /// Use direct I/O when supported.
-    DirectIo = llama_cpp_sys_4::LLAMA_LOAD_MODE_DIRECT_IO,
+    DirectIo = llama_cpp_sys_4::LLAMA_LOAD_MODE_DIRECT_IO as _,
 }
 
 /// A safe wrapper around `llama_model_params`.

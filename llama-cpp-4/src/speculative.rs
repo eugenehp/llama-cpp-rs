@@ -140,7 +140,9 @@ fn status_result(status: llama_cpp_sys_4::mtp_state_status) -> Result<(), Specul
         llama_cpp_sys_4::MTP_STATE_STATUS_INVALID => Err(SpeculativeStateError::Invalid),
         llama_cpp_sys_4::MTP_STATE_STATUS_OVERFLOW => Err(SpeculativeStateError::Overflow),
         llama_cpp_sys_4::MTP_STATE_STATUS_EXCEPTION => Err(SpeculativeStateError::Exception),
-        unknown => Err(SpeculativeStateError::Unknown(unknown)),
+        // `mtp_state_status` is `u32` on Unix but `i32` on MSVC; `as _` coerces
+        // the unknown value to the `u32` error field on every target.
+        unknown => Err(SpeculativeStateError::Unknown(unknown as _)),
     }
 }
 
