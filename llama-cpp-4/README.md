@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** `15e755f30 (b10209)` · **Crate version:** 0.4.4
+**llama.cpp version:** `221f0f635 (b10235)` · **Crate version:** 0.5.0
 
 ---
 
@@ -15,12 +15,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.4.4"
+llama-cpp-4 = "0.5.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.4.4", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.4.4", features = ["metal"] }
-# llama-cpp-4 = { version = "0.4.4", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.5.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.5.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.5.0", features = ["vulkan"] }
 ```
 
 ---
@@ -102,6 +102,16 @@ for dev in model.devices() {
     println!("  {} — {} / {} bytes free", dev.name()?, free, total);
 }
 ```
+
+For models that ship MTP (multi-token prediction) weights — e.g. DeepSeek V4 —
+load the MTP layers to drive MTP / DSpark speculative decoding:
+
+```rust
+let params = LlamaModelParams::default().with_load_mtp(true);
+```
+
+Once loaded, capture and restore the speculative state through the
+[`speculative`](src/speculative.rs) module.
 
 ### Memory estimation (before full load)
 

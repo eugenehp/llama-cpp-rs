@@ -491,15 +491,6 @@ fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
         }
     }
 
-    if cfg!(feature = "vulkan") {
-        let name = "0002-vulkan-spirv-headers-sdk.patch";
-        let source = patches_dir.join(name);
-        if source.exists() {
-            std::fs::copy(&source, staged_dir.join(name))
-                .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
-        }
-    }
-
     true
 }
 

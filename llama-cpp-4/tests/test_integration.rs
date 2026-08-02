@@ -12,8 +12,14 @@
 //!     cargo test -p llama-cpp-4 --test test_integration -- --test-threads=1
 //! ```
 //!
-//! Tests skip (pass) when no full model is available. Use `--test-threads=1`
-//! because `llama_decode` is not exercised safely in parallel across contexts.
+//! Tests skip (pass) when no full model is available. Each test holds a
+//! process-wide lock ([`support::model::llama_guard`]) across its entire
+//! llama.cpp interaction, because model loading, context creation, decode, and
+//! the `fit` / `get_device_memory_data` helpers are not thread-safe (the `fit`
+//! helpers install a process-global log callback capturing stack locals, so a
+//! concurrent load on another thread would invoke a stale callback and crash).
+//! That makes the suite safe under the default parallel runner; CI still passes
+//! `--test-threads=1` as belt-and-suspenders.
 
 mod support;
 
@@ -22,10 +28,11 @@ use std::num::NonZeroU32;
 use llama_cpp_4::fit::{fit_params, get_device_memory_data, FitParams};
 use llama_cpp_4::prelude::*;
 
-use support::model::{backend, decode_guard, load_full_model, skip_no_model, test_model_path};
+use support::model::{backend, llama_guard, load_full_model, skip_no_model, test_model_path};
 
 #[test]
 fn integration_model_loads_and_has_weights() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
@@ -38,6 +45,7 @@ fn integration_model_loads_and_has_weights() {
 
 #[test]
 fn integration_devices_iterator() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
@@ -52,6 +60,7 @@ fn integration_devices_iterator() {
 
 #[test]
 fn integration_get_device_memory_data() {
+    let _guard = llama_guard();
     let Some(path) = test_model_path() else {
         skip_no_model();
         return;
@@ -75,6 +84,7 @@ fn integration_get_device_memory_data() {
 
 #[test]
 fn integration_fit_params() {
+    let _guard = llama_guard();
     let Some(path) = test_model_path() else {
         skip_no_model();
         return;
@@ -98,11 +108,11 @@ fn integration_fit_params() {
 
 #[test]
 fn integration_decode_prefill() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(128))
@@ -131,11 +141,11 @@ fn integration_decode_prefill() {
 
 #[test]
 fn integration_greedy_generation() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(128))
@@ -196,11 +206,11 @@ fn integration_greedy_generation() {
 
 #[test]
 fn integration_embeddings() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let ctx_params = LlamaContextParams::default()
         .with_embeddings(true)
@@ -223,11 +233,11 @@ fn integration_embeddings() {
 
 #[test]
 fn integration_memory_breakdown_after_decode() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let mut ctx = model
         .new_context(
@@ -256,6 +266,7 @@ fn integration_memory_breakdown_after_decode() {
 
 #[test]
 fn integration_apply_chat_template_if_supported() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
@@ -276,11 +287,11 @@ fn integration_apply_chat_template_if_supported() {
 
 #[test]
 fn integration_tensor_capture_last_layer() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let last_layer = (model.n_layer() - 1) as usize;
     let mut capture = TensorCapture::for_layers(&[last_layer]);
@@ -315,11 +326,11 @@ fn integration_tensor_capture_last_layer() {
 /// index-keyed row bookkeeping, retained capture).
 #[test]
 fn integration_tensor_transactions_capture() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let n_embd = model.n_embd() as usize;
     // Layer 0 is always computed for every submitted token (the last layer can
@@ -372,11 +383,11 @@ fn integration_tensor_transactions_capture() {
 /// path end-to-end.
 #[test]
 fn integration_tensor_transactions_readwrite_commits() {
+    let _guard = llama_guard();
     let Some(model) = load_full_model() else {
         skip_no_model();
         return;
     };
-    let _guard = decode_guard();
 
     let n_embd = model.n_embd() as usize;
     let selector =

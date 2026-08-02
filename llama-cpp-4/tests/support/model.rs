@@ -8,12 +8,23 @@ use llama_cpp_4::model::params::LlamaModelParams;
 use llama_cpp_4::model::LlamaModel;
 use llama_cpp_4::LLamaCppError;
 
-/// Serialize tests that call `llama_decode` (not safe across parallel contexts).
-pub static DECODE_LOCK: Mutex<()> = Mutex::new(());
+/// Serialize *all* llama.cpp interaction across tests in this binary.
+///
+/// llama.cpp is not thread-safe for concurrent model loading, context creation,
+/// or decode. In particular, the `fit` / `get_device_memory_data` helpers
+/// install a **process-global** log callback that captures stack locals by
+/// reference to scrape device-memory info out of log text; a model load on
+/// another thread then emits a log line that invokes this foreign (often
+/// already-returned) callback, dereferencing freed stack memory —
+/// use-after-free that manifests as SIGSEGV/SIGABRT. Every test that touches a
+/// model must therefore hold this lock for its whole body, from before the
+/// model load through the last decode.
+pub static LLAMA_LOCK: Mutex<()> = Mutex::new(());
 
-/// Acquire the decode lock, recovering from a poisoned mutex after a prior test panic.
-pub fn decode_guard() -> std::sync::MutexGuard<'static, ()> {
-    DECODE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+/// Acquire the global llama.cpp test lock, recovering from a poisoned mutex
+/// after a prior test panic.
+pub fn llama_guard() -> std::sync::MutexGuard<'static, ()> {
+    LLAMA_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();

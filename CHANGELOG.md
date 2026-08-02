@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## [0.5.0] - 2026-08-02
+
+### Fixed
+
+- **Integration tests no longer crash under parallel execution**: `fit_params` /
+  `get_device_memory_data` install a process-global llama.cpp log callback that
+  captures stack locals, so a concurrent model load on another test thread
+  invoked a stale callback and segfaulted (SIGSEGV/SIGABRT). Every integration
+  test now holds one process-wide lock (`llama_guard`) across its whole
+  llama.cpp interaction — model load, context creation, and decode — making the
+  suite safe under the default parallel test runner. Test-only change; no
+  library API impact.
+
+### Added
+
+- **`LlamaModelParams::with_load_mtp()` / `load_mtp()`** (`llama-cpp-4`): opt into
+  loading a model's MTP (multi-token prediction) layers, wrapping upstream's new
+  `llama_model_params.load_mtp` field. This is the front door for DeepSeek V4
+  MTP / DSpark speculative decoding
+  ([#25784](https://github.com/ggml-org/llama.cpp/pull/25784)); once the MTP
+  layers are loaded, the speculative state is driven through the existing
+  `speculative` module.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `221f0f635` (tag `b10235`) from
+  `15e755f30` (b10209), pulling in DeepSeek V4 MTP + DSpark
+  ([#25784](https://github.com/ggml-org/llama.cpp/pull/25784)) and 25 other
+  upstream commits. Native patches `0003`–`0005` (exact speculative state,
+  decode-lifecycle hooks, fail-closed EAGLE-3) apply unchanged.
+- Removed the Vulkan SPIRV-Headers patch (`0002`): its `VULKAN_SDK` prefix-path
+  and `find_package(SPIRV-Headers CONFIG REQUIRED)` changes are now upstream in
+  b10235, so the vendored patch was a no-op that could fail under
+  `LLAMA_PATCH_ENGINE=cli --features vulkan`.
+
 ## [0.4.4] - 2026-07-31
 
 ### Fixed

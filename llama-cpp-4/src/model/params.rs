@@ -42,6 +42,7 @@ impl Debug for LlamaModelParams {
             .field("main_gpu", &self.params.main_gpu)
             .field("vocab_only", &self.params.vocab_only)
             .field("load_mode", &self.load_mode())
+            .field("load_mtp", &self.load_mtp())
             .field("kv_overrides", &"vec of kv_overrides")
             .finish()
     }
@@ -157,6 +158,17 @@ impl LlamaModelParams {
         }
     }
 
+    /// Whether the model's MTP (multi-token prediction) layers will be loaded.
+    ///
+    /// MTP layers drive multi-token-prediction speculative decoding for models
+    /// that ship them (e.g. `DeepSeek V4`). Once loaded, the speculative state is
+    /// captured and restored through [`crate::speculative`]. Defaults to `false`
+    /// because most models carry no MTP weights.
+    #[must_use]
+    pub fn load_mtp(&self) -> bool {
+        self.params.load_mtp
+    }
+
     /// use mmap if possible
     #[must_use]
     pub fn use_mmap(&self) -> bool {
@@ -209,6 +221,25 @@ impl LlamaModelParams {
     #[must_use]
     pub fn with_load_mode(mut self, load_mode: LlamaLoadMode) -> Self {
         self.params.load_mode = load_mode as llama_cpp_sys_4::llama_load_mode;
+        self
+    }
+
+    /// Sets whether to load the model's MTP (multi-token prediction) layers.
+    ///
+    /// Enable this for models that ship MTP weights (e.g. `DeepSeek V4`) when you
+    /// intend to use MTP-based speculative decoding, then drive the speculative
+    /// state via [`crate::speculative`]. For models without MTP layers the flag
+    /// has no effect. Corresponds to `llama_model_params.load_mtp`, added
+    /// upstream in llama.cpp PR #25784 (`DeepSeek V4` MTP + `DSpark`).
+    ///
+    /// ```
+    /// # use llama_cpp_4::model::params::LlamaModelParams;
+    /// let params = LlamaModelParams::default().with_load_mtp(true);
+    /// assert!(params.load_mtp());
+    /// ```
+    #[must_use]
+    pub fn with_load_mtp(mut self, load_mtp: bool) -> Self {
+        self.params.load_mtp = load_mtp;
         self
     }
 
