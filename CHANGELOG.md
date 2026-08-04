@@ -14,9 +14,9 @@
 - **Prebuilt CI for arm64**: `prebuilt-llama.yml` now also builds Linux
   `aarch64-unknown-linux-gnu` (native arm runners) and Android
   `aarch64-linux-android` (NDK cross-compile) library artifacts.
-- **QEMU arm64 CI** (`qemu-arm64.yml`): cross-builds the `smoke` binary for
-  `aarch64-unknown-linux-gnu` and runs it under qemu-user against the tiny test
-  model, guarding the arm64 code path.
+- **Native arm64 CI** (`arm64-smoke.yml`): builds and runs the `llama-jni`
+  `smoke` binary on a native arm64 Linux runner against the tiny test model,
+  guarding the arm64 code path.
 
 ### Fixed
 

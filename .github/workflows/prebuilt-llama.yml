@@ -212,20 +212,20 @@ jobs:
             echo "::error::Android NDK not found (expected ANDROID_NDK_LATEST_HOME on the runner)"
             exit 1
           fi
-          BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          # build.rs reads ANDROID_NDK to locate android.toolchain.cmake.
+          # cargo-ndk reads ANDROID_NDK_HOME and wires up CC/CXX/AR/linker plus
+          # BINDGEN_EXTRA_CLANG_ARGS (the NDK sysroot) so bindgen can find the
+          # Android system headers; build.rs reads ANDROID_NDK for
+          # android.toolchain.cmake.
           echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
-          echo "${BIN}" >> "$GITHUB_PATH"
-          # `cc` crate (C/C++ shims) + cargo linker for the aarch64 Android target.
-          echo "CC_aarch64-linux-android=${BIN}/aarch64-linux-android28-clang" >> "$GITHUB_ENV"
-          echo "CXX_aarch64-linux-android=${BIN}/aarch64-linux-android28-clang++" >> "$GITHUB_ENV"
-          echo "AR_aarch64-linux-android=${BIN}/llvm-ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${BIN}/aarch64-linux-android28-clang" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${NDK}" >> "$GITHUB_ENV"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       - name: Cache Cargo registry + build artifacts
         uses: Swatinem/rust-cache@v2.9.1
@@ -240,20 +240,17 @@ jobs:
         run: |
           set -euo pipefail
           LIBRARY_TYPE="${{ matrix.library_type }}"
-
           if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features \
-              --features "${{ matrix.features }},dynamic-link"
+            FEATURES="${{ matrix.features }},dynamic-link"
           else
-            cargo build -p llama-cpp-4 \
-              --release \
-              --target "${TARGET_TRIPLE}" \
-              --no-default-features \
-              --features "${{ matrix.features }}"
+            FEATURES="${{ matrix.features }}"
           fi
+          # cargo-ndk selects the aarch64-linux-android target for arm64-v8a and
+          # exports the toolchain + sysroot bindgen args build.rs/bindgen need.
+          cargo ndk -t arm64-v8a build -p llama-cpp-4 \
+            --release \
+            --no-default-features \
+            --features "${FEATURES}"
 
       - name: Collect prebuilt libraries
         shell: bash

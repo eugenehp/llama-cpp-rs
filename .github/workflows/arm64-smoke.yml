@@ -1,0 +1,60 @@
+name: arm64 smoke
+
+# Builds the llama-jni `smoke` binary on a native GitHub arm64 Linux runner and
+# runs it against the tiny stories260K model — a real load + greedy-decode on
+# aarch64, guarding the arm64 code path (issue #306). GitHub's native arm64
+# runners make QEMU/cross-compilation unnecessary (and `c_char` is `u8` here,
+# exactly the signedness that #306 fixed).
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  arm64-smoke:
+    name: aarch64-linux smoke (native)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: ". -> target"
+          shared-key: arm64-smoke-v1
+          cache-on-failure: false
+
+      - name: Fetch tiny test model
+        run: ./scripts/fetch-test-model.sh
+
+      - name: Build smoke binary (native aarch64)
+        run: cargo build -p llama-jni --bin smoke --release
+
+      - name: Confirm arm64 host + binary
+        run: |
+          echo "runner arch: $(uname -m)"
+          file target/release/smoke
+
+      - name: Run smoke
+        run: |
+          set -euo pipefail
+          MODEL="$PWD/target/test-models/stories260K.gguf"
+          LLAMA_TEST_MODEL="$MODEL" ./target/release/smoke "Once upon a time" | tee smoke-output.txt
+          grep -q "SMOKE OK" smoke-output.txt || {
+            echo "::error::arm64 smoke test did not report SMOKE OK"; exit 1; }

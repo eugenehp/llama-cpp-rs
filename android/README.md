@@ -71,17 +71,19 @@ adb push stories260K.gguf /data/data/com.example.llama/files/model.gguf
 
 Launch the app, type a prompt, tap **Generate**.
 
-## Validating arm64 without a device (QEMU)
+## Validating arm64 without a device
 
-The same `generate()` code path is exercised on `aarch64-unknown-linux-gnu`
-under `qemu-user` by the [`QEMU arm64 smoke`](../.github/workflows/qemu-arm64.yml)
-workflow. To reproduce locally on an x86 Linux host:
+CI builds and runs the `smoke` binary on a **native arm64 Linux runner** — see
+[`arm64 smoke`](../.github/workflows/arm64-smoke.yml). You can also exercise the
+same `aarch64-unknown-linux-gnu` code path locally under emulation on an x86
+Linux host with `qemu-user`:
 
 ```bash
 sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-user
 rustup target add aarch64-unknown-linux-gnu
-export CC_aarch64-unknown-linux-gnu=aarch64-linux-gnu-gcc
-export CXX_aarch64-unknown-linux-gnu=aarch64-linux-gnu-g++
+# Underscore form (shell-exportable; read by the cc/cmake crates).
+export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 
 cargo build -p llama-jni --bin smoke --release --target aarch64-unknown-linux-gnu
