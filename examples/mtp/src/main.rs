@@ -49,7 +49,7 @@
 
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -104,13 +104,16 @@ impl Model {
     fn resolve(self) -> Result<PathBuf> {
         match self {
             Model::Local { path } => Ok(path),
-            Model::HuggingFace { repo, file } => ApiBuilder::new()
-                .with_progress(true)
-                .build()
-                .context("unable to create huggingface api")?
-                .model(repo)
-                .get(&file)
-                .context("unable to download model"),
+            Model::HuggingFace { repo, file } => {
+                let (owner, name) = split_id(&repo);
+                HFClientSync::new()
+                    .context("unable to create huggingface api")?
+                    .model(owner, name)
+                    .download_file()
+                    .filename(file)
+                    .send()
+                    .context("unable to download model")
+            }
         }
     }
 }

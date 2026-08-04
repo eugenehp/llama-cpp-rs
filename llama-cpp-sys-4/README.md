@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `221f0f635 (b10235)` · **Crate version:** 0.5.0
+**llama.cpp version:** `221f0f635 (b10235)` · **Crate version:** 0.5.1
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -48,7 +48,7 @@ use llama_cpp_4::prelude::*;
 
 The exact speculative-state, decode-lifecycle, and fail-closed EAGLE-3 process
 patches require native libraries built from the same patched source. Existing
-0.5.0 archives do not carry a patch-identity envelope, so `prebuilt` currently
+0.5.1 archives do not carry a patch-identity envelope, so `prebuilt` currently
 emits a warning and uses the verified source build. `LLAMA_PREBUILT_DIR` fails
 closed while those patches are active rather than mixing patched headers with
 unverifiable native objects.
@@ -61,7 +61,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.5.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.5.1/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 

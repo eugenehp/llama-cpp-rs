@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 
 use llama_cpp_4::prelude::*;
 
@@ -56,12 +56,14 @@ impl Model {
         match self {
             Model::Local { path } => Ok(path), // Use the local path if specified
             Model::HuggingFace { model, repo } => {
-                ApiBuilder::new() // Otherwise, try to fetch from Hugging Face
-                    .with_progress(true)
-                    .build()
+                // Otherwise, try to fetch from Hugging Face
+                let (owner, name) = split_id(&repo);
+                HFClientSync::new()
                     .with_context(|| "unable to create huggingface api")?
-                    .model(repo)
-                    .get(&model)
+                    .model(owner, name)
+                    .download_file()
+                    .filename(model)
+                    .send()
                     .with_context(|| "unable to download model")
             }
         }

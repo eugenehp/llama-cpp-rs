@@ -9,7 +9,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 use llama_cpp_4::ggml::GgmlBackend;
 use std::io::Write;
@@ -212,30 +212,31 @@ fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
 fn download_model(repo: &str) -> Result<PathBuf> {
     println!("Downloading model from HuggingFace: {}", repo);
 
-    let api = ApiBuilder::new()
-        .with_progress(true)
-        .build()
+    let api = HFClientSync::new()
         .context("unable to create huggingface api")?;
-    let repo = api.model(repo.to_string());
+    let (owner, name) = split_id(repo);
+    let repo = api.model(owner, name);
 
     // Try to find a GGUF file
-    let files = repo.info()?;
+    let files = repo.info().send()?;
+    let siblings = files.siblings.as_deref().unwrap_or_default();
 
     // Look for Q4_K_M quantization first, then any GGUF
-    let gguf_file = files
-        .siblings
+    let gguf_file = siblings
         .iter()
-        .find(|f| f.filename.contains("Q4_K_M") && f.filename.ends_with(".gguf"))
+        .find(|f| f.rfilename.contains("Q4_K_M") && f.rfilename.ends_with(".gguf"))
         .or_else(|| {
-            files
-                .siblings
+            siblings
                 .iter()
-                .find(|f| f.filename.ends_with(".gguf"))
+                .find(|f| f.rfilename.ends_with(".gguf"))
         })
         .context("No GGUF file found in repository")?;
 
-    println!("Downloading {}", gguf_file.filename);
-    let path = repo.get(&gguf_file.filename)?;
+    println!("Downloading {}", gguf_file.rfilename);
+    let path = repo
+        .download_file()
+        .filename(gguf_file.rfilename.clone())
+        .send()?;
 
     Ok(path)
 }

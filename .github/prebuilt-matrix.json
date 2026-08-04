@@ -1,7 +1,9 @@
 {
   "linux": [
     {
-      "label": "cpu",
+      "label": "x64 cpu",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "cpu",
       "features": "mtmd",
       "vulkan": false,
@@ -9,7 +11,9 @@
       "library_type": "static"
     },
     {
-      "label": "cpu",
+      "label": "x64 cpu",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "cpu",
       "features": "mtmd",
       "vulkan": false,
@@ -17,7 +21,9 @@
       "library_type": "dynamic"
     },
     {
-      "label": "vulkan",
+      "label": "x64 vulkan",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "vulkan",
       "features": "vulkan,mtmd",
       "vulkan": true,
@@ -25,7 +31,9 @@
       "library_type": "static"
     },
     {
-      "label": "vulkan",
+      "label": "x64 vulkan",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "vulkan",
       "features": "vulkan,mtmd",
       "vulkan": true,
@@ -33,7 +41,9 @@
       "library_type": "dynamic"
     },
     {
-      "label": "blas",
+      "label": "x64 blas",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "blas",
       "features": "blas,mtmd",
       "vulkan": false,
@@ -41,11 +51,69 @@
       "library_type": "static"
     },
     {
-      "label": "blas",
+      "label": "x64 blas",
+      "runner": "ubuntu-24.04",
+      "target": "x86_64-unknown-linux-gnu",
       "suffix": "blas",
       "features": "blas,mtmd",
       "vulkan": false,
       "blas": true,
+      "library_type": "dynamic"
+    },
+    {
+      "label": "arm64 cpu",
+      "runner": "ubuntu-24.04-arm",
+      "target": "aarch64-unknown-linux-gnu",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "blas": false,
+      "library_type": "static"
+    },
+    {
+      "label": "arm64 cpu",
+      "runner": "ubuntu-24.04-arm",
+      "target": "aarch64-unknown-linux-gnu",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "vulkan": false,
+      "blas": false,
+      "library_type": "dynamic"
+    },
+    {
+      "label": "arm64 blas",
+      "runner": "ubuntu-24.04-arm",
+      "target": "aarch64-unknown-linux-gnu",
+      "suffix": "blas",
+      "features": "blas,mtmd",
+      "vulkan": false,
+      "blas": true,
+      "library_type": "static"
+    },
+    {
+      "label": "arm64 blas",
+      "runner": "ubuntu-24.04-arm",
+      "target": "aarch64-unknown-linux-gnu",
+      "suffix": "blas",
+      "features": "blas,mtmd",
+      "vulkan": false,
+      "blas": true,
+      "library_type": "dynamic"
+    }
+  ],
+  "android": [
+    {
+      "label": "arm64 cpu",
+      "target": "aarch64-linux-android",
+      "suffix": "cpu",
+      "features": "mtmd",
+      "library_type": "static"
+    },
+    {
+      "label": "arm64 cpu",
+      "target": "aarch64-linux-android",
+      "suffix": "cpu",
+      "features": "mtmd",
       "library_type": "dynamic"
     }
   ],

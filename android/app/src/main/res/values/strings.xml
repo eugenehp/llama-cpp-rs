@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Llama Android</string>
+    <string name="prompt_hint">Prompt</string>
+    <string name="prompt_default">Once upon a time</string>
+    <string name="generate">Generate</string>
+    <string name="generating">Generating…</string>
+    <string name="missing_model">No model found. Push a GGUF with:\n\nadb push model.gguf %1$s</string>
+</resources>

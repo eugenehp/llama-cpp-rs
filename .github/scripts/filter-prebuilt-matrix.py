@@ -39,7 +39,7 @@ def main() -> int:
         return out
 
     outputs: dict[str, object] = {}
-    for os_name in ("linux", "windows", "macos"):
+    for os_name in ("linux", "android", "windows", "macos"):
         build = platform in ("all", os_name)
         filtered = filter_entries(data[os_name]) if build else []
         outputs[f"build_{os_name}"] = "true" if filtered else "false"

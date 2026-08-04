@@ -40,7 +40,7 @@ jobs:
       - name: Fmt
         run: cargo fmt
       - name: Test
-        run: cargo test --workspace --exclude openai-server
+        run: cargo test --workspace --exclude openai-server --exclude llama-jni
       - name: sccache stats
         run: sccache --show-stats || true
   linux:
@@ -65,7 +65,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude llama-jni
       - name: sccache stats
         run: sccache --show-stats || true
   mac:
@@ -84,7 +84,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --exclude llama-jni
       - name: sccache stats
         run: sccache --show-stats || true
   windows:
@@ -112,14 +112,14 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --exclude llama-jni
       - name: Setup Vulkan SDK
         uses: ./.github/actions/setup-vulkan-sdk-windows
       - name: Build Vulkan
         shell: pwsh
         run: cargo build --features vulkan
       - name: Test
-        run: cargo test --workspace --exclude openai-server
+        run: cargo test --workspace --exclude openai-server --exclude llama-jni
       - name: sccache stats
         shell: pwsh
         run: sccache --show-stats

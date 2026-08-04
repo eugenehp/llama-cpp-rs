@@ -21,6 +21,7 @@ on:
         options:
           - all
           - linux
+          - android
           - windows
           - macos
       variant:
@@ -54,9 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build_linux: ${{ steps.filter.outputs.build_linux }}
+      build_android: ${{ steps.filter.outputs.build_android }}
       build_windows: ${{ steps.filter.outputs.build_windows }}
       build_macos: ${{ steps.filter.outputs.build_macos }}
       linux_matrix: ${{ steps.filter.outputs.linux_matrix }}
+      android_matrix: ${{ steps.filter.outputs.android_matrix }}
       windows_matrix: ${{ steps.filter.outputs.windows_matrix }}
       macos_matrix: ${{ steps.filter.outputs.macos_matrix }}
     steps:
@@ -75,13 +78,13 @@ jobs:
     name: Linux prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
     needs: plan
     if: needs.plan.outputs.build_linux == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.linux_matrix) }}
     env:
-      TARGET_TRIPLE: x86_64-unknown-linux-gnu
+      TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -115,12 +118,120 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry + build artifacts
         uses: Swatinem/rust-cache@v2.9.1
         with:
           workspaces: ". -> target"
           shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
+          cache-targets: false
+          cache-on-failure: false
+
+      - name: Build llama-cpp-4 (prebuilt target)
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIBRARY_TYPE="${{ matrix.library_type }}"
+
+          if [[ "$LIBRARY_TYPE" == "dynamic" ]]; then
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }},dynamic-link"
+          else
+            cargo build -p llama-cpp-4 \
+              --release \
+              --target "${TARGET_TRIPLE}" \
+              --no-default-features \
+              --features "${{ matrix.features }}"
+          fi
+
+      - name: Collect prebuilt libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/prebuilt"
+          LIBRARY_TYPE="${{ matrix.library_type }}"
+          bash .github/scripts/collect-linux-prebuilt.sh "$ROOT" "$LIBRARY_TYPE"
+
+          cat > "$ROOT/metadata.json" <<EOF
+          {"target":"${TARGET_TRIPLE}","features":"${{ matrix.features }}","library_type":"$LIBRARY_TYPE","sha":"${GITHUB_SHA}"}
+          EOF
+
+          tar -C "$ROOT" -czf "$RUNNER_TEMP/$ASSET_NAME" .
+
+      - name: Create or update GitHub release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.upload_to_release == true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_NAME="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}"
+          if ! gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release create "$TAG_NAME" --title "$TAG_NAME" --notes "Prebuilt artifacts for $TAG_NAME"
+          fi
+          gh release upload "$TAG_NAME" "$RUNNER_TEMP/$ASSET_NAME" --clobber
+
+  android-prebuilt:
+    name: Android prebuilt (${{ matrix.label }} - ${{ matrix.library_type }})
+    needs: plan
+    if: needs.plan.outputs.build_android == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.android_matrix) }}
+    env:
+      TARGET_TRIPLE: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Compute asset name
+        shell: bash
+        run: |
+          LIBRARY_TYPE="${{ matrix.library_type }}"
+          echo "ASSET_NAME=llama-prebuilt-android-${TARGET_TRIPLE}-${{ matrix.suffix }}-${LIBRARY_TYPE}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev
+
+      - name: Configure Android NDK toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-${ANDROID_NDK_HOME:-}}}"
+          if [[ -z "${NDK}" || ! -d "${NDK}" ]]; then
+            echo "::error::Android NDK not found (expected ANDROID_NDK_LATEST_HOME on the runner)"
+            exit 1
+          fi
+          BIN="${NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # build.rs reads ANDROID_NDK to locate android.toolchain.cmake.
+          echo "ANDROID_NDK=${NDK}" >> "$GITHUB_ENV"
+          echo "${BIN}" >> "$GITHUB_PATH"
+          # `cc` crate (C/C++ shims) + cargo linker for the aarch64 Android target.
+          echo "CC_aarch64-linux-android=${BIN}/aarch64-linux-android28-clang" >> "$GITHUB_ENV"
+          echo "CXX_aarch64-linux-android=${BIN}/aarch64-linux-android28-clang++" >> "$GITHUB_ENV"
+          echo "AR_aarch64-linux-android=${BIN}/llvm-ar" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=${BIN}/aarch64-linux-android28-clang" >> "$GITHUB_ENV"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Cache Cargo registry + build artifacts
+        uses: Swatinem/rust-cache@v2.9.1
+        with:
+          workspaces: ". -> target"
+          shared-key: prebuilt-android-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
           cache-targets: false
           cache-on-failure: false
 

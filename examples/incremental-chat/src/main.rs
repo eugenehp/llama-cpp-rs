@@ -62,7 +62,7 @@ use clap::Parser;
 use colored::Colorize;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 
 use llama_cpp_4::prelude::*;
 
@@ -163,13 +163,16 @@ impl Model {
     fn get_or_load(self) -> Result<PathBuf> {
         match self {
             Self::Local { path } => Ok(path),
-            Self::HuggingFace { model, repo } => ApiBuilder::new()
-                .with_progress(true)
-                .build()
-                .with_context(|| "unable to create huggingface api")?
-                .model(repo)
-                .get(&model)
-                .with_context(|| "unable to download model"),
+            Self::HuggingFace { model, repo } => {
+                let (owner, name) = split_id(&repo);
+                HFClientSync::new()
+                    .with_context(|| "unable to create huggingface api")?
+                    .model(owner, name)
+                    .download_file()
+                    .filename(model)
+                    .send()
+                    .with_context(|| "unable to download model")
+            }
         }
     }
 }

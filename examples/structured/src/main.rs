@@ -47,7 +47,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -114,13 +114,16 @@ impl Model {
     fn get_or_load(self) -> Result<PathBuf> {
         match self {
             Self::Local { path } => Ok(path),
-            Self::HuggingFace { model, repo } => ApiBuilder::new()
-                .with_progress(true)
-                .build()
-                .with_context(|| "unable to create huggingface api")?
-                .model(repo)
-                .get(&model)
-                .with_context(|| "unable to download model"),
+            Self::HuggingFace { model, repo } => {
+                let (owner, name) = split_id(&repo);
+                HFClientSync::new()
+                    .with_context(|| "unable to create huggingface api")?
+                    .model(owner, name)
+                    .download_file()
+                    .filename(model)
+                    .send()
+                    .with_context(|| "unable to download model")
+            }
         }
     }
 }
@@ -188,11 +191,12 @@ fn main() -> Result<()> {
         m.get_or_load()?
     } else {
         eprintln!("No model specified, downloading Qwen2.5-0.5B-Instruct (Q4_K_M)...");
-        ApiBuilder::new()
-            .with_progress(true)
-            .build()?
-            .model("Qwen/Qwen2.5-0.5B-Instruct-GGUF".to_string())
-            .get("qwen2.5-0.5b-instruct-q4_k_m.gguf")?
+        let (owner, name) = split_id("Qwen/Qwen2.5-0.5B-Instruct-GGUF");
+        HFClientSync::new()?
+            .model(owner, name)
+            .download_file()
+            .filename("qwen2.5-0.5b-instruct-q4_k_m.gguf")
+            .send()?
     };
 
     // ── Load model ──

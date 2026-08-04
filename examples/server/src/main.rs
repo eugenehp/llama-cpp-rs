@@ -51,7 +51,7 @@ use actix_web::{http::StatusCode, web, App, HttpRequest, HttpResponse, HttpServe
 use anyhow::{Context as _, Result};
 use clap::Parser;
 use futures_util::{stream, StreamExt as _};
-use hf_hub::api::sync::{Api, ApiBuilder};
+use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 use serde_json::{json, Value};
 use std::{
@@ -243,21 +243,26 @@ fn prompt_user(groups: &[ModelGroup]) -> anyhow::Result<usize> {
     }
 }
 
-fn resolve_hf(api: &Api, repo: &str, model: Option<String>) -> anyhow::Result<PathBuf> {
-    let api_repo = api.model(repo.to_string());
+fn resolve_hf(api: &HFClientSync, repo: &str, model: Option<String>) -> anyhow::Result<PathBuf> {
+    let (owner, name) = split_id(repo);
+    let api_repo = api.model(owner, name);
     // Exact .gguf filename → download directly.
     if let Some(ref filename) = model {
         if filename.ends_with(".gguf") {
             return api_repo
-                .get(filename)
+                .download_file()
+                .filename(filename.clone())
+                .send()
                 .with_context(|| format!("failed to download '{filename}' from '{repo}'"));
         }
     }
     let info = api_repo
         .info()
+        .send()
         .with_context(|| format!("failed to fetch repo info for '{repo}'"))?;
     let all_ggufs: Vec<String> = info
         .siblings
+        .unwrap_or_default()
         .into_iter()
         .map(|s| s.rfilename)
         .filter(|n| n.ends_with(".gguf"))
@@ -305,8 +310,10 @@ fn resolve_hf(api: &Api, repo: &str, model: Option<String>) -> anyhow::Result<Pa
             eprintln!("  shard {}/{}: {file}", i + 1, group.files.len());
         }
         let path = api
-            .model(repo.to_string())
-            .get(file)
+            .model(owner, name)
+            .download_file()
+            .filename(file.clone())
+            .send()
             .with_context(|| format!("failed to download shard '{file}'"))?;
         if first_path.is_none() {
             first_path = Some(path);
@@ -320,9 +327,7 @@ impl ModelSource {
         match self {
             ModelSource::Local { path } => Ok(path),
             ModelSource::HuggingFace { repo, model } => {
-                let api = ApiBuilder::new()
-                    .with_progress(true)
-                    .build()
+                let api = HFClientSync::new()
                     .context("failed to build HF API client")?;
                 resolve_hf(&api, &repo, model)
             }
@@ -341,16 +346,17 @@ impl ModelSource {
 /// local cache) and returns its path.
 #[cfg(feature = "mtmd")]
 fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
-    let api = match ApiBuilder::new().with_progress(true).build() {
+    let api = match HFClientSync::new() {
         Ok(a) => a,
         Err(e) => {
             tracing::warn!("Could not build HF API client for mmproj lookup: {e}");
             return None;
         }
     };
-    let api_repo = api.model(repo.to_string());
+    let (owner, name) = split_id(repo);
+    let api_repo = api.model(owner, name);
 
-    let info = match api_repo.info() {
+    let info = match api_repo.info().send() {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!("Could not fetch repo info for '{repo}': {e}");
@@ -361,6 +367,7 @@ fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
     // Collect all mmproj GGUF filenames from the repo listing.
     let mut candidates: Vec<String> = info
         .siblings
+        .unwrap_or_default()
         .into_iter()
         .map(|s| s.rfilename)
         .filter(|name| name.starts_with("mmproj") && name.ends_with(".gguf"))
@@ -398,7 +405,7 @@ fn download_mmproj_from_hf(repo: &str) -> Option<PathBuf> {
         }
     );
 
-    match api_repo.get(chosen) {
+    match api_repo.download_file().filename(chosen.clone()).send() {
         Ok(path) => {
             tracing::info!("mmproj cached at: {}", path.display());
             Some(path)

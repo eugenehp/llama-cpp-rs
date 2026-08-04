@@ -8,7 +8,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
-use hf_hub::api::sync::ApiBuilder;
+use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 
 use std::ffi::CString;
@@ -99,13 +99,16 @@ impl Model {
     fn get_or_load(self) -> Result<PathBuf> {
         match self {
             Model::Local { path } => Ok(path),
-            Model::HuggingFace { model, repo } => ApiBuilder::new()
-                .with_progress(true)
-                .build()
-                .with_context(|| "unable to create huggingface api")?
-                .model(repo)
-                .get(&model)
-                .with_context(|| "unable to download model"),
+            Model::HuggingFace { model, repo } => {
+                let (owner, name) = split_id(&repo);
+                HFClientSync::new()
+                    .with_context(|| "unable to create huggingface api")?
+                    .model(owner, name)
+                    .download_file()
+                    .filename(model)
+                    .send()
+                    .with_context(|| "unable to download model")
+            }
         }
     }
 }

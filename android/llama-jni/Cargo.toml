@@ -1,0 +1,29 @@
+[package]
+name = "llama-jni"
+version = "0.5.1"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Android JNI bridge + arm64 smoke test for llama-cpp-4"
+publish = false
+
+[lib]
+name = "llama_jni"
+# `cdylib` produces the Android `.so` loaded via JNI; `lib` lets the `smoke`
+# binary (and any tests) link the same `generate()` implementation.
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# Static, CPU-only llama.cpp (no dynamic-link / mtmd / openmp): the Android
+# `.so` self-contains everything, and the aarch64 smoke binary runs cleanly
+# under qemu-user without hunting for shared objects.
+llama-cpp-4 = { path = "../../llama-cpp-4", default-features = false }
+anyhow = "1"
+
+# JNI glue is only compiled for Android targets; the host/`aarch64-linux-gnu`
+# builds (including the QEMU smoke test) never pull it in.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
+[[bin]]
+name = "smoke"
+path = "src/bin/smoke.rs"

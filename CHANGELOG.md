@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+## [0.5.1] - 2026-08-03
+
+### Added
+
+- **Android example** (`android/`): a Rust JNI `cdylib` (`llama-jni`) that exposes
+  on-device text generation to a minimal Gradle/Kotlin app, plus an `aarch64`
+  `smoke` binary sharing the same `generate()` core. Verified end-to-end on real
+  arm64 — natively on Linux (via a native `linux/arm64` container) and as an
+  Android NDK cross-build.
+- **Prebuilt CI for arm64**: `prebuilt-llama.yml` now also builds Linux
+  `aarch64-unknown-linux-gnu` (native arm runners) and Android
+  `aarch64-linux-android` (NDK cross-compile) library artifacts.
+- **QEMU arm64 CI** (`qemu-arm64.yml`): cross-builds the `smoke` binary for
+  `aarch64-unknown-linux-gnu` and runs it under qemu-user against the tiny test
+  model, guarding the arm64 code path.
+
+### Fixed
+
+- **ARM64 / Android build** ([#306](https://github.com/eugenehp/llama-cpp-rs/issues/306)):
+  `quantize.rs` used `.cast_signed()` (`i8`) where `c_char` is `u8` on ARM64 /
+  Android, breaking compilation on those targets. It now uses a portable `as _`
+  cast that infers the platform's `c_char` signedness.
+
+### Changed
+
+- Examples migrated from `hf-hub` 0.5.0 to **1.0.0** — a breaking API rewrite
+  (`hf_hub::api::sync::{Api, ApiBuilder}` → `HFClientSync` behind the `blocking`
+  feature; `.model("owner/name")` → `split_id()` + `.model(owner, name)`;
+  `.get(file)` → `.download_file().filename(file).send()`).
+
 ## [0.5.0] - 2026-08-02
 
 ### Fixed

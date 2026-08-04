@@ -834,7 +834,9 @@ impl QuantizeParams {
                 let bytes = kv.key.to_bytes_with_nul();
                 let copy_len = bytes.len().min(128);
                 for (dst, &src) in raw.key.iter_mut().zip(bytes[..copy_len].iter()) {
-                    *dst = src.cast_signed();
+                    // `c_char` is `i8` on x86_64 but `u8` on ARM64/Android; `as _`
+                    // infers the target signedness on every platform (issue #306).
+                    *dst = src as _;
                 }
                 match &kv.value {
                     KvOverrideValue::Int(v) => {
