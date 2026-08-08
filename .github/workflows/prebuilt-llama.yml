@@ -209,7 +209,7 @@ jobs:
       # r27 parses cleanly (verified locally end-to-end).
       - name: Set up Android NDK r27
         id: ndk
-        uses: nttld/setup-ndk@v1.5.0
+        uses: nttld/setup-ndk@v1.6.0
         with:
           ndk-version: r27
           local-cache: true
