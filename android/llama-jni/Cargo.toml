@@ -22,7 +22,7 @@ anyhow = "1"
 # JNI glue is only compiled for Android targets; the host/`aarch64-linux-gnu`
 # builds (including the QEMU smoke test) never pull it in.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = "0.21"
+jni = "0.22"
 
 [[bin]]
 name = "smoke"
