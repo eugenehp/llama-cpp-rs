@@ -122,7 +122,7 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Cache Cargo registry + build artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: ". -> target"
           shared-key: prebuilt-linux-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
@@ -235,7 +235,7 @@ jobs:
         run: cargo install cargo-ndk --locked
 
       - name: Cache Cargo registry + build artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: ". -> target"
           shared-key: prebuilt-android-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
@@ -324,7 +324,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Cargo registry + build artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: ". -> target"
           shared-key: prebuilt-windows-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
@@ -409,7 +409,7 @@ jobs:
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo registry + build artifacts
-        uses: Swatinem/rust-cache@v2.9.1
+        uses: Swatinem/rust-cache@v2.9.2
         with:
           workspaces: ". -> target"
           shared-key: prebuilt-macos-${{ env.TARGET_TRIPLE }}-${{ matrix.suffix }}-${{ matrix.library_type }}-v4
