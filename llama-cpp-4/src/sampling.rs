@@ -395,7 +395,6 @@ impl LlamaSampler {
     pub fn dry(
         &self,
         model: &LlamaModel,
-        n_ctx_train: i32,
         multiplier: f32,
         base: f32,
         allowed_length: i32,
@@ -414,7 +413,6 @@ impl LlamaSampler {
         let sampler = unsafe {
             llama_sampler_init_dry(
                 model.get_vocab().vocab.as_ref(),
-                n_ctx_train,
                 multiplier,
                 base,
                 allowed_length,
@@ -432,10 +430,15 @@ impl LlamaSampler {
     /// Penalizes tokens for being present in the context.
     ///
     /// Parameters:
-    /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty, -1 = context size)
-    /// - `penalty_repeat`: repetition penalty (1.0 = disabled, >1.0 = penalize repeats)
-    /// - `penalty_freq`: frequency penalty (0.0 = disabled)
-    /// - `penalty_present`: presence penalty (0.0 = disabled)
+    /// - `n_vocab`: [`LlamaModel::n_vocab`]
+    /// - `penalty_last_n`: last n tokens to penalize (0 = disable penalty)
+    /// - `penalty_repeat`: repetition penalty (must be > 0.0, 1.0 = disabled)
+    /// - `penalty_freq`: frequency penalty (must be finite, 0.0 = disabled)
+    /// - `penalty_present`: presence penalty (must be finite, 0.0 = disabled)
+    ///
+    /// If `penalty_last_n` is `0`, or every penalty sits at its disabled value,
+    /// llama.cpp returns a no-op sampler named `"?penalties"` — see
+    /// [`Self::name`].
     ///
     /// # Panics
     ///
@@ -443,6 +446,7 @@ impl LlamaSampler {
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn penalties(
+        n_vocab: i32,
         penalty_last_n: i32,
         penalty_repeat: f32,
         penalty_freq: f32,
@@ -450,6 +454,7 @@ impl LlamaSampler {
     ) -> Self {
         let sampler = unsafe {
             llama_sampler_init_penalties(
+                n_vocab,
                 penalty_last_n,
                 penalty_repeat,
                 penalty_freq,
@@ -465,15 +470,17 @@ impl LlamaSampler {
     /// `penalty_freq = 0.0` and `penalty_present = 0.0`.
     ///
     /// Parameters:
-    /// - `penalty_last_n`: last n tokens to penalize (0 = disable, -1 = context size)
-    /// - `penalty_repeat`: repetition penalty (1.0 = disabled)
+    /// - `n_vocab`: [`LlamaModel::n_vocab`]
+    /// - `penalty_last_n`: last n tokens to penalize (0 = disable)
+    /// - `penalty_repeat`: repetition penalty (must be > 0.0, 1.0 = disabled)
     ///
     /// # Panics
     ///
     /// Panics if llama.cpp returns a null pointer.
     #[must_use]
-    pub fn penalties_simple(penalty_last_n: i32, penalty_repeat: f32) -> Self {
+    pub fn penalties_simple(n_vocab: i32, penalty_last_n: i32, penalty_repeat: f32) -> Self {
         Self::penalties(
+            n_vocab,
             #[allow(clippy::cast_precision_loss)]
             {
                 penalty_last_n
@@ -675,6 +682,17 @@ impl LlamaSampler {
     }
 
     /// Get the name of the sampler.
+    ///
+    /// # Disabled samplers
+    ///
+    /// When a constructor is handed parameters that make it a no-op — e.g.
+    /// [`Self::temp`] with `1.0`, or [`Self::penalties`] with `penalty_last_n =
+    /// 0` — llama.cpp does not build that sampler. It substitutes an identity
+    /// sampler whose name carries a `?` prefix (`"?temp"`, `"?penalties"`).
+    /// Construction still succeeds, so this name is the only signal that the
+    /// sampler will not do anything. Affects `temp`, `temp_ext`, `top_k`,
+    /// `top_p`, `min_p`, `typical`, `xtc`, `top_n_sigma`, `dry`, and
+    /// `penalties`.
     ///
     /// # Panics
     ///

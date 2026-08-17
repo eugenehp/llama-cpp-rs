@@ -1,4 +1,4 @@
-//! Tests for Q1_0 / Q1_0_g128 quantization support (feature = "q1").
+//! Tests for `Q1_0` / `Q1_0_g128` quantization support (feature = "q1").
 //!
 //! Requires:
 //!   - the `q1` Cargo feature
@@ -6,7 +6,7 @@
 //!     (defaults to `/Users/Shared/models/Bonsai-1.7B-gguf/Bonsai-1.7B.gguf`)
 //!
 //! Run with:
-//!   cargo test -p llama-cpp-4 --features q1 --test test_q1 -- --nocapture
+//!   cargo test -p llama-cpp-4 --features q1 --test `test_q1` -- --nocapture
 
 #![cfg(feature = "q1")]
 

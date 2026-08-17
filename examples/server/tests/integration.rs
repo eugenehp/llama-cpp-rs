@@ -148,12 +148,11 @@ fn start_server(model: &str, port: u16, api_key: Option<&str>) -> Child {
     let deadline = Instant::now() + Duration::from_secs(STARTUP_TIMEOUT_SECS);
 
     loop {
-        if Instant::now() > deadline {
-            panic!(
-                "[testbench] Server on port {port} did not become ready within \
-                 {STARTUP_TIMEOUT_SECS}s"
-            );
-        }
+        assert!(
+            Instant::now() <= deadline,
+            "[testbench] Server on port {port} did not become ready within \
+             {STARTUP_TIMEOUT_SECS}s"
+        );
         if let Ok(r) = client.get(format!("{base}/health")).send() {
             if r.status().is_success() {
                 eprintln!("[testbench] Server ready on {base}");
@@ -205,6 +204,9 @@ fn get_json(base: &str, path: &str) -> Value {
 }
 
 /// Convenience: POST JSON body, assert expected status, return parsed JSON.
+// Takes `body` by value: every caller hands over a freshly built `json!` temporary
+// and never reuses it, so ownership at the call site reads better than a borrow.
+#[allow(clippy::needless_pass_by_value)]
 fn post_json(base: &str, path: &str, body: Value, expected_status: u16) -> Value {
     let url = format!("{base}{path}");
     let resp = Client::new()
@@ -227,6 +229,7 @@ fn post_json(base: &str, path: &str, body: Value, expected_status: u16) -> Value
 }
 
 /// Convenience: POST with auth header.
+#[allow(clippy::needless_pass_by_value)] // same rationale as `post_json`
 fn post_json_auth(base: &str, path: &str, body: Value, key: &str, expected_status: u16) -> Value {
     let url = format!("{base}{path}");
     let resp = Client::new()
@@ -552,12 +555,10 @@ fn embeddings_batch() {
     // Both vectors must have the same dimension.
     let dim0 = data[0]["embedding"]
         .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .map_or(0, std::vec::Vec::len);
     let dim1 = data[1]["embedding"]
         .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+        .map_or(0, std::vec::Vec::len);
     assert_eq!(dim0, dim1, "all embeddings must have the same dimension");
     assert!(dim0 > 0);
     eprintln!("[✓] POST /v1/embeddings (batch, dim={dim0})");
@@ -685,7 +686,7 @@ fn tool_calling_none() {
         choice["message"]["tool_calls"].is_null()
             || choice["message"]["tool_calls"]
                 .as_array()
-                .map_or(false, |a| a.is_empty()),
+                .is_some_and(std::vec::Vec::is_empty),
         "tool_calls must be absent when tool_choice=none: {body}"
     );
     eprintln!("[✓] tool_choice=none → plain text response");

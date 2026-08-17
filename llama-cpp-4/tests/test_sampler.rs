@@ -1,5 +1,9 @@
 //! Tests for sampler creation and introspection (no model needed for most).
 
+// These assertions check exact literals that were just written into token data,
+// so bit-exact float comparison is the property under test.
+#![allow(clippy::float_cmp)]
+
 use llama_cpp_4::sampling::LlamaSampler;
 use llama_cpp_4::token::data::LlamaTokenData;
 use llama_cpp_4::token::data_array::LlamaTokenDataArray;
@@ -95,6 +99,65 @@ fn test_logit_bias_sampler() {
     let biases = vec![(LlamaToken(0), -10.0), (LlamaToken(1), 5.0)];
     let sampler = LlamaSampler::logit_bias(32000, &biases);
     assert_eq!(sampler.name(), "logit-bias");
+}
+
+/// llama.cpp `b10470` moved `n_vocab` out of `llama_sampler_data` and into the
+/// penalty sampler, so `penalties` gained a leading `n_vocab`. Constructing one
+/// pins the argument order — passing `penalty_last_n` where `n_vocab` belongs
+/// still compiles (both are `i32`) and would only show up at sample time.
+#[test]
+fn test_penalties_sampler() {
+    let sampler = LlamaSampler::penalties(32000, 64, 1.1, 0.0, 0.0);
+    assert_eq!(sampler.name(), "penalties");
+}
+
+#[test]
+fn test_penalties_simple_sampler() {
+    let sampler = LlamaSampler::penalties_simple(32000, 64, 1.1);
+    assert_eq!(sampler.name(), "penalties");
+}
+
+/// When every penalty is at its "disabled" value llama.cpp does not build a
+/// penalty sampler at all — it substitutes an identity sampler named with a
+/// `?` prefix. Pinned because it is surprising: the call succeeds, but the
+/// returned sampler does nothing.
+#[test]
+fn test_penalties_sampler_disabled_returns_noop() {
+    // penalty_last_n = 0 disables regardless of the other values.
+    assert_eq!(
+        LlamaSampler::penalties(32000, 0, 1.1, 0.5, 0.5).name(),
+        "?penalties"
+    );
+    // ...as does every penalty sitting at its neutral value.
+    assert_eq!(
+        LlamaSampler::penalties(32000, 64, 1.0, 0.0, 0.0).name(),
+        "?penalties"
+    );
+}
+
+/// A penalties sampler actually applies inside a chain: token 0 is repeated in
+/// the accepted history, so its logit must end up below its untouched peer.
+#[test]
+fn test_penalties_sampler_penalizes_repeats() {
+    let n_vocab = 4;
+    let mut chain =
+        LlamaSampler::chain_simple([LlamaSampler::penalties(n_vocab, 64, 2.0, 0.0, 0.0)]);
+    for _ in 0..3 {
+        chain.accept(LlamaToken(0));
+    }
+
+    let mut data = LlamaTokenDataArray::from_iter(
+        (0..n_vocab).map(|id| LlamaTokenData::new(LlamaToken(id), 1.0, 0.0)),
+        false,
+    );
+    chain.apply(&mut data);
+
+    let repeated = data.data[0].logit();
+    let untouched = data.data[1].logit();
+    assert!(
+        repeated < untouched,
+        "repeated token logit {repeated} should be penalized below {untouched}"
+    );
 }
 
 #[test]

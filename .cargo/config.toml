@@ -1,0 +1,24 @@
+# Let directly executed binaries find the llama.cpp shared libraries.
+#
+# With the default `dynamic-link` feature, llama-cpp-sys-4 places the llama/ggml
+# shared libraries next to the binaries cargo builds. Finding them at *runtime*
+# differs by platform:
+#
+#   - macOS: handled entirely by llama-cpp-sys-4's build script, which rewrites
+#     the dylib install names to `@loader_path/…`. Nothing is needed here.
+#   - Windows: the loader already searches the directory of the `.exe`.
+#   - Linux/BSD: ELF needs the *final executable* to carry an rpath, and a
+#     dependency's build script cannot inject link args into a dependent
+#     crate's binary — so it has to be set here.
+#
+# Downstream users who link dynamically need the same stanza in their own
+# project (or `RUSTFLAGS`); see the "Dynamic linking" section of the README.
+#
+# Note: the `RUSTFLAGS` environment variable *replaces* these flags rather than
+# appending, so any CI job that sets `RUSTFLAGS` must repeat the rpath itself.
+
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+
+[target.'cfg(target_os = "freebsd")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]

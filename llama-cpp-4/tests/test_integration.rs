@@ -21,6 +21,15 @@
 //! That makes the suite safe under the default parallel runner; CI still passes
 //! `--test-threads=1` as belt-and-suspenders.
 
+// llama.cpp indexes batch positions with `i32` while Rust collections use
+// `usize`, so these tests convert between the two constantly. The checkpoints
+// under test are tiny (hundreds of tokens), so none of these casts can overflow.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+
 mod support;
 
 use std::num::NonZeroU32;
@@ -167,10 +176,9 @@ fn integration_greedy_generation() {
 
     let eos = model.token_eos();
     let mut generated = Vec::new();
-    let mut pos = tokens.len() as i32;
     let mut logit_idx = batch.n_tokens() - 1;
 
-    for _ in 0..8 {
+    for pos in (tokens.len() as i32..).take(8) {
         let logits = ctx.get_logits_ith(logit_idx);
         let best = logits
             .iter()
@@ -187,7 +195,6 @@ fn integration_greedy_generation() {
         batch.clear();
         batch.add(token, pos, &[0], true).unwrap();
         ctx.decode(&mut batch).unwrap();
-        pos += 1;
         logit_idx = 0;
     }
 
@@ -199,7 +206,7 @@ fn integration_greedy_generation() {
         .detokenize(&generated, false, false)
         .unwrap_or_default();
     assert!(
-        text.chars().any(|c| c.is_alphanumeric()),
+        text.chars().any(char::is_alphanumeric),
         "generated text should contain alphanumerics: {text:?}"
     );
 }
@@ -374,7 +381,7 @@ fn integration_tensor_transactions_capture() {
             assert_eq!(values.len(), n_embd * tokens.len());
             assert!(values.iter().all(|value| value.is_finite()));
         }
-        other => panic!("expected f32 capture, got {other:?}"),
+        other @ CapturedTensorData::I32(_) => panic!("expected f32 capture, got {other:?}"),
     }
 }
 

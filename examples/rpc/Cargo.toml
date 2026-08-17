@@ -1,13 +1,21 @@
 [package]
 name = "rpc-example"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2021"
 description = "Example: rpc-example for llama-cpp-4"
 license = "MIT OR Apache-2.0"
 publish = false
 
+# This example is deliberately its own workspace rather than a member of the
+# root one: adding it there would unify the `rpc` feature into *every* workspace
+# build, forcing all contributors to compile llama.cpp with RPC support. As its
+# own root it also cannot inherit `workspace = true` dependencies, hence the
+# concrete versions below (keep them in sync with the root workspace).
+[workspace]
+
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.5.1", features = ["rpc"] }
-anyhow = { workspace = true }
-clap = { workspace = true, features = ["derive"] }
-hf-hub = { workspace = true }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.6.0", features = ["rpc"] }
+llama-cpp-sys-4 = { path = "../../llama-cpp-sys-4", version = "0.6.0" }
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+hf-hub = { version = "=1.0.0", features = ["blocking"] }

@@ -630,6 +630,113 @@ fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> V
     lib_names
 }
 
+/// Make the built shared libraries loadable from the directory they sit in.
+///
+/// CMake stamps every dylib with an `@rpath/…` install name, and rustc records
+/// that name in whatever links against it. Cargo never adds an `LC_RPATH` to the
+/// binaries it builds, so a *directly executed* binary dies with:
+///
+/// ```text
+/// dyld: Library not loaded: @rpath/libggml-base.0.dylib
+///   Reason: no LC_RPATH's found
+/// ```
+///
+/// This is easy to miss because `cargo run` / `cargo test` set
+/// `DYLD_FALLBACK_LIBRARY_PATH` to the target directory, so the failure only
+/// shows up once someone runs the binary themselves.
+///
+/// Rewriting the install names (and the inter-library references) to
+/// `@loader_path/…` removes the need for an rpath at all: dyld resolves them
+/// relative to whichever binary or dylib did the loading, and the copy step
+/// below places every dylib next to the binaries.
+///
+/// Only meaningful on Apple targets. Windows resolves DLLs next to the `.exe`
+/// already; ELF needs `-Wl,-rpath,$ORIGIN` on the final executable, which a
+/// dependency's build script cannot inject — see `.cargo/config.toml`.
+fn make_shared_libs_loader_relative(lib_dirs: &[PathBuf], target: &str) {
+    if !target.contains("apple") {
+        return;
+    }
+
+    for dir in lib_dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Skip the symlinks in the versioned chain; retargeting the real
+            // file is enough, and install_name_tool cannot rewrite a symlink.
+            if !path.is_file() || path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "dylib") {
+                continue;
+            }
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                continue;
+            };
+
+            // 1. The library's own identity, which is what dependents record.
+            run_install_name_tool(&["-id", &format!("@loader_path/{filename}")], &path);
+
+            // 2. Its references to sibling libraries.
+            for dep in otool_rpath_dependencies(&path) {
+                let Some(base) = dep.strip_prefix("@rpath/") else {
+                    continue;
+                };
+                run_install_name_tool(&["-change", &dep, &format!("@loader_path/{base}")], &path);
+            }
+        }
+    }
+}
+
+/// `@rpath/…` entries this Mach-O file depends on.
+fn otool_rpath_dependencies(path: &Path) -> Vec<String> {
+    let Ok(output) = std::process::Command::new("otool")
+        .arg("-L")
+        .arg(path)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1) // first line is the file being inspected
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|dep| dep.starts_with("@rpath/"))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn run_install_name_tool(args: &[&str], path: &Path) {
+    match std::process::Command::new("install_name_tool")
+        .args(args)
+        .arg(path)
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            // Non-fatal: a library that was already rewritten by an earlier
+            // build reports "no such dependency", and the build still links.
+            debug_log!(
+                "install_name_tool {:?} on {} failed: {}",
+                args,
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            println!(
+                "cargo:warning=install_name_tool not runnable ({error}); \
+                 directly executed binaries may fail to find the llama.cpp dylibs"
+            );
+        }
+    }
+}
+
 /// Extract shared-library asset paths from the build output directory.
 ///
 /// `target` is the Rust target triple of the *cross-compilation target*.
@@ -1514,7 +1621,10 @@ fn main() {
         builder = builder
             .clang_arg("-DRPC_SUPPORT")
             .allowlist_function("ggml_backend_rpc_.*")
-            .allowlist_type("ggml_backend_rpc_.*");
+            .allowlist_type("ggml_backend_rpc_.*")
+            // `GGML_RPC_MAX_SERVERS` bounds the device list accepted by
+            // `ggml_backend_rpc_start_server`; callers need it to validate.
+            .allowlist_item("GGML_RPC_.*");
     }
 
     // Add mtmd (multimodal) support if feature is enabled
@@ -1525,6 +1635,14 @@ fn main() {
             .allowlist_function("mtmd_.*")
             .allowlist_type("mtmd_.*")
             .allowlist_item("MTMD_.*")
+            // `namespace mtmd_helper` in mtmd-helper.h holds C++-only RAII
+            // wrappers (unique_ptr deleters, the `gen_audio` handle wrapper).
+            // Without cxx namespaces bindgen flattens them into the same
+            // `mtmd_helper_*` names as the C API — `mtmd_helper::gen_audio`
+            // collides with the opaque C `struct mtmd_helper_gen_audio` — and
+            // they are unusable from Rust anyway.
+            .blocklist_type("mtmd_helper::.*")
+            .blocklist_item("mtmd_helper::.*")
             .no_partialeq("mtmd_context_params");
     }
 
@@ -1671,6 +1789,19 @@ fn main() {
 
             // Copy dynamic runtime assets next to test/example/app outputs.
             if use_shared_libs {
+                // Prebuilt archives carry the same `@rpath/…` install names the
+                // CMake build produces, so they need the same rewrite — see
+                // `make_shared_libs_loader_relative`.
+                make_shared_libs_loader_relative(
+                    &[
+                        prebuilt_dir.clone(),
+                        prebuilt_dir.join("lib"),
+                        prebuilt_dir.join("lib64"),
+                        prebuilt_dir.join("bin"),
+                    ],
+                    &target,
+                );
+
                 let libs_assets = extract_prebuilt_shared_assets(&prebuilt_dir, &target);
                 for asset in libs_assets {
                     let filename = asset
@@ -2496,6 +2627,18 @@ fn main() {
 
     // ── Copy shared-library assets to the Cargo target directory ─────────────
     if build_shared_libs {
+        // Must run before the dependent binary is linked: rustc records the
+        // dylib's install name at link time, so the rewrite has to land on the
+        // libraries in the link-search directories first.
+        make_shared_libs_loader_relative(
+            &[
+                cmake_out_dir.join("lib"),
+                cmake_out_dir.join("lib64"),
+                build_dir.clone(),
+            ],
+            &target,
+        );
+
         let libs_assets = extract_lib_assets(&cmake_out_dir, &target);
         for asset in libs_assets {
             let asset_clone = asset.clone();

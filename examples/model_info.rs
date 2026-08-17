@@ -90,7 +90,7 @@ fn main() {
     println!("  score           : {}", vocab.get_score(bos));
     println!("  attr            : {}", vocab.get_attr(bos));
     match vocab.get_text(bos) {
-        Ok(text) => println!("  text            : {:?}", text),
+        Ok(text) => println!("  text            : {text:?}"),
         Err(e) => println!("  text            : (error: {e})"),
     }
     println!();
@@ -113,9 +113,9 @@ fn main() {
     println!("=== Detokenize ===");
     let test_str = "Hello, world!";
     let tokens = model.str_to_token(test_str, AddBos::Never).unwrap();
-    println!("tokens: {:?}", tokens);
+    println!("tokens: {tokens:?}");
     match model.detokenize(&tokens, true, false) {
-        Ok(s) => println!("round-trip        : {:?}", s),
+        Ok(s) => println!("round-trip        : {s:?}"),
         Err(e) => println!("error             : {e}"),
     }
     println!();
@@ -170,13 +170,13 @@ fn main() {
 
     // Get model ptr
     let model_ptr = ctx.get_model_ptr();
-    println!("get_model_ptr     : {:?}", model_ptr);
+    println!("get_model_ptr     : {model_ptr:?}");
 
     // State seq operations
     let seq_size = ctx.state_seq_get_size(0);
-    println!("state_seq_size(0) : {} bytes", seq_size);
+    println!("state_seq_size(0) : {seq_size} bytes");
     let seq_size_ext = ctx.state_seq_get_size_ext(0, 0);
-    println!("state_seq_size_ext: {} bytes", seq_size_ext);
+    println!("state_seq_size_ext: {seq_size_ext} bytes");
     println!();
 
     // === Sampler ===

@@ -462,6 +462,33 @@ pub fn supports_rpc() -> bool {
     unsafe { llama_cpp_sys_4::llama_supports_rpc() }
 }
 
+/// Version of the vendored llama.cpp this crate is linked against.
+///
+/// llama.cpp adopted semantic versioning in `b10470` / `v0.1.1`, so this is a
+/// `MAJOR.MINOR.PATCH` string (with a `-dev` suffix for builds off a
+/// non-release commit) rather than a `bNNNNN` build number. Useful for
+/// reporting the exact upstream a binary carries, since the crate version and
+/// the llama.cpp version move independently.
+///
+/// ```
+/// # use llama_cpp_4::llama_version;
+/// let version = llama_version();
+/// assert!(!version.is_empty());
+/// // e.g. "0.1.1"
+/// assert!(version.starts_with(char::is_numeric));
+/// ```
+///
+/// # Panics
+///
+/// Panics if the returned string is not valid UTF-8.
+#[must_use]
+pub fn llama_version() -> &'static str {
+    // SAFETY: llama.cpp returns a pointer to a string literal baked in at
+    // compile time, so it is non-null and lives for the life of the process.
+    let c_str = unsafe { std::ffi::CStr::from_ptr(llama_cpp_sys_4::llama_version()) };
+    c_str.to_str().expect("llama version is not valid UTF-8")
+}
+
 /// Get system information string.
 ///
 /// Returns a string containing CPU features, build info, and other system details.

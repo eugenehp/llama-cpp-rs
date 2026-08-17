@@ -1,4 +1,8 @@
 //! Locate and load GGUF files for integration tests.
+//!
+//! Several test binaries declare `mod support;` and each uses only a subset of
+//! these helpers, so unused items here are expected rather than dead.
+#![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -24,7 +28,9 @@ pub static LLAMA_LOCK: Mutex<()> = Mutex::new(());
 /// Acquire the global llama.cpp test lock, recovering from a poisoned mutex
 /// after a prior test panic.
 pub fn llama_guard() -> std::sync::MutexGuard<'static, ()> {
-    LLAMA_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LLAMA_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();

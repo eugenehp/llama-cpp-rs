@@ -1,5 +1,8 @@
-#![cfg(feature = "ggml")]
 //! Tests for the ggml graph computation API.
+// The crate doc must precede `#![cfg]`: when the feature is off the cfg strips
+// the whole crate body, and a doc comment placed after it goes with it —
+// leaving an undocumented crate that trips `missing_docs`.
+#![cfg(feature = "ggml")]
 
 use llama_cpp_4::ggml::*;
 

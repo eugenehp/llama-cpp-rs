@@ -185,26 +185,21 @@ extern "C" void mtp_session_free(mtp_session * s) {
     delete s;
 }
 
+// Upstream dropped `common_speculative_need_embd` / `common_speculative_need_embd_nextn`
+// in llama.cpp b10470 (#26904) — the implementations now request the embeddings they
+// need from their own contexts. The reporting below mirrors what those queries returned:
+// `need_embd()` was `false` for every implementation, and `need_embd_nextn()` was `true`
+// only for the MTP implementation.
 extern "C" bool mtp_session_need_embd(const mtp_session * s) {
-    if (s == nullptr) {
-        return false;
-    }
-    try {
-        return common_speculative_need_embd(s->spec.get());
-    } catch (...) {
-        return false;
-    }
+    (void) s;
+    return false;
 }
 
 extern "C" bool mtp_session_need_embd_pre_norm(const mtp_session * s) {
     if (s == nullptr) {
         return false;
     }
-    try {
-        return common_speculative_need_embd_nextn(s->spec.get());
-    } catch (...) {
-        return false;
-    }
+    return s->spec_type == MTP_SPEC_TYPE_MTP;
 }
 
 extern "C" bool mtp_session_begin(

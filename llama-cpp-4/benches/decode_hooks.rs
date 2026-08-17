@@ -10,6 +10,14 @@
 //!
 //! Run: `cargo bench -p llama-cpp-4 --bench decode_hooks`
 
+// llama.cpp indexes batch positions with `i32` while Rust collections use
+// `usize`; the benchmarked prompts are tiny, so these casts cannot overflow.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
+
 use std::hint::black_box;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -21,9 +29,7 @@ use llama_cpp_4::prelude::*;
 static BACKEND: OnceLock<Option<LlamaBackend>> = OnceLock::new();
 
 fn backend() -> Option<&'static LlamaBackend> {
-    BACKEND
-        .get_or_init(|| LlamaBackend::init().ok())
-        .as_ref()
+    BACKEND.get_or_init(|| LlamaBackend::init().ok()).as_ref()
 }
 
 fn model_path() -> Option<PathBuf> {

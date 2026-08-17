@@ -836,7 +836,12 @@ impl QuantizeParams {
                 for (dst, &src) in raw.key.iter_mut().zip(bytes[..copy_len].iter()) {
                     // `c_char` is `i8` on x86_64 but `u8` on ARM64/Android; `as _`
                     // infers the target signedness on every platform (issue #306).
-                    *dst = src as _;
+                    // The wrap on `i8` targets is intentional: llama.cpp reads the
+                    // key back as bytes, so the bit pattern is what matters.
+                    #[allow(clippy::cast_possible_wrap)]
+                    {
+                        *dst = src as _;
+                    }
                 }
                 match &kv.value {
                     KvOverrideValue::Int(v) => {

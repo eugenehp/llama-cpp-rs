@@ -77,6 +77,34 @@ impl LlamaContextParams {
         self.context_params.n_outputs_max
     }
 
+    /// Set the maximum number of outputs per sequence.
+    ///
+    /// Maps to `llama_context_params.n_outputs_max_per_seq`. **Defaults to `1`**
+    /// — a single output per sequence; pass `0` to fall back to
+    /// [`Self::n_outputs_max`] instead. Backend samplers are initialized for
+    /// this many outputs per sequence, so multi-output backend sampling (e.g.
+    /// speculative decoding) must raise it above `1`. llama.cpp clamps the
+    /// value to `n_outputs_max`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default().with_n_outputs_max_per_seq(16);
+    /// assert_eq!(params.n_outputs_max_per_seq(), 16);
+    /// ```
+    #[must_use]
+    pub fn with_n_outputs_max_per_seq(mut self, n_outputs_max_per_seq: u32) -> Self {
+        self.context_params.n_outputs_max_per_seq = n_outputs_max_per_seq;
+        self
+    }
+
+    /// Get the maximum number of outputs per sequence.
+    #[must_use]
+    pub fn n_outputs_max_per_seq(&self) -> u32 {
+        self.context_params.n_outputs_max_per_seq
+    }
+
     /// Use a unified KV buffer across input sequences.
     ///
     /// Maps to `llama_context_params.kv_unified`. Disabling can improve

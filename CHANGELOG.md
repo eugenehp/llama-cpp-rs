@@ -2,6 +2,155 @@
 
 ## Unreleased
 
+## [0.6.0] - 2026-08-17
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `34af94cd9` (tag `b10470`, also
+  tagged `v0.1.1` — upstream adopted [semantic versioning](https://github.com/ggml-org/llama.cpp/blob/master/docs/release.md)
+  in this window and `v0.1.1` is its newest release) from `221f0f635` (b10235),
+  pulling in 235 upstream commits — multi-output backend
+  sampling ([#25532](https://github.com/ggml-org/llama.cpp/pull/25532)),
+  speculative-type auto-detection from draft-GGUF metadata
+  ([#26814](https://github.com/ggml-org/llama.cpp/pull/26814),
+  [#27005](https://github.com/ggml-org/llama.cpp/pull/27005)), backend sampling
+  for dflash + dspark ([#26958](https://github.com/ggml-org/llama.cpp/pull/26958)),
+  the mtmd audio-generation API, and new model architectures (BailingMoE3,
+  MiniMax, Granite-Switch, Muse Glimmer, GLM-4.7-Flash MTP).
+- **BREAKING** — `LlamaSampler::penalties` / `LlamaSampler::penalties_simple` take
+  a leading `n_vocab: i32` argument. Upstream moved `n_vocab` out of
+  `llama_sampler_data` into the penalty sampler itself
+  ([#26520](https://github.com/ggml-org/llama.cpp/pull/26520)), so
+  `llama_sampler_init_penalties` now needs it explicitly. Pass
+  [`LlamaModel::n_vocab`], as `mirostat` already required. `penalty_last_n = -1`
+  ("context size") is gone upstream; only `0` disables the penalty.
+- **BREAKING** — `LlamaSampler::dry` no longer takes `n_ctx_train`: upstream
+  dropped the parameter from `llama_sampler_init_dry`.
+- **BREAKING** — `common_sampler_params` (`llama-cpp-sys-4`) resynced with
+  upstream `common_params_sampling`, which it hand-mirrors and had drifted far
+  from. Removed `tfs_z` and `penalize_nl` (both deleted upstream); added
+  `top_n_sigma`, `adaptive_target`, `adaptive_decay`, and `timing_per_token`;
+  `dry_penalty_last_n` now defaults to `64` rather than `-1` (which is no longer
+  a valid "context size" sentinel). The default `samplers` chain now matches
+  upstream — it previously still listed the **removed TFS-Z sampler**.
+  Correspondingly `COMMON_SAMPLER_TYPE_TFS_Z` is gone and
+  `COMMON_SAMPLER_TYPE_PENALTIES`, `_TOP_N_SIGMA`, and `_ADAPTIVE_P` are added.
+- **BREAKING** — `LlamaLoadMode` gained an `Auto` variant (`LLAMA_LOAD_MODE_AUTO`,
+  `-1`) and is now `#[repr(i32)]` on every target rather than `#[repr(u32)]`,
+  because the enum is signed everywhere once it carries a negative discriminant.
+  `Auto` is llama.cpp's new default: it memory-maps unless one of the backend
+  devices lacks mmap support. `LlamaModelParams::use_mmap()` reports `true` for
+  `Auto`, so the default-parameters behaviour is unchanged.
+- **Patch `0003` (exact speculative state) rebased**: upstream removed the
+  `need_embd()` / `need_embd_nextn()` virtuals from `common_speculative_impl`
+  ([#26904](https://github.com/ggml-org/llama.cpp/pull/26904)), which those hunks
+  used as context. Patches `0004` and `0005` apply unchanged.
+- `mtp_shim` no longer calls the deleted `common_speculative_need_embd` /
+  `common_speculative_need_embd_nextn`. `MtpSession::need_embd` /
+  `Eagle3Session::need_embd` still report `false` and `need_embd_pre_norm` still
+  reports `true` only for MTP sessions, matching what upstream returned.
+
+### Added
+
+- **`LlamaContextParams::with_n_outputs_max_per_seq()` / `n_outputs_max_per_seq()`**
+  (`llama-cpp-4`), wrapping the new `llama_context_params.n_outputs_max_per_seq`.
+  Backend samplers are initialized for this many outputs per sequence, so
+  multi-output backend sampling must raise it above its default of `1`.
+- **`llama_version()`** (`llama-cpp-4`): the vendored llama.cpp version string.
+  Now that upstream ships semver releases this is the direct way to report which
+  upstream a binary carries, since the crate and llama.cpp versions move
+  independently.
+- **Tests for the APIs this release changes**, which previously had none:
+  `LlamaLoadMode` (the `Auto` default, round-tripping every variant, and that the
+  negative discriminant survives — the exact failure a `#[repr(u32)]` would
+  reintroduce), `penalties` / `penalties_simple` construction and behaviour,
+  `dry`, and `n_outputs_max_per_seq`.
+- **CI job `feature-combos`**: PRs previously only ever built the default
+  `openmp,mtmd,dynamic-link` set, so a break under any other feature stayed
+  hidden until a release tag fired `prebuilt-llama.yml`. The new job builds
+  static `mtmd` (no `dynamic-link`) and `rpc` — the two feature-gated bindgen
+  paths. The `mtmd` bindgen collision fixed in this release was caught only
+  because `mtmd` happens to be on by default; adding this job immediately
+  surfaced that `--features rpc` had not compiled for some time (see below).
+- `GGML_RPC_*` constants are now in the `rpc` bindgen allowlist, so
+  `GGML_RPC_MAX_SERVERS` is available to validate device lists.
+
+### Fixed
+
+- **`mtmd` bindings no longer fail to compile**: upstream's new
+  `namespace mtmd_helper` C++ RAII wrappers flatten to the same `mtmd_helper_*`
+  names as the C API under bindgen without cxx-namespaces — `mtmd_helper::gen_audio`
+  collided with the opaque C `struct mtmd_helper_gen_audio`. The `mtmd_helper::`
+  namespace is now blocklisted; it was never usable from Rust.
+- **Dynamically linked binaries now run when executed directly.** With the
+  default `dynamic-link` feature, CMake stamped every llama/ggml dylib with an
+  `@rpath/…` install name, which rustc recorded in the final binary — but Cargo
+  never adds an `LC_RPATH`, so running a built binary yourself died with
+  `Library not loaded: @rpath/libggml-base.0.dylib … no LC_RPATH's found`. This
+  affected **every** binary built from this crate, not just the examples; it was
+  masked because `cargo run` and `cargo test` set
+  `DYLD_FALLBACK_LIBRARY_PATH` / `LD_LIBRARY_PATH` to the target directory.
+  The build script now rewrites the dylib install names and their sibling
+  references to `@loader_path/…`, which needs no rpath and works for downstream
+  consumers automatically. ELF cannot be fixed the same way — the rpath must sit
+  on the final executable, which a dependency's build script cannot inject — so
+  Linux/BSD get `-Wl,-rpath,$ORIGIN` via a new [`.cargo/config.toml`], with the
+  requirement documented for downstream users in the README. Windows was already
+  fine. Note `RUSTFLAGS` *replaces* config rustflags, so the CI jobs that set it
+  now repeat the rpath. The rewrite is applied on the prebuilt-archive path too,
+  not just the CMake build — prebuilt libraries carry the same `@rpath/…` names.
+  CI now executes a built binary directly, since `cargo run` / `cargo test`
+  inject the library path and therefore can never catch this class of bug.
+
+[`.cargo/config.toml`]: .cargo/config.toml
+
+- **CI `Fmt` and `Clippy` steps now actually gate.** `Fmt` ran bare `cargo fmt`,
+  which rewrites files inside the runner and always exits `0`, so formatting was
+  never enforced and the tree had accumulated drift; it is now
+  `cargo fmt --all -- --check`. `Clippy` ran bare `cargo clippy`, which skipped
+  tests, benches, and examples and treated findings as non-fatal; it is now
+  `cargo clippy --workspace --all-targets -- -D warnings`. The workspace was
+  formatted and its clippy findings resolved to make both steps pass.
+- **`examples/common.rs`** documented output regenerated from an actual run; it
+  still advertised `tfs_z`, `penalize_nl`, and `dry_penalty_last_n: -1`.
+
+- **The `rpc` feature compiles again.** `llama-cpp-4`'s `rpc` module had drifted
+  out of sync with `ggml-rpc.h` and failed to build with five errors; nothing in
+  CI ever compiled it, and `--features rpc` is not reachable from a default
+  build, so it went unnoticed. Note `ggml-rpc.h` is **unchanged** in this
+  llama.cpp bump — the breakage predates it. Upstream's RPC API is device-aware
+  (one endpoint can expose several devices), so:
+  - `RpcBackend::init` takes a `device: u32`, and `buffer_type` /
+    `get_device_memory` use it. Added `RpcBackend::device()`, and `as_ptr()` is
+    now public so the handle is actually usable.
+  - `RpcServer` is replaced by a blocking `rpc::serve(endpoint, cache_dir,
+    n_threads, devices)` matching `ggml_backend_rpc_start_server`. The old
+    `RpcServer::start(backend, endpoint, free_mem, total_mem)` did not
+    correspond to any current upstream signature, and returned a handle for a
+    call that never returns.
+  - `add_rpc_device` becomes `add_rpc_server`, returning a
+    `ggml_backend_reg` — upstream renamed it and changed its return type from a
+    device to a registration.
+- **`examples/rpc` builds again**, and is now the working consumer that proves
+  the API above. It was previously listed in neither `workspace.members` nor
+  `workspace.exclude`, so cargo rejected it standalone ("current package
+  believes it's in a workspace when it's not") and the workspace never compiled
+  it — which is how it and the `rpc` module drifted unnoticed. It now declares
+  its own `[workspace]`: making it a root member would unify the `rpc` feature
+  into every workspace build, forcing all contributors to compile llama.cpp with
+  RPC support. It gained `--device`, `--cache-dir`, and `--threads` flags, and
+  enumerates devices from ggml's backend registry. Verified by actually running
+  it: the server reports `device 0: CPU` and blocks serving.
+
+### Documented
+
+- **`LlamaSampler::name()`** now explains llama.cpp's `?`-prefix convention:
+  handed parameters that make it a no-op (`temp(1.0)`, `penalties` with
+  `penalty_last_n = 0`, …), llama.cpp silently substitutes an identity sampler
+  named `"?temp"` / `"?penalties"`. Construction still succeeds, so the name is
+  the only signal the sampler does nothing. Long-standing upstream behaviour
+  (unchanged in this bump), but previously undocumented here.
+
 ## [0.5.1] - 2026-08-03
 
 ### Added

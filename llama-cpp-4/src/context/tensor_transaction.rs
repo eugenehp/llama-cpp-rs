@@ -1117,8 +1117,7 @@ pub(crate) unsafe extern "C" fn tensor_transaction_callback(
     // SAFETY: `c_char` and `u8` have identical byte width. Names are matched as
     // raw bytes against the selector set, so the common per-node path skips
     // UTF-8 validation entirely.
-    let raw_name =
-        unsafe { std::slice::from_raw_parts(name_bytes.as_ptr().cast::<u8>(), length) };
+    let raw_name = unsafe { std::slice::from_raw_parts(name_bytes.as_ptr().cast::<u8>(), length) };
     let Some(selector_index) = state.selected(raw_name) else {
         return false;
     };

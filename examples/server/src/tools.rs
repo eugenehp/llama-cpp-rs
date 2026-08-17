@@ -580,7 +580,7 @@ mod tests {
         let (_, calls) = extract_tool_calls(out);
         assert_eq!(calls.len(), 1);
         // arguments should be the raw value, not double-encoded
-        assert!(calls[0].arguments.contains("k"));
+        assert!(calls[0].arguments.contains('k'));
     }
 
     #[test]

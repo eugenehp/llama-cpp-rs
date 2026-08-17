@@ -1,15 +1,16 @@
+diff --git a/common/speculative.cpp b/common/speculative.cpp
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
-@@ -169,7 +169,7 @@ struct common_speculative_impl {
+@@ -171,7 +171,7 @@ struct common_speculative_impl {
  
      // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
      virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
 -    virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
 +    virtual bool set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) { return false; }
+ };
  
-     // true if this implementation requires the target context to extract post-norm embeddings
-     virtual bool need_embd() const = 0;
-@@ -862,11 +862,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+ struct common_speculative_impl_draft_simple : public common_speculative_impl {
+@@ -868,11 +868,12 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
      }
  
      bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
@@ -25,7 +26,7 @@
          }
  
          const llama_pos          pos = pending_pos_last[seq_id];
-@@ -878,23 +879,27 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+@@ -884,23 +885,27 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
          return true;
      }
  
@@ -57,12 +58,13 @@
          std::memcpy(pending_g_last[seq_id].data(), data.data() + sizeof(llama_pos), (size_t) n_embd_dec * sizeof(float));
 +        return true;
      }
+ };
  
-     bool need_embd() const override {
-@@ -1638,6 +1643,69 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+@@ -1714,6 +1719,69 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+         const size_t row_bytes = (size_t) n_embd * sizeof(float);
          std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
      }
- 
++
 +    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
 +        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
 +            return false;
@@ -125,11 +127,10 @@
 +        std::memcpy(pending_h[seq_id].data(), data.data() + offset, values_size);
 +        return true;
 +    }
-+
-     bool need_embd() const override {
-         return false;
-     }
-@@ -2671,14 +2739,18 @@ bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id
+ };
+ 
+ // state of self-speculation (simple implementation, not ngram-map)
+@@ -2746,14 +2814,18 @@ bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id
      return false;
  }
  
@@ -151,9 +152,10 @@
  }
  
  void common_speculative_print_stats(const common_speculative * spec) {
+diff --git a/common/speculative.h b/common/speculative.h
 --- a/common/speculative.h
 +++ b/common/speculative.h
-@@ -72,7 +72,7 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t
+@@ -78,7 +78,7 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t
  
  // (optional) get/set internal state
  bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);

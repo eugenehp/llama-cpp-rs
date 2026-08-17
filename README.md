@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `221f0f635 (b10235)` (Aug 2026) — includes
+**llama.cpp version:** `34af94cd9 (b10470 / v0.1.1)` (Aug 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
 [DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and
@@ -23,7 +23,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.5.1"
+llama-cpp-4 = "0.6.0"
 ```
 
 Import the common types with the prelude:
@@ -172,7 +172,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.5.1`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.6.0`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -732,6 +732,44 @@ cargo run -p openai-server --features vulkan -- --n-gpu-layers 99 \
 
 ---
 
+## Dynamic linking
+
+The default `dynamic-link` feature builds llama.cpp as shared libraries, and
+`llama-cpp-sys-4` places them next to the binaries Cargo produces. Locating them
+at *runtime* is platform-specific:
+
+| Platform | How the binary finds the libraries | Action needed |
+|---|---|---|
+| macOS | Install names are rewritten to `@loader_path/…` by the build script | none |
+| Windows | The loader searches the directory of the `.exe` | none |
+| Linux / BSD | ELF requires an rpath on the **final executable** | see below |
+
+Cargo does not add an rpath to the binaries it builds, and a dependency's build
+script cannot inject link arguments into a dependent crate's binary — so on
+Linux the consuming project has to supply it. This repository does so in
+[`.cargo/config.toml`](.cargo/config.toml); in your own project add:
+
+```toml
+# .cargo/config.toml
+[target.'cfg(target_os = "linux")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
+```
+
+Note that setting the `RUSTFLAGS` environment variable *replaces* these flags
+rather than appending to them, so a CI job that sets `RUSTFLAGS` must repeat the
+rpath itself.
+
+Without this, `cargo run` and `cargo test` still work — they set
+`LD_LIBRARY_PATH` / `DYLD_FALLBACK_LIBRARY_PATH` to the target directory — but
+running the binary directly fails with `libggml-base.so.0: cannot open shared
+object file`. To sidestep runtime lookup entirely, link statically instead:
+
+```toml
+llama-cpp-4 = { version = "0.6.0", default-features = false }
+```
+
+---
+
 ## Hugging Face model download
 
 All examples and the server accept a `hf-model <repo> [quant]` subcommand
@@ -861,7 +899,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.5.1},
+  version   = {0.6.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

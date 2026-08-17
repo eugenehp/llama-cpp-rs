@@ -65,9 +65,9 @@ pub fn generate(model_path: &Path, prompt: &str, max_new_tokens: i32) -> Result<
     // end so multi-byte tokens split across steps still render.
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
     let mut out = Vec::<u8>::new();
-    let mut n_cur = batch.n_tokens();
+    let n_prompt = batch.n_tokens();
 
-    for _ in 0..max_new_tokens {
+    for n_cur in n_prompt..n_prompt.saturating_add(max_new_tokens) {
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
         sampler.accept(token);
         if model.is_eog_token(token) {
@@ -77,7 +77,6 @@ pub fn generate(model_path: &Path, prompt: &str, max_new_tokens: i32) -> Result<
 
         batch.clear();
         batch.add(token, n_cur, &[0], true)?;
-        n_cur += 1;
         ctx.decode(&mut batch).context("token decode failed")?;
     }
 

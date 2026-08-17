@@ -11,10 +11,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
-use llama_cpp_4::ggml::GgmlBackend;
 use std::io::Write;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::ptr::NonNull;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -26,6 +26,19 @@ struct Args {
     /// Endpoint for RPC (e.g., "127.0.0.1:50052")
     #[arg(short, long, default_value = "127.0.0.1:50052")]
     endpoint: String,
+
+    /// Index of the remote device to use (client mode). A single endpoint can
+    /// expose several devices, in the order the server listed them.
+    #[arg(long, default_value_t = 0)]
+    device: u32,
+
+    /// Directory for the server-side tensor cache (server mode)
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+
+    /// Worker threads used to service RPC requests (server mode)
+    #[arg(long, default_value_t = 4)]
+    threads: usize,
 
     /// Model to use (HuggingFace repo ID or local path)
     #[arg(short, long)]
@@ -57,32 +70,64 @@ fn main() -> Result<()> {
     }
 }
 
+/// Collect the local devices to expose, from ggml's global backend registry.
+///
+/// `LlamaBackend::init()` in `main` is what populates the registry, so this must
+/// run after it.
+fn collect_devices(cpu_only: bool) -> Result<Vec<NonNull<llama_cpp_sys_4::ggml_backend_device>>> {
+    let mut devices = Vec::new();
+
+    // SAFETY: the registry is process-global and populated by backend init; the
+    // device pointers it hands out are owned by ggml and live for the life of
+    // the process, so they outlive the `serve` call below.
+    unsafe {
+        for i in 0..llama_cpp_sys_4::ggml_backend_dev_count() {
+            let Some(dev) = NonNull::new(llama_cpp_sys_4::ggml_backend_dev_get(i)) else {
+                continue;
+            };
+            let is_cpu = llama_cpp_sys_4::ggml_backend_dev_type(dev.as_ptr())
+                == llama_cpp_sys_4::GGML_BACKEND_DEVICE_TYPE_CPU;
+            if cpu_only && !is_cpu {
+                continue;
+            }
+            let name =
+                std::ffi::CStr::from_ptr(llama_cpp_sys_4::ggml_backend_dev_name(dev.as_ptr()))
+                    .to_string_lossy()
+                    .into_owned();
+            println!("  device {}: {name}", devices.len());
+            devices.push(dev);
+        }
+    }
+
+    anyhow::ensure!(
+        !devices.is_empty(),
+        "no backend devices available to serve (try without --cpu)"
+    );
+    Ok(devices)
+}
+
 fn run_server(args: &Args) -> Result<()> {
     println!("Starting RPC server on {}", args.endpoint);
 
-    // Initialize a CPU backend
-    let ggml_backend = GgmlBackend::cpu();
-    let backend_ptr = std::ptr::NonNull::new(ggml_backend.as_ptr())
-        .context("Failed to initialize CPU backend")?;
+    let devices = collect_devices(args.cpu)?;
 
-    // Start the RPC server
-    let _server = RpcServer::start(
-        backend_ptr,
-        &args.endpoint,
-        0, // Auto-detect free memory
-        0, // Auto-detect total memory
-    )?;
-
-    // Keep the backend alive for the lifetime of the server
-    std::mem::forget(ggml_backend);
-
-    println!("RPC server listening on {}", args.endpoint);
+    println!(
+        "Serving {} device(s) with {} thread(s)",
+        devices.len(),
+        args.threads
+    );
     println!("Press Ctrl+C to stop the server");
 
-    // Keep the server running
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-    }
+    // Blocks: llama.cpp runs the accept loop on this thread and does not return
+    // while the server is live.
+    serve(
+        &args.endpoint,
+        args.cache_dir.as_deref(),
+        args.threads,
+        &devices,
+    )?;
+
+    Ok(())
 }
 
 #[allow(
@@ -94,9 +139,9 @@ fn run_server(args: &Args) -> Result<()> {
 fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
     println!("Connecting to RPC server at {}", args.endpoint);
 
-    // Initialize RPC backend
-    let rpc_backend = RpcBackend::init(&args.endpoint)?;
-    println!("Connected to RPC backend: {:?}", rpc_backend);
+    // Initialize RPC backend against the requested remote device
+    let rpc_backend = RpcBackend::init(&args.endpoint, args.device)?;
+    println!("Connected to RPC backend: {rpc_backend:?}");
 
     // Query device memory
     match rpc_backend.get_device_memory() {
@@ -134,8 +179,7 @@ fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
         .context("Failed to load model")?;
 
     // Create context
-    let ctx_params =
-        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048));
+    let ctx_params = LlamaContextParams::default().with_n_ctx(NonZeroU32::new(2048));
 
     let mut ctx = model
         .new_context(backend, ctx_params)
@@ -160,8 +204,7 @@ fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
     }
 
     // Decode the batch
-    ctx.decode(&mut batch)
-        .context("Failed to decode batch")?;
+    ctx.decode(&mut batch).context("Failed to decode batch")?;
 
     // Set up sampler
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
@@ -200,8 +243,7 @@ fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
         n_decode += 1;
 
         // Decode the batch
-        ctx.decode(&mut batch)
-            .context("Failed to decode batch")?;
+        ctx.decode(&mut batch).context("Failed to decode batch")?;
     }
 
     println!("\n\nGenerated {} tokens", n_decode);
@@ -212,8 +254,7 @@ fn run_client(args: &Args, backend: &LlamaBackend) -> Result<()> {
 fn download_model(repo: &str) -> Result<PathBuf> {
     println!("Downloading model from HuggingFace: {}", repo);
 
-    let api = HFClientSync::new()
-        .context("unable to create huggingface api")?;
+    let api = HFClientSync::new().context("unable to create huggingface api")?;
     let (owner, name) = split_id(repo);
     let repo = api.model(owner, name);
 
@@ -225,11 +266,7 @@ fn download_model(repo: &str) -> Result<PathBuf> {
     let gguf_file = siblings
         .iter()
         .find(|f| f.rfilename.contains("Q4_K_M") && f.rfilename.ends_with(".gguf"))
-        .or_else(|| {
-            siblings
-                .iter()
-                .find(|f| f.rfilename.ends_with(".gguf"))
-        })
+        .or_else(|| siblings.iter().find(|f| f.rfilename.ends_with(".gguf")))
         .context("No GGUF file found in repository")?;
 
     println!("Downloading {}", gguf_file.rfilename);

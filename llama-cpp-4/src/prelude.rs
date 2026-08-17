@@ -203,7 +203,7 @@ pub use crate::mtmd::{
 // ── Remote backend (feature `rpc`) ──────────────────────────────────────────
 
 #[cfg(feature = "rpc")]
-pub use crate::rpc::{RpcBackend, RpcError, RpcServer};
+pub use crate::rpc::{add_rpc_server, serve, RpcBackend, RpcError};
 
 // ── Quantization ────────────────────────────────────────────────────────────
 

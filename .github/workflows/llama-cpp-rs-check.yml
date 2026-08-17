@@ -19,7 +19,10 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # `RUSTFLAGS` replaces .cargo/config.toml rustflags rather than appending,
+      # so the $ORIGIN rpath that lets directly executed binaries find the
+      # llama.cpp shared libraries must be repeated here.
+      RUSTFLAGS: '-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,$ORIGIN'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -36,9 +39,11 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Clippy
-        run: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      # `cargo fmt` on its own rewrites files in the runner and always exits 0,
+      # so it never gated anything. `--check` reports and fails instead.
       - name: Fmt
-        run: cargo fmt
+        run: cargo fmt --all -- --check
       - name: Test
         run: cargo test --workspace --exclude openai-server --exclude llama-jni
       - name: sccache stats
@@ -49,7 +54,10 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # `RUSTFLAGS` replaces .cargo/config.toml rustflags rather than appending,
+      # so the $ORIGIN rpath that lets directly executed binaries find the
+      # llama.cpp shared libraries must be repeated here.
+      RUSTFLAGS: '-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,$ORIGIN'
     steps:
       - name: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -66,6 +74,63 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --workspace --all-targets --exclude llama-jni
+      # `cargo run` and `cargo test` set LD_LIBRARY_PATH to the target directory,
+      # so they cannot catch a missing rpath — only running the binary directly
+      # exercises how a user (or a shipped artifact) actually loads the
+      # llama.cpp shared libraries.
+      - name: Verify a dynamically linked binary runs without cargo
+        run: |
+          output=$(./target/debug/simple --help 2>&1)
+          echo "$output" | head -5
+          if echo "$output" | grep -qiE 'error while loading shared libraries|cannot open shared object|no such file or directory'; then
+            echo "::error::binary could not locate the llama.cpp shared libraries — is the \$ORIGIN rpath still applied?"
+            exit 1
+          fi
+      - name: sccache stats
+        run: sccache --show-stats || true
+  feature-combos:
+    # Every other job builds the default feature set
+    # (openmp,mtmd,dynamic-link), so a break under any other combination stays
+    # hidden until a release tag fires prebuilt-llama.yml. These two cover the
+    # feature-gated bindgen sections (mtmd, rpc) and static linkage.
+    name: Check non-default feature combos (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: static + mtmd
+            features: mtmd
+          - label: rpc
+            features: rpc
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      # `RUSTFLAGS` replaces .cargo/config.toml rustflags rather than appending,
+      # so the $ORIGIN rpath that lets directly executed binaries find the
+      # llama.cpp shared libraries must be repeated here.
+      RUSTFLAGS: '-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,$ORIGIN'
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build -p llama-cpp-4 --no-default-features --features ${{ matrix.features }}
+      # examples/rpc is its own workspace (see its Cargo.toml), so no other job
+      # ever compiles it — which is how it silently went stale.
+      - name: Build rpc example
+        if: matrix.features == 'rpc'
+        run: cargo build --manifest-path examples/rpc/Cargo.toml
       - name: sccache stats
         run: sccache --show-stats || true
   mac:
@@ -129,7 +194,10 @@ jobs:
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
-      RUSTFLAGS: -C link-arg=-fuse-ld=mold
+      # `RUSTFLAGS` replaces .cargo/config.toml rustflags rather than appending,
+      # so the $ORIGIN rpath that lets directly executed binaries find the
+      # llama.cpp shared libraries must be repeated here.
+      RUSTFLAGS: '-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,$ORIGIN'
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1

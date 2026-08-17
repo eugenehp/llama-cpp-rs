@@ -1,5 +1,9 @@
 //! Unit tests for [`LlamaContextParams`] setters and getters.
 
+// These assertions round-trip exact literals through a setter/getter pair, so
+// bit-exact float comparison is the property under test, not an approximation.
+#![allow(clippy::float_cmp)]
+
 use llama_cpp_4::context::params::{
     LlamaAttentionType, LlamaContextParams, LlamaFlashAttnType, ParamsCloneError, RopeScalingType,
 };
@@ -22,6 +26,37 @@ fn context_params_kv_and_flash_roundtrip() {
     assert!(params.op_offload());
     assert_eq!(params.n_outputs_max(), 128);
     assert!(params.no_perf());
+}
+
+/// `n_outputs_max_per_seq` is new in llama.cpp `b10470` and caps how many
+/// outputs a backend sampler is initialized for, so multi-output backend
+/// sampling needs it above `1`. `0` means "fall back to `n_outputs_max`".
+#[test]
+fn context_params_n_outputs_max_per_seq_roundtrip() {
+    let params = LlamaContextParams::default();
+    assert_eq!(
+        params.n_outputs_max_per_seq(),
+        1,
+        "upstream defaults to a single output per sequence"
+    );
+
+    // `0` is the sentinel meaning "fall back to n_outputs_max", not the default.
+    assert_eq!(
+        LlamaContextParams::default()
+            .with_n_outputs_max_per_seq(0)
+            .n_outputs_max_per_seq(),
+        0
+    );
+
+    let params = params
+        .with_n_outputs_max(128)
+        .with_n_outputs_max_per_seq(16);
+    assert_eq!(params.n_outputs_max_per_seq(), 16);
+    assert_eq!(
+        params.n_outputs_max(),
+        128,
+        "per-seq cap must not clobber the per-ubatch cap"
+    );
 }
 
 #[test]

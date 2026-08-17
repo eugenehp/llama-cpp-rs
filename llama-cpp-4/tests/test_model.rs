@@ -4,6 +4,10 @@
 //! or run [`scripts/fetch-test-model.sh`](../../scripts/fetch-test-model.sh) for the default tiny
 //! checkpoint. If neither is available, a vocab-only GGUF from the build directory is used.
 
+// llama.cpp indexes batch positions with `i32` while Rust collections use
+// `usize`; the checkpoints under test are tiny, so these casts cannot overflow.
+#![allow(clippy::cast_sign_loss)]
+
 mod support;
 
 use llama_cpp_4::llama_backend::LlamaBackend;
@@ -495,7 +499,7 @@ fn test_context_creation() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let ctx = model.new_context(&backend, ctx_params);
+    let ctx = model.new_context(backend, ctx_params);
     assert!(ctx.is_ok(), "should create context");
 }
 
@@ -510,7 +514,7 @@ fn test_context_properties() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let ctx = model.new_context(&backend, ctx_params).unwrap();
+    let ctx = model.new_context(backend, ctx_params).unwrap();
 
     assert!(ctx.n_ctx() > 0);
     assert!(ctx.n_ctx_seq() > 0);
@@ -532,7 +536,7 @@ fn test_context_thread_control() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
 
     ctx.set_n_threads(2, 2);
     assert_eq!(ctx.n_threads(), 2);
@@ -551,7 +555,7 @@ fn test_context_memory_breakdown() {
     }
     let ctx = model
         .new_context(
-            &backend,
+            backend,
             llama_cpp_4::context::params::LlamaContextParams::default(),
         )
         .unwrap();
@@ -590,7 +594,7 @@ fn test_context_set_causal_attn() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
     ctx.set_causal_attn(true);
     ctx.set_causal_attn(false);
 }
@@ -605,7 +609,7 @@ fn test_context_set_embeddings() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
     ctx.set_embeddings(true);
     ctx.set_embeddings(false);
 }
@@ -620,7 +624,7 @@ fn test_context_synchronize() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
     ctx.synchronize();
 }
 
@@ -634,7 +638,7 @@ fn test_context_memory() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let ctx = model.new_context(&backend, ctx_params).unwrap();
+    let ctx = model.new_context(backend, ctx_params).unwrap();
     let _ = ctx.memory_can_shift();
     let _ = ctx.memory_seq_pos_min(0);
 }
@@ -649,7 +653,7 @@ fn test_context_state_size() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
     let size = ctx.state_get_size();
     assert!(size > 0, "state size should be > 0");
     let seq_size = ctx.state_seq_get_size(0);
@@ -666,7 +670,7 @@ fn test_context_state_save_restore() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
 
     let size = ctx.state_get_size();
     let mut buf = vec![0u8; size];
@@ -687,7 +691,7 @@ fn test_context_perf_reset() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let mut ctx = model.new_context(&backend, ctx_params).unwrap();
+    let mut ctx = model.new_context(backend, ctx_params).unwrap();
     ctx.perf_context_reset();
 }
 
@@ -701,7 +705,7 @@ fn test_context_get_model_ptr() {
         return;
     }
     let ctx_params = llama_cpp_4::context::params::LlamaContextParams::default();
-    let ctx = model.new_context(&backend, ctx_params).unwrap();
+    let ctx = model.new_context(backend, ctx_params).unwrap();
     let ptr = ctx.get_model_ptr();
     assert!(!ptr.is_null());
 }
@@ -729,4 +733,28 @@ fn test_grammar_sampler() {
     let sampler =
         llama_cpp_4::sampling::LlamaSampler::grammar(&model, "root ::= \"hello\"", "root");
     assert_eq!(sampler.name(), "grammar");
+}
+
+/// llama.cpp `b10470` dropped `n_ctx_train` from `llama_sampler_init_dry`, so
+/// `LlamaSampler::dry` lost that parameter. Build one against a real vocab to
+/// pin the surviving argument order — every remaining numeric argument is a
+/// different quantity, and a silent reordering would only misbehave at sample
+/// time.
+#[test]
+fn test_dry_sampler() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    // `dry` takes `&self`, so it is reached through an existing sampler.
+    let seed = llama_cpp_4::sampling::LlamaSampler::greedy();
+    let sampler = seed.dry(
+        &model,
+        /* multiplier */ 0.8,
+        /* base */ 1.75,
+        /* allowed_length */ 2,
+        /* penalty_last_n */ 64,
+        ["\n", ":"],
+    );
+    assert_eq!(sampler.name(), "dry");
 }

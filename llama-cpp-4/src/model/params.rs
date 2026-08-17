@@ -10,12 +10,16 @@ pub mod kv_overrides;
 
 /// Exact model-file loading strategy exposed by llama.cpp.
 ///
-/// The `llama_load_mode` constants are `u32` under the Itanium ABI (Linux/macOS)
-/// but `i32` under MSVC, so each discriminant uses `as _` to coerce to the
-/// `#[repr(u32)]` type on every target (matching [`token_type`](crate::token_type)).
+/// `llama_load_mode` is a signed enum on every target because of the negative
+/// `LLAMA_LOAD_MODE_AUTO` discriminant, so each variant uses `as _` to coerce to
+/// the `#[repr(i32)]` type (matching [`token_type`](crate::token_type)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
+#[repr(i32)]
 pub enum LlamaLoadMode {
+    /// Pick the strategy from the backend devices' capabilities: memory-map when
+    /// every device supports it, otherwise fall back to a plain read. This is
+    /// llama.cpp's default.
+    Auto = llama_cpp_sys_4::LLAMA_LOAD_MODE_AUTO as _,
     /// No memory mapping, locking, or direct I/O.
     None = llama_cpp_sys_4::LLAMA_LOAD_MODE_NONE as _,
     /// Memory-map model files when supported.
@@ -150,6 +154,7 @@ impl LlamaModelParams {
     #[must_use]
     pub fn load_mode(&self) -> LlamaLoadMode {
         match self.params.load_mode {
+            llama_cpp_sys_4::LLAMA_LOAD_MODE_AUTO => LlamaLoadMode::Auto,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP => LlamaLoadMode::Mmap,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MLOCK => LlamaLoadMode::Mlock,
             llama_cpp_sys_4::LLAMA_LOAD_MODE_MMAP_MLOCK => LlamaLoadMode::MmapMlock,
@@ -170,11 +175,15 @@ impl LlamaModelParams {
     }
 
     /// use mmap if possible
+    ///
+    /// [`LlamaLoadMode::Auto`] counts as "possible": llama.cpp memory-maps under
+    /// `Auto` unless one of the backend devices lacks mmap support, which is only
+    /// known once the model is loaded.
     #[must_use]
     pub fn use_mmap(&self) -> bool {
         matches!(
             self.load_mode(),
-            LlamaLoadMode::Mmap | LlamaLoadMode::MmapMlock
+            LlamaLoadMode::Auto | LlamaLoadMode::Mmap | LlamaLoadMode::MmapMlock
         )
     }
 

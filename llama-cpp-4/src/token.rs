@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn test_llama_token_display() {
         let token = LlamaToken::new(99);
-        assert_eq!(format!("{}", token), "99"); // Verify that the token formats correctly
+        assert_eq!(format!("{token}"), "99"); // Verify that the token formats correctly
     }
 
     #[test]
@@ -146,10 +146,7 @@ mod tests {
         let _vec_sys = to_vec_token_sys(vec_llama);
         let duration = start.elapsed();
 
-        println!(
-            "Time taken to convert Vec<LlamaToken> to Vec<llama_token>: {:?}",
-            duration
-        );
+        println!("Time taken to convert Vec<LlamaToken> to Vec<llama_token>: {duration:?}");
 
         // Here we can assert that the conversion took a reasonable amount of time.
         // This threshold is arbitrary and can be adjusted according to expected performance.

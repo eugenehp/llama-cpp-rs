@@ -91,41 +91,37 @@ fn bench_callback_write_path(c: &mut Criterion) {
     let mut group = c.benchmark_group("callback_write_path");
     for elements in ELEMENT_COUNTS {
         group.throughput(Throughput::Elements(elements as u64));
-        group.bench_with_input(
-            BenchmarkId::from_parameter(elements),
-            &elements,
-            |b, &n| {
-                b.iter(|| {
-                    // (1) fresh scratch allocation — current per-callback behavior
-                    let mut values = vec![0.0_f32; n];
-                    // (2) pre-handler finiteness validation
-                    black_box(values.iter().all(|v| v.is_finite()));
-                    // (3) rollback copy taken because the selector retains
-                    let _original = values.clone();
-                    // (4) handler dispatch (real trait-object call)
-                    let shape = TensorShape {
-                        row_elements: n,
-                        rows: 1,
-                        elements: n,
-                    };
-                    let writeback = handler
-                        .apply(TensorTransaction {
-                            name: "l_out-0000",
-                            shape,
-                            rows: &rows,
-                            access: TensorAccess::ReadWriteF32,
-                            data: TensorDataMut::F32(&mut values),
-                        })
-                        .expect("handler ok");
-                    // (5) post-commit finiteness validation
-                    if matches!(writeback, TensorWriteback::Commit) {
-                        let ok = values.iter().all(|v| v.is_finite());
-                        black_box(ok);
-                    }
-                    black_box(&values);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(elements), &elements, |b, &n| {
+            b.iter(|| {
+                // (1) fresh scratch allocation — current per-callback behavior
+                let mut values = vec![0.0_f32; n];
+                // (2) pre-handler finiteness validation
+                black_box(values.iter().all(|v| v.is_finite()));
+                // (3) rollback copy taken because the selector retains
+                let _original = values.clone();
+                // (4) handler dispatch (real trait-object call)
+                let shape = TensorShape {
+                    row_elements: n,
+                    rows: 1,
+                    elements: n,
+                };
+                let writeback = handler
+                    .apply(TensorTransaction {
+                        name: "l_out-0000",
+                        shape,
+                        rows: &rows,
+                        access: TensorAccess::ReadWriteF32,
+                        data: TensorDataMut::F32(&mut values),
+                    })
+                    .expect("handler ok");
+                // (5) post-commit finiteness validation
+                if matches!(writeback, TensorWriteback::Commit) {
+                    let ok = values.iter().all(|v| v.is_finite());
+                    black_box(ok);
+                }
+                black_box(&values);
+            });
+        });
     }
     group.finish();
 }

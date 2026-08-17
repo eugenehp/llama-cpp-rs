@@ -327,8 +327,7 @@ impl ModelSource {
         match self {
             ModelSource::Local { path } => Ok(path),
             ModelSource::HuggingFace { repo, model } => {
-                let api = HFClientSync::new()
-                    .context("failed to build HF API client")?;
+                let api = HFClientSync::new().context("failed to build HF API client")?;
                 resolve_hf(&api, &repo, model)
             }
         }
