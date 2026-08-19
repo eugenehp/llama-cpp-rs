@@ -190,6 +190,9 @@ pub use crate::fit::{
 // ── Speculative decoding ────────────────────────────────────────────────────
 
 pub use crate::eagle::{Eagle3Session, Eagle3SessionConfig};
+
+#[cfg(feature = "dflash2")]
+pub use crate::eagle::DFlashSession;
 pub use crate::mtp::{MtpSession, MtpSessionConfig};
 
 // ── Multimodal (feature `mtmd`) ─────────────────────────────────────────────

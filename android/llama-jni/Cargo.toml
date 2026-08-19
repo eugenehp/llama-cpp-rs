@@ -1,6 +1,6 @@
 [package]
 name = "llama-jni"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Android JNI bridge + arm64 smoke test for llama-cpp-4"

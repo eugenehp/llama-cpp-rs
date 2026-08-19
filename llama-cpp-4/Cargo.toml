@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-4"
 description = "llama.cpp bindings for Rust"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 authors = ["Eugene Hauptmann"]
@@ -11,7 +11,7 @@ categories = ["api-bindings", "science"]
 
 [dependencies]
 enumflags2 = "0.7.12"
-llama-cpp-sys-4 = { path = "../llama-cpp-sys-4", version = "0.6.0" }
+llama-cpp-sys-4 = { path = "../llama-cpp-sys-4", version = "0.6.1" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -36,6 +36,9 @@ mtmd = ["llama-cpp-sys-4/mtmd"]
 ggml = []
 q1 = ["llama-cpp-sys-4/q1"]
 prebuilt = ["llama-cpp-sys-4/prebuilt"]
+# DFlash2 speculative decoding (unmerged upstream PR #27342). Gates both the
+# vendored patch and the Rust API that selects a DFlash draft.
+dflash2 = ["llama-cpp-sys-4/dflash2"]
 
 
 

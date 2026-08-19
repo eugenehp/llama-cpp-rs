@@ -193,6 +193,45 @@ fn test_sampler_clone() {
     assert_eq!(original.name(), cloned.name());
 }
 
+/// `copy_state_from` rewinds a sampler in place instead of allocating a new
+/// one. Uses a penalties sampler because it carries observable state: the token
+/// history it penalizes.
+#[test]
+fn test_sampler_copy_state_restores_history() {
+    let n_vocab = 4;
+    let make = || LlamaSampler::chain_simple([LlamaSampler::penalties(n_vocab, 64, 2.0, 0.0, 0.0)]);
+    let logits = || {
+        LlamaTokenDataArray::from_iter(
+            (0..n_vocab).map(|id| LlamaTokenData::new(LlamaToken(id), 1.0, 0.0)),
+            false,
+        )
+    };
+
+    // A pristine checkpoint, and a sampler that has seen token 0 repeatedly.
+    let pristine = make();
+    let mut advanced = make();
+    for _ in 0..3 {
+        advanced.accept(LlamaToken(0));
+    }
+
+    let mut penalized = logits();
+    advanced.apply(&mut penalized);
+    assert!(
+        penalized.data[0].logit() < penalized.data[1].logit(),
+        "precondition: the advanced sampler penalizes the repeated token"
+    );
+
+    // Rewinding to the pristine state must drop that history.
+    advanced.copy_state_from(&pristine);
+    let mut after_restore = logits();
+    advanced.apply(&mut after_restore);
+    assert_eq!(
+        after_restore.data[0].logit(),
+        after_restore.data[1].logit(),
+        "after copy_state_from the accepted history should be gone"
+    );
+}
+
 #[test]
 fn test_sampler_reset() {
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);

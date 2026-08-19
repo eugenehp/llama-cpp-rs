@@ -8,15 +8,15 @@ use std::ptr::NonNull;
 use llama_cpp_sys_4::{
     common::common_sampler_params, llama_logit_bias, llama_sampler, llama_sampler_accept,
     llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init,
-    llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_free,
-    llama_sampler_get_seed, llama_sampler_init_adaptive_p, llama_sampler_init_dist,
-    llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy_patterns,
-    llama_sampler_init_greedy, llama_sampler_init_infill, llama_sampler_init_logit_bias,
-    llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2,
-    llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext,
-    llama_sampler_init_top_k, llama_sampler_init_top_n_sigma, llama_sampler_init_top_p,
-    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_name, llama_sampler_reset,
-    llama_sampler_sample,
+    llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_copy,
+    llama_sampler_free, llama_sampler_get_seed, llama_sampler_init_adaptive_p,
+    llama_sampler_init_dist, llama_sampler_init_dry, llama_sampler_init_grammar,
+    llama_sampler_init_grammar_lazy_patterns, llama_sampler_init_greedy, llama_sampler_init_infill,
+    llama_sampler_init_logit_bias, llama_sampler_init_min_p, llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
+    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_n_sigma,
+    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
+    llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
 };
 
 use crate::context::LlamaContext;
@@ -789,6 +789,25 @@ impl LlamaSampler {
         Self {
             sampler: NonNull::new(sampler).expect("sampler_clone returned null"),
         }
+    }
+
+    /// Copy mutable state from `src` into this sampler, in place.
+    ///
+    /// Unlike [`Self::clone_sampler`], which allocates a new sampler, this
+    /// overwrites the state of an existing one and so is the cheap way to
+    /// rewind a sampler to a checkpoint in a loop. Added upstream in
+    /// llama.cpp `b10470` (`llama_sampler_copy`).
+    ///
+    /// # Safety and preconditions
+    ///
+    /// llama.cpp requires `src` and `self` to be **the same sampler type with
+    /// the same configuration** — e.g. two `dist` samplers, or two chains built
+    /// the same way. Copying between mismatched samplers is undefined
+    /// behaviour upstream and is not checked here, so treat the pairing as the
+    /// caller's contract. A sampler produced by `src.clone_sampler()` always
+    /// satisfies it.
+    pub fn copy_state_from(&mut self, src: &Self) {
+        unsafe { llama_sampler_copy(src.sampler.as_ptr(), self.sampler.as_ptr()) }
     }
 
     /// Print sampler performance data.

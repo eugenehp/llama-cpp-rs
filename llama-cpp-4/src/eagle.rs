@@ -203,13 +203,32 @@ impl Eagle3SessionConfig {
     }
 }
 
-/// Owned EAGLE-3 draft session.
+/// A `DFlash` draft session.
+///
+/// An alias for [`Eagle3Session`], which implements both backends: from the
+/// shim's perspective `DFlash` and EAGLE-3 are the same protocol — a separate
+/// draft model behind a `Default` context — so only construction differs.
+/// Build one with [`Eagle3Session::new_dflash`] or
+/// [`Eagle3Session::new_dflash_with_config`].
+///
+/// `DFlash2` checkpoints are detected from GGUF metadata and need no extra
+/// flag, but running them requires the `dflash2` build feature, which vendors
+/// the unmerged upstream PR #27342.
+#[cfg(feature = "dflash2")]
+pub type DFlashSession<'ctx, 'target_model, 'draft_model> =
+    Eagle3Session<'ctx, 'target_model, 'draft_model>;
+
+/// Owned separate-draft-model speculative session (EAGLE-3 or `DFlash`).
 ///
 /// Drops the underlying speculative context when freed.
 ///
 /// Both contexts are exclusively borrowed for the session lifetime. The
 /// wrapper retains no manually enforced lifetime and is neither `Send` nor
 /// `Sync`.
+///
+/// With the `dflash2` feature this same type also drives `DFlash` drafts via
+/// `new_dflash` (aliased as `DFlashSession`). The two backends share one type
+/// because the drafting protocol is identical; only construction differs.
 pub struct Eagle3Session<'ctx, 'target_model, 'draft_model> {
     raw: NonNull<llama_cpp_sys_4::mtp_session>,
     config: Eagle3SessionConfig,
@@ -254,21 +273,92 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
         draft: &'ctx mut LlamaContext<'draft_model>,
         config: Eagle3SessionConfig,
     ) -> Result<Self, Eagle3SessionError> {
+        // Config is checked before the contexts so an invalid config reports
+        // `InvalidConfig` rather than an incidental context mismatch.
         validate_config(config.n_seq, config.n_draft_max, config.n_min, config.p_min)
             .map_err(Eagle3SessionError::InvalidConfig)?;
         validate_contexts(target, draft, config)?;
-        let sequence_slots = usize::try_from(config.n_seq)
-            .map_err(|_| Eagle3SessionError::InvalidConfig("n_seq exceeds usize"))?;
-
         // `MTP_SPEC_TYPE_*` is `c_uint` under clang/gcc and `c_int` under MSVC;
         // `as i32` compiles on both. The allow covers the clang/gcc case.
         #[allow(clippy::cast_possible_wrap)]
+        let spec_type = llama_cpp_sys_4::MTP_SPEC_TYPE_EAGLE3 as i32;
+        Self::new_validated(target, draft, config, spec_type)
+    }
+
+    /// Construct a **`DFlash`** draft session (upstream `draft-dflash`).
+    ///
+    /// `target` must be a
+    /// [`LlamaContextType::Default`](crate::context::params::LlamaContextType::Default)
+    /// context over the main model, and `draft` a `Default` context over a
+    /// **separate `DFlash` draft model**. `DFlash2` checkpoints — which additionally
+    /// carry the grouped dynamic convolution and candidate-selector tensors —
+    /// are detected from the checkpoint's GGUF metadata and use this same
+    /// constructor; no extra flag is required.
+    ///
+    /// Unlike [`Self::new_with_config`], the draft model is *not* required to
+    /// name three target extraction sites — `DFlash` drafts have none.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Eagle3SessionError::Init`] (e.g. the draft model is not a valid
+    /// `DFlash` model), [`Eagle3SessionError::InvalidConfig`], or
+    /// [`Eagle3SessionError::IncompatibleContexts`].
+    #[cfg(feature = "dflash2")]
+    pub fn new_dflash_with_config(
+        target: &'ctx mut LlamaContext<'target_model>,
+        draft: &'ctx mut LlamaContext<'draft_model>,
+        config: Eagle3SessionConfig,
+    ) -> Result<Self, Eagle3SessionError> {
+        validate_config(config.n_seq, config.n_draft_max, config.n_min, config.p_min)
+            .map_err(Eagle3SessionError::InvalidConfig)?;
+        validate_contexts_common(target, draft, config)?;
+        #[allow(clippy::cast_possible_wrap)]
+        let spec_type = llama_cpp_sys_4::MTP_SPEC_TYPE_DFLASH as i32;
+        Self::new_validated(target, draft, config, spec_type)
+    }
+
+    /// Construct a `DFlash` draft session with upstream-aligned defaults.
+    ///
+    /// Shorthand for [`Self::new_dflash_with_config`] with
+    /// [`Eagle3SessionConfig::new`].
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::new_dflash_with_config`].
+    #[cfg(feature = "dflash2")]
+    pub fn new_dflash(
+        target: &'ctx mut LlamaContext<'target_model>,
+        draft: &'ctx mut LlamaContext<'draft_model>,
+        n_seq: u32,
+        n_draft_max: i32,
+    ) -> Result<Self, Eagle3SessionError> {
+        Self::new_dflash_with_config(target, draft, Eagle3SessionConfig::new(n_seq, n_draft_max))
+    }
+
+    /// Construct a session over already-validated contexts, selecting the
+    /// speculative backend with `spec_type` (an `MTP_SPEC_TYPE_*` value).
+    ///
+    /// EAGLE-3 and `DFlash` share this path because, from the shim's perspective,
+    /// they are the same protocol: a separate draft model behind a `Default`
+    /// context, driven by the same `mtp_session_*` calls. Only the spec type and
+    /// the draft-model validation differ.
+    fn new_validated(
+        target: &'ctx mut LlamaContext<'target_model>,
+        draft: &'ctx mut LlamaContext<'draft_model>,
+        config: Eagle3SessionConfig,
+        spec_type: i32,
+    ) -> Result<Self, Eagle3SessionError> {
+        validate_config(config.n_seq, config.n_draft_max, config.n_min, config.p_min)
+            .map_err(Eagle3SessionError::InvalidConfig)?;
+        let sequence_slots = usize::try_from(config.n_seq)
+            .map_err(|_| Eagle3SessionError::InvalidConfig("n_seq exceeds usize"))?;
+
         let c_config = llama_cpp_sys_4::mtp_session_config {
             n_seq: config.n_seq,
             n_draft_max: config.n_draft_max,
             n_min: config.n_min,
             p_min: config.p_min,
-            spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_EAGLE3 as i32,
+            spec_type,
         };
 
         let raw = unsafe {
@@ -675,6 +765,39 @@ fn validate_contexts(
     draft: &LlamaContext<'_>,
     config: Eagle3SessionConfig,
 ) -> Result<(), Eagle3SessionError> {
+    validate_contexts_common(target, draft, config)?;
+
+    // EAGLE-3 only: the draft model must name the three target layers it
+    // extracts hidden states from. Other separate-draft backends (DFlash) carry
+    // no such sites, so this check is not part of the shared validation.
+    let target_layers = target.model.n_layer();
+    let target_architecture = target
+        .model
+        .meta_val_str("general.architecture", 64)
+        .map_err(|_| {
+            Eagle3SessionError::IncompatibleContexts(
+                "target model architecture metadata is unavailable",
+            )
+        })?;
+    if !valid_target_layer_ids(
+        draft.model.target_layer_ids(),
+        target_layers,
+        target_architecture == "gpt-oss",
+    ) {
+        return Err(Eagle3SessionError::IncompatibleContexts(
+            "draft must name exactly three supported target extraction sites",
+        ));
+    }
+    Ok(())
+}
+
+/// Validation shared by every separate-draft-model speculative backend
+/// (EAGLE-3, `DFlash`): context types, sequence capacity, and batch capacity.
+fn validate_contexts_common(
+    target: &LlamaContext<'_>,
+    draft: &LlamaContext<'_>,
+    config: Eagle3SessionConfig,
+) -> Result<(), Eagle3SessionError> {
     if target.context_type() != LlamaContextType::Default
         || draft.context_type() != LlamaContextType::Default
     {
@@ -705,24 +828,6 @@ fn validate_contexts(
         required_draft,
     )
     .map_err(Eagle3SessionError::IncompatibleContexts)?;
-    let target_layers = target.model.n_layer();
-    let target_architecture = target
-        .model
-        .meta_val_str("general.architecture", 64)
-        .map_err(|_| {
-            Eagle3SessionError::IncompatibleContexts(
-                "target model architecture metadata is unavailable",
-            )
-        })?;
-    if !valid_target_layer_ids(
-        draft.model.target_layer_ids(),
-        target_layers,
-        target_architecture == "gpt-oss",
-    ) {
-        return Err(Eagle3SessionError::IncompatibleContexts(
-            "draft must name exactly three supported target extraction sites",
-        ));
-    }
     Ok(())
 }
 
@@ -764,5 +869,27 @@ mod tests {
         assert!(!valid_target_layer_ids(&[1, 4, 8], 8, false));
         assert!(valid_target_layer_ids(&[1, 4, 8], 8, true));
         assert!(!valid_target_layer_ids(&[1, 4, 9], 8, true));
+    }
+
+    /// The shim dispatches on this value, so a collision with an existing spec
+    /// type would silently select the wrong speculative backend.
+    #[cfg(feature = "dflash2")]
+    #[test]
+    fn dflash_spec_type_is_distinct() {
+        use llama_cpp_sys_4::{MTP_SPEC_TYPE_DFLASH, MTP_SPEC_TYPE_EAGLE3, MTP_SPEC_TYPE_MTP};
+        assert_ne!(MTP_SPEC_TYPE_DFLASH, MTP_SPEC_TYPE_MTP);
+        assert_ne!(MTP_SPEC_TYPE_DFLASH, MTP_SPEC_TYPE_EAGLE3);
+        // Pinned: the value is ABI, consumed by the C shim's switch.
+        assert_eq!(MTP_SPEC_TYPE_DFLASH, 2);
+    }
+
+    /// Compile-time guard that the feature-gated surface is actually reachable
+    /// under `--features dflash2` (the alias and both constructors resolve).
+    #[cfg(feature = "dflash2")]
+    #[test]
+    fn dflash_api_surface_is_exposed() {
+        let _alias: Option<super::DFlashSession<'_, '_, '_>> = None;
+        let _with_config = super::Eagle3Session::new_dflash_with_config;
+        let _shorthand = super::Eagle3Session::new_dflash;
     }
 }

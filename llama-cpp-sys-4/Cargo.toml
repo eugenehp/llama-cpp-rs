@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
@@ -146,6 +146,9 @@ rpc = []
 mtmd = []
 q1 = []
 prebuilt = []
+# DFlash2 speculative decoding, vendored from the unmerged upstream PR #27342.
+# Applies patches/0006-dflash2.patch; see the README before enabling.
+dflash2 = []
 
 # By default, static libraries are built
 # Enable dynamic-link feature to build shared libraries instead

@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** `34af94cd9 (b10470 / v0.1.1)` · **Crate version:** 0.6.0
+**llama.cpp version:** `0adcc3bb5 (b10502, incl. v0.1.2)` · **Crate version:** 0.6.1
 
 ---
 
@@ -15,12 +15,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.6.0"
+llama-cpp-4 = "0.6.1"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.6.0", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.6.0", features = ["metal"] }
-# llama-cpp-4 = { version = "0.6.0", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.6.1", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.6.1", features = ["metal"] }
+# llama-cpp-4 = { version = "0.6.1", features = ["vulkan"] }
 ```
 
 ---
@@ -66,6 +66,7 @@ See [`prelude`](src/prelude.rs) on docs.rs for runnable examples (generation, ch
 | `vulkan` | | Cross-platform GPU via Vulkan |
 | `native` | | CPU auto-tune for current arch (AVX2, NEON, …) |
 | `rpc` | | Remote compute backend |
+| `dflash2` | | DFlash2 speculative decoding — vendors the unmerged upstream [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342); enables `Eagle3Session::new_dflash` |
 
 ---
 

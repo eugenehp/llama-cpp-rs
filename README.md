@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `34af94cd9 (b10470 / v0.1.1)` (Aug 2026) — includes
+**llama.cpp version:** `0adcc3bb5 (b10502, incl. v0.1.2)` (Aug 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
 [DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and
@@ -23,7 +23,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.6.0"
+llama-cpp-4 = "0.6.1"
 ```
 
 Import the common types with the prelude:
@@ -172,7 +172,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.6.0`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.6.1`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -715,6 +715,7 @@ ctx.decode(&mut batch)?;
 | `openmp` | Multi-core CPU (default on) | `--features openmp` |
 | `rpc` | Remote compute backend | `--features rpc` |
 | `prebuilt` | All (build optimization) | `--features prebuilt` |
+| `dflash2` | DFlash2 speculative decoding — vendors the **unmerged** upstream [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) | `--features dflash2` |
 
 ```bash
 # Metal (macOS)
@@ -765,7 +766,7 @@ running the binary directly fails with `libggml-base.so.0: cannot open shared
 object file`. To sidestep runtime lookup entirely, link statically instead:
 
 ```toml
-llama-cpp-4 = { version = "0.6.0", default-features = false }
+llama-cpp-4 = { version = "0.6.1", default-features = false }
 ```
 
 ---
@@ -899,7 +900,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.6.0},
+  version   = {0.6.1},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

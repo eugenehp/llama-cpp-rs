@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `34af94cd9 (b10470 / v0.1.1)` · **Crate version:** 0.6.0
+**llama.cpp version:** `0adcc3bb5 (b10502, incl. v0.1.2)` · **Crate version:** 0.6.1
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -41,6 +41,35 @@ use llama_cpp_4::prelude::*;
 | `rpc` | Remote compute backend |
 | `dynamic-link` | Link against a pre-installed shared `libllama` instead of building from source |
 | `prebuilt` | Request a compatible precompiled build when one can be verified (see below) |
+| `dflash2` | DFlash2 speculative decoding — vendors the **unmerged** upstream PR [#27342](https://github.com/ggml-org/llama.cpp/pull/27342) (see below) |
+
+---
+
+## `dflash2` — vendored pre-merge patch
+
+`--features dflash2` applies `patches/0006-dflash2.patch`, cut from upstream PR
+[#27342](https://github.com/ggml-org/llama.cpp/pull/27342), which adds DFlash2
+drafting (grouped dynamic depthwise convolution + candidate selector). It is
+opt-in and off by default because that PR **has not been merged upstream**.
+
+What that means in practice:
+
+- The patch adds new GGUF KV keys (`dflash.conv_kernel_size`,
+  `dflash.selector_rank`, …) and tensors under the existing `LLM_ARCH_DFLASH`
+  architecture. With the feature on, this build recognises DFlash2 checkpoints
+  that stock llama.cpp releases do not.
+- Only the C++ needed by the library is vendored — `common/` and `src/`. The
+  PR's Python side (`gguf-py/`, `conversion/qwen.py`) is **not** included, so
+  this crate can *run* a DFlash2 checkpoint but cannot *convert* one; use the
+  PR branch's `convert_hf_to_gguf.py` for that.
+- The patch is staged after `0003`–`0005`, which also touch
+  `common/speculative.cpp`.
+- Upstream may change the PR before it merges. When it does merge, this patch
+  should be dropped and the feature turned into a no-op or removed.
+
+DFlash2 checkpoints are detected from GGUF metadata, so no separate speculative
+type is needed — select a DFlash draft via `Eagle3Session::new_dflash` in
+`llama-cpp-4`.
 
 ---
 
@@ -61,7 +90,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.6.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.6.1/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 

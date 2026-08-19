@@ -2,7 +2,59 @@
 
 ## Unreleased
 
-## [0.6.0] - 2026-08-17
+## [0.6.1] - 2026-08-19
+
+### Added
+
+- **`dflash2` feature (opt-in, off by default): DFlash2 speculative decoding**,
+  vendored from the **unmerged** upstream PR
+  [#27342](https://github.com/ggml-org/llama.cpp/pull/27342) as
+  `patches/0006-dflash2.patch`. Enabling it stages that patch after `0003`–`0005`
+  (which also touch `common/speculative.cpp`) and unlocks the Rust entry points.
+  Caveats, since this is pre-merge upstream code:
+  - Only the C++ the library needs is vendored — `common/` and `src/` (13 of the
+    PR's 20 files). The Python side (`gguf-py/`, `conversion/qwen.py`) is
+    deliberately excluded because it is not part of the published crate, so this
+    build can **run** a DFlash2 checkpoint but not **convert** one.
+  - The patch adds GGUF KV keys and tensors under the existing `LLM_ARCH_DFLASH`
+    architecture, so a `dflash2` build recognises checkpoints that stock
+    llama.cpp releases do not.
+  - Upstream may still change the PR. When it merges, drop the patch and retire
+    the feature.
+- **`Eagle3Session::new_dflash()` / `new_dflash_with_config()`** and the
+  `DFlashSession` alias (both behind `dflash2`), plus `MTP_SPEC_TYPE_DFLASH` in
+  the shim mapping to `COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH`. DFlash reuses the
+  EAGLE-3 session type because the drafting protocol is identical through the
+  shim — only construction differs — so this adds two constructors rather than
+  duplicating a 768-line session. DFlash2 checkpoints are detected from GGUF
+  metadata and need no distinct speculative type.
+- Context validation split into a shared `validate_contexts_common` (context
+  types, sequence and batch capacity) and the EAGLE-3-only requirement that the
+  draft model name exactly three target-extraction sites — which DFlash drafts
+  do not have, and which would otherwise reject every DFlash draft model.
+- **`LlamaSampler::copy_state_from()`**, wrapping `llama_sampler_copy` (added
+  upstream in `b10470`). Where `clone_sampler` allocates, this overwrites an
+  existing sampler's state in place — the cheap way to rewind to a checkpoint in
+  a loop. Upstream requires both samplers to be the same type and configuration;
+  that is the caller's contract and is documented rather than checked.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `0adcc3bb5` (tag `b10502`) from
+  `34af94cd9` (`b10470`), 32 upstream commits. This includes release `v0.1.2`
+  (`1511ce3bc`) plus 17 later commits — notably RPC `use_count` population to
+  enable backend fusion ([#27142](https://github.com/ggml-org/llama.cpp/pull/27142)),
+  shared thread pools when `n_threads` differ
+  ([#27138](https://github.com/ggml-org/llama.cpp/pull/27138)), per-layer weight
+  eviction to cut quantization memory
+  ([#22877](https://github.com/ggml-org/llama.cpp/pull/22877)), and mtmd fixes
+  for DeepSeek-OCR and LFM2 tiling.
+- No public API changed: `llama.h`, `common/speculative.h`, and `common/common.h`
+  are byte-identical across the bump. The only header changes are the RPC
+  protocol minor version (`5.0.0` → `5.1.0`), a new additive
+  `mtmd_input_chunk_get_placeholder()`, and a comment noting `mtmd_helper`
+  bitmap IDs are now SHA-256 rather than FNV. Patches `0003`–`0005` apply
+  unchanged.
 
 ### Changed
 

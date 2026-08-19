@@ -31,6 +31,13 @@ enum mtp_spec_type {
     // EAGLE-3. `ctx_dft` is built from a *separate* EAGLE-3 draft model (one
     // exposing 3 target-extract layers), with `LLAMA_CONTEXT_TYPE_DEFAULT`.
     MTP_SPEC_TYPE_EAGLE3 = 1,
+    // DFlash block-diffusion drafting. `ctx_dft` is built from a *separate*
+    // DFlash draft model, with `LLAMA_CONTEXT_TYPE_DEFAULT`. DFlash2
+    // checkpoints — which additionally carry the grouped dynamic convolution
+    // and candidate-selector tensors — select the same type and are detected
+    // from the checkpoint's GGUF metadata, so no distinct value is needed.
+    // Requires the `dflash2` build feature for DFlash2 checkpoints.
+    MTP_SPEC_TYPE_DFLASH = 2,
 };
 
 // Result of a versioned speculative-state operation.

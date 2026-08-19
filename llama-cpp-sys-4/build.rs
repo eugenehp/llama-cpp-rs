@@ -491,6 +491,23 @@ fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
         }
     }
 
+    // DFlash2 speculative decoding, vendored from the (still unmerged) upstream
+    // PR #27342. Opt-in because it is a pre-merge feature carrying new GGUF KV
+    // keys and tensors: with it applied the build recognises DFlash2 checkpoints
+    // that stock llama.cpp releases do not. Staged last so it lands on top of
+    // the exact-state patches, which also touch common/speculative.cpp.
+    if cfg!(feature = "dflash2") {
+        let name = "0006-dflash2.patch";
+        let source = patches_dir.join(name);
+        assert!(
+            source.is_file(),
+            "the `dflash2` feature is enabled but its patch is absent: {}",
+            source.display()
+        );
+        std::fs::copy(&source, staged_dir.join(name))
+            .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
+    }
+
     true
 }
 

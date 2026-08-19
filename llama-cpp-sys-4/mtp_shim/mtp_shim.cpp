@@ -148,6 +148,7 @@ extern "C" mtp_session * mtp_session_new(
         switch (config->spec_type) {
             case MTP_SPEC_TYPE_MTP:    spec_type = COMMON_SPECULATIVE_TYPE_DRAFT_MTP;    break;
             case MTP_SPEC_TYPE_EAGLE3: spec_type = COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3; break;
+            case MTP_SPEC_TYPE_DFLASH: spec_type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH; break;
             default:                   return nullptr; // unknown spec_type
         }
 
