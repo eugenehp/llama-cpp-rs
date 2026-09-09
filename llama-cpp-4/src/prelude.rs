@@ -189,9 +189,22 @@ pub use crate::fit::{
 
 // ── Speculative decoding ────────────────────────────────────────────────────
 
+pub use crate::chat::{
+    json_schema_to_grammar, ChatApplyParams, ChatError, ChatParams, ChatTemplates, GrammarTrigger,
+    ReasoningFormat, ToolChoice,
+};
+
+pub use crate::common_sampler::{
+    CommonSampler, CommonSamplerParams, CommonSamplerType, GrammarSource, ReasoningBudget,
+    ReasoningBudgetState,
+};
+
+pub use crate::ngram::{ngram_cache_draft, ngram_simple_draft, NgramCache, NgramMap};
+
+pub use crate::runtime::{speculative_types_from_gguf, SpeculativeType};
+
 pub use crate::eagle::{Eagle3Session, Eagle3SessionConfig};
 
-#[cfg(feature = "dflash2")]
 pub use crate::eagle::DFlashSession;
 pub use crate::mtp::{MtpSession, MtpSessionConfig};
 

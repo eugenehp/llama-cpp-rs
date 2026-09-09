@@ -12,7 +12,8 @@ use llama_cpp_sys_4::{
     llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template,
     llama_chat_builtin_templates, llama_chat_message, llama_detokenize, llama_init_from_model,
     llama_model, llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
-    llama_model_free, llama_model_get_device, llama_model_get_vocab, llama_model_has_decoder,
+    llama_model_chat_template, llama_model_free, llama_model_ftype, llama_model_get_device,
+    llama_model_get_tok_embd, llama_model_get_vocab, llama_model_has_decoder,
     llama_model_has_encoder, llama_model_is_diffusion, llama_model_is_hybrid,
     llama_model_is_recurrent, llama_model_load_from_file, llama_model_load_from_splits,
     llama_model_meta_count, llama_model_meta_key_by_index, llama_model_meta_val_str,
@@ -30,6 +31,7 @@ use crate::context::params::LlamaContextParams;
 use crate::context::LlamaContext;
 use crate::llama_backend::LlamaBackend;
 use crate::model::params::LlamaModelParams;
+use crate::quantize::LlamaFtype;
 use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
@@ -297,6 +299,34 @@ impl LlamaVocab {
     #[must_use]
     pub fn get_add_sep(&self) -> bool {
         unsafe { llama_cpp_sys_4::llama_vocab_get_add_sep(self.vocab.as_ref()) }
+    }
+
+    /// Tokens the model itself declares should never be sampled.
+    ///
+    /// Read from the GGUF key `tokenizer.ggml.suppress_tokens`. Whisper-style
+    /// models use this to bar non-speech tokens; most models declare none and
+    /// this returns an empty slice. Feed the result to
+    /// [`LlamaSampler::logit_bias`](crate::sampling::LlamaSampler::logit_bias)
+    /// with `f32::NEG_INFINITY` to enforce it.
+    ///
+    /// The slice borrows the vocab's own array; it is valid for as long as the
+    /// model is.
+    #[must_use]
+    pub fn suppress_tokens(&self) -> &[LlamaToken] {
+        let mut n: i32 = 0;
+        let ptr = unsafe {
+            llama_cpp_sys_4::llama_vocab_get_suppress_tokens(self.vocab.as_ref(), &raw mut n)
+        };
+        let Ok(n) = usize::try_from(n) else {
+            return &[];
+        };
+        if ptr.is_null() || n == 0 {
+            return &[];
+        }
+        // SAFETY: `LlamaToken` is `#[repr(transparent)]` over `llama_token`, so
+        // the arrays have identical layout. The pointer is owned by the vocab
+        // and outlives `&self`.
+        unsafe { std::slice::from_raw_parts(ptr.cast::<LlamaToken>(), n) }
     }
 
     /// Get the text representation of a token.
@@ -1627,10 +1657,92 @@ impl LlamaModel {
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
 
+    /// Adopt a raw `llama_model *`, taking ownership.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must come from a llama.cpp entry point documented as returning a
+    /// model the caller must release with `llama_model_free`, and must not be
+    /// owned by anything else — [`Drop`] frees it.
+    pub(crate) unsafe fn from_raw(raw: NonNull<llama_model>) -> Self {
+        Self { model: raw }
+    }
+
     /// Get the number of metadata key-value pairs.
     #[must_use]
     pub fn meta_count(&self) -> c_int {
         unsafe { llama_model_meta_count(self.model.as_ptr()) }
+    }
+
+    /// Get a chat template baked into the model, by name.
+    ///
+    /// Pass `None` for the default template (GGUF key `tokenizer.chat_template`),
+    /// or a name to reach a variant — `Some("tool_use")` resolves
+    /// `tokenizer.chat_template.tool_use`, which several models ship alongside
+    /// their default and which is the one you want when the request carries
+    /// tools.
+    ///
+    /// Supersedes the deprecated `get_chat_template`, which reads the default
+    /// key straight out of GGUF metadata into a buffer the caller has to size —
+    /// too small and it fails, too large and it wastes the allocation. This
+    /// borrows a pointer llama.cpp already owns, so neither applies, and it can
+    /// reach the named variants the other cannot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringFromModelError::ReturnedError`] if the model has no such
+    /// template, or [`StringFromModelError::Utf8Error`] if it is not UTF-8.
+    pub fn chat_template(&self, name: Option<&str>) -> Result<&str, StringFromModelError> {
+        let c_name = match name {
+            Some(n) => Some(CString::new(n).map_err(|_| StringFromModelError::ReturnedError(-1))?),
+            None => None,
+        };
+        let name_ptr = c_name.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        let ptr = unsafe { llama_model_chat_template(self.model.as_ptr(), name_ptr) };
+        if ptr.is_null() {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let cstr = unsafe { CStr::from_ptr(ptr) };
+        cstr.to_str().map_err(StringFromModelError::Utf8Error)
+    }
+
+    /// Get the model's file type — the quantization it was stored with.
+    ///
+    /// Returns `None` for a type this crate's [`LlamaFtype`] does not know,
+    /// which is what you get for `LLAMA_FTYPE_GUESSED` (the file did not
+    /// specify one) or a type added upstream since this release.
+    #[must_use]
+    pub fn ftype(&self) -> Option<LlamaFtype> {
+        let raw = unsafe { llama_model_ftype(self.model.as_ptr()) };
+        LlamaFtype::try_from(raw).ok()
+    }
+
+    /// Copy the whole token-embedding matrix out as `f32`, row-major and
+    /// `n_vocab * n_embd` long.
+    ///
+    /// llama.cpp converts from whatever the tensor is stored as, so this
+    /// allocates `4 * n_vocab * n_embd` bytes — 500 MB for a 128k-vocab 1024-dim
+    /// model. Wraps `llama_model_get_tok_embd`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringFromModelError::ReturnedError`] if the model exposes no
+    /// token-embedding tensor.
+    pub fn token_embeddings(&self) -> Result<Vec<f32>, StringFromModelError> {
+        // A null `out` asks for the element count without writing anything.
+        let n = unsafe { llama_model_get_tok_embd(self.model.as_ptr(), std::ptr::null_mut()) };
+        if n == 0 {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        let mut out = vec![0.0_f32; n as usize];
+        let written = unsafe { llama_model_get_tok_embd(self.model.as_ptr(), out.as_mut_ptr()) };
+        if written == 0 {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        // Trust the second call's count over the first: a shrink would otherwise
+        // leave uninitialised-looking zeros on the tail.
+        out.truncate(written as usize);
+        Ok(out)
     }
 
     /// Get a model description string.
@@ -1822,6 +1934,12 @@ impl LlamaModel {
     /// # Ok(())
     /// # }
     /// ```
+    #[deprecated(
+        since = "0.7.0",
+        note = "use `chat_template(None)`, which borrows llama.cpp's own pointer \
+                instead of copying into a caller-sized buffer, and can reach named \
+                variants such as `chat_template(Some(\"tool_use\"))`"
+    )]
     #[allow(clippy::missing_panics_doc)] // We statically know this will not panic as long as the buffer size is sufficient
     pub fn get_chat_template(&self, buf_size: usize) -> Result<String, ChatTemplateError> {
         // longest known template is about 1200 bytes from llama.cpp

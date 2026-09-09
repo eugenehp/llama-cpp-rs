@@ -91,6 +91,23 @@ pub enum MtmdError {
     #[error("encode error: code {0}")]
     EncodeError(i32),
 
+    /// `mtmd_input_chunk_save` returned a non-zero code.
+    #[error("chunk save error: code {0}")]
+    ChunkSaveFailed(i32),
+
+    /// `mtmd_input_chunk_load` returned null — the buffer was not a chunk
+    /// this build can restore.
+    #[error("failed to load an input chunk from the buffer")]
+    ChunkLoadFailed,
+
+    /// A chunk could not be added to a batch.
+    #[error("batch add error: code {0} (2 = batch full, 3 = incompatible with existing chunks)")]
+    BatchAddFailed(i32),
+
+    /// `mtmd_batch_init` returned null.
+    #[error("failed to create an mtmd batch")]
+    BatchCreateFailed,
+
     /// `mtmd_helper_eval_chunks` (or single-chunk variant) returned a non-zero code.
     #[error("eval error: code {0}")]
     EvalError(i32),
@@ -499,15 +516,8 @@ impl MtmdContext {
             .map(|b| b.ptr.as_ptr().cast_const())
             .collect();
 
-        let c_text = sys::mtmd_input_text {
-            // Upstream reads exactly `text_len` bytes from `text`
-            // (llama.cpp #25548), so the prompt is length-delimited and interior
-            // NUL bytes are preserved instead of truncating it.
-            text: text.text.as_ptr().cast(),
-            text_len: text.text_len,
-            add_special: text.add_special,
-            parse_special: text.parse_special,
-        };
+        // Length-delimited (llama.cpp #25548), so interior NULs are preserved.
+        let c_text = text.as_raw();
 
         let ret = unsafe {
             sys::mtmd_tokenize(
@@ -523,6 +533,115 @@ impl MtmdContext {
             return Err(MtmdError::TokenizeError(ret));
         }
         Ok(())
+    }
+
+    /// Tokenize an explicit sequence of parts, without media markers.
+    ///
+    /// [`Self::tokenize`] splices bitmaps in wherever the prompt contains the
+    /// media marker, which means the marker string has to be embedded in the
+    /// text and cannot itself be user content. This takes the interleaving
+    /// directly, so:
+    ///
+    /// - a marker appearing in user text is just text, not a splice point;
+    /// - `parse_special` is per text part, so a system prompt can enable
+    ///   special tokens while user content does not.
+    ///
+    /// `add_special` applies once to the whole sequence — upstream ignores the
+    /// per-part flag.
+    ///
+    /// Wraps `mtmd_tokenize_from_parts`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::TokenizeError`] — code `1` means a part carried
+    /// both text and a bitmap, or neither.
+    pub fn tokenize_from_parts(
+        &self,
+        parts: &[MtmdInputPart<'_>],
+        add_special: bool,
+        output: &mut MtmdInputChunks,
+    ) -> Result<()> {
+        // Three levels have to stay alive across the call: the C text structs,
+        // the parts that point at them, and the array of pointers to those
+        // parts. Building them in that order keeps every borrow valid.
+        let raw_texts: Vec<sys::mtmd_input_text> = parts
+            .iter()
+            .filter_map(|part| match part {
+                MtmdInputPart::Text(text) => Some(text.as_raw()),
+                MtmdInputPart::Bitmap(_) => None,
+            })
+            .collect();
+
+        let mut next_text = 0usize;
+        let raw_parts: Vec<sys::mtmd_input_part> = parts
+            .iter()
+            .map(|part| match part {
+                MtmdInputPart::Text(_) => {
+                    let raw = &raw_texts[next_text];
+                    next_text += 1;
+                    sys::mtmd_input_part {
+                        text: std::ptr::from_ref(raw),
+                        bitmap: std::ptr::null(),
+                    }
+                }
+                MtmdInputPart::Bitmap(bitmap) => sys::mtmd_input_part {
+                    text: std::ptr::null(),
+                    bitmap: bitmap.ptr.as_ptr().cast_const(),
+                },
+            })
+            .collect();
+        let part_ptrs: Vec<*const sys::mtmd_input_part> =
+            raw_parts.iter().map(std::ptr::from_ref).collect();
+
+        let ret = unsafe {
+            sys::mtmd_tokenize_from_parts(
+                self.ptr.as_ptr(),
+                output.ptr.as_ptr(),
+                part_ptrs.as_ptr(),
+                part_ptrs.len(),
+                add_special,
+            )
+        };
+        if ret != 0 {
+            return Err(MtmdError::TokenizeError(ret));
+        }
+        Ok(())
+    }
+
+    /// Audio-generation capabilities of the loaded mmproj.
+    ///
+    /// Returns `None` when this projector cannot generate audio, which is the
+    /// case for every vision-only mmproj.
+    ///
+    /// Wraps `mtmd_gen_audio_get_info`.
+    #[must_use]
+    pub fn gen_audio_info(&self) -> Option<MtmdGenAudioInfo> {
+        let info = unsafe { sys::mtmd_gen_audio_get_info(self.ptr.as_ptr()) };
+        if info.type_ == sys::MTMD_GEN_AUDIO_TYPE_NONE {
+            return None;
+        }
+        let variant = if info.model_variant.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(info.model_variant) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        Some(MtmdGenAudioInfo {
+            pipeline: MtmdGenAudioType::from_raw(info.type_),
+            sample_rate: info.sample_rate,
+            model_variant: variant,
+        })
+    }
+
+    /// Whether this model and projector can be used for chat.
+    ///
+    /// Wraps `mtmd_helper_model_can_chat`.
+    #[must_use]
+    pub fn model_can_chat(&self, ctx: &crate::context::LlamaContext<'_>) -> bool {
+        unsafe { sys::mtmd_helper_model_can_chat(ctx.context.as_ptr(), self.ptr.as_ptr()) }
     }
 
     /// Encode a single input chunk (image or audio) and store the resulting
@@ -746,6 +865,19 @@ pub struct MtmdInputText<'a> {
 }
 
 impl<'a> MtmdInputText<'a> {
+    /// Borrow this as the C struct.
+    ///
+    /// The result points into `self`, so it must not outlive it.
+    pub(crate) fn as_raw(&self) -> sys::mtmd_input_text {
+        sys::mtmd_input_text {
+            // Upstream reads exactly `text_len` bytes, so interior NULs survive.
+            text: self.text.as_ptr().cast(),
+            text_len: self.text_len,
+            add_special: self.add_special,
+            parse_special: self.parse_special,
+        }
+    }
+
     /// Create a new `MtmdInputText` from a string prompt.
     ///
     /// * `text`          – the prompt (interior NUL bytes are permitted and
@@ -899,7 +1031,12 @@ impl MtmdBitmap {
         // `placeholder = false`: load the real bitmap data (not a token-count
         // placeholder). For image/audio the returned `video_ctx` is always null.
         let wrapper = unsafe {
-            sys::mtmd_helper_bitmap_init_from_file(ctx.ptr.as_ptr(), c_path.as_ptr(), false)
+            sys::mtmd_helper_bitmap_init_from_file(
+                ctx.ptr.as_ptr(),
+                c_path.as_ptr(),
+                false,
+                sys::mtmd_helper_init_opt_default(),
+            )
         };
         Self::from_wrapper(wrapper)
     }
@@ -915,9 +1052,28 @@ impl MtmdBitmap {
         // `placeholder = false`: load the real bitmap data (not a token-count
         // placeholder). For image/audio the returned `video_ctx` is always null.
         let wrapper = unsafe {
-            sys::mtmd_helper_bitmap_init_from_buf(ctx.ptr.as_ptr(), buf.as_ptr(), buf.len(), false)
+            sys::mtmd_helper_bitmap_init_from_buf(
+                ctx.ptr.as_ptr(),
+                buf.as_ptr(),
+                buf.len(),
+                false,
+                sys::mtmd_helper_init_opt_default(),
+            )
         };
         Self::from_wrapper(wrapper)
+    }
+
+    /// Mark this bitmap as mergeable with an adjacent mergeable bitmap.
+    ///
+    /// Video-capable models such as Qwen-VL merge consecutive frames into one
+    /// chunk (a temporal merge). [`MtmdVideo::read_next`] already sets this on
+    /// the frames it produces; you only need it when you build frames yourself
+    /// with [`Self::from_rgb`] and expect them to merge. Without it each frame
+    /// becomes its own chunk, which costs tokens and loses temporal structure.
+    ///
+    /// Wraps `mtmd_bitmap_set_mergeable`.
+    pub fn set_mergeable(&mut self, mergeable: bool) {
+        unsafe { sys::mtmd_bitmap_set_mergeable(self.ptr.as_ptr(), mergeable) }
     }
 
     // ── Getters ───────────────────────────────────────────────────────────
@@ -990,6 +1146,10 @@ impl MtmdBitmap {
 // documents that the caller must release it with `free()`).
 extern "C" {
     fn free(ptr: *mut std::os::raw::c_void);
+    /// `strdup` from libc. Used for the text a lazy-bitmap callback yields:
+    /// mtmd releases it with `free()`, which Rust's allocator is not
+    /// compatible with, so the copy has to come from malloc.
+    fn strdup(s: *const std::os::raw::c_char) -> *mut std::os::raw::c_char;
 }
 
 /// Parameters controlling how a [`MtmdVideo`] stream is opened and sampled.
@@ -1276,6 +1436,28 @@ impl MtmdInputChunks {
         unsafe { sys::mtmd_input_chunks_size(self.ptr.as_ptr()) }
     }
 
+    /// Restore a chunk previously serialized with
+    /// [`MtmdInputChunk::save`], returning it as an owned placeholder.
+    ///
+    /// The result carries only metadata — token count, position count, type —
+    /// so it can line a restored KV cache up with the prompt that produced it.
+    /// It cannot be re-encoded; the pixels are gone.
+    ///
+    /// Wraps `mtmd_input_chunk_load`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ChunkLoadFailed`] if the buffer is not a chunk
+    /// this build can restore.
+    pub fn load_chunk(buf: &[u8]) -> Result<OwnedMtmdInputChunk> {
+        let ptr = unsafe {
+            sys::mtmd_input_chunk_load(buf.as_ptr().cast::<std::os::raw::c_char>(), buf.len())
+        };
+        NonNull::new(ptr)
+            .map(|ptr| OwnedMtmdInputChunk { ptr })
+            .ok_or(MtmdError::ChunkLoadFailed)
+    }
+
     /// Returns `true` if there are no chunks.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -1388,6 +1570,85 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     #[must_use]
     pub fn n_pos(&self) -> i32 {
         unsafe { sys::mtmd_input_chunk_get_n_pos(self.ptr) }
+    }
+
+    /// Serialize this chunk's metadata to a byte buffer.
+    ///
+    /// Only metadata is saved — never the image or audio payload. A chunk
+    /// restored with [`MtmdInputChunks::load_chunk`] is a *placeholder*: it
+    /// carries the token and position counts needed to line a cached KV state
+    /// back up with its prompt, but cannot be re-encoded. That is the intended
+    /// use, and it is why this is cheap enough to store alongside a session
+    /// file written by
+    /// [`state_seq_save_file`](crate::context::LlamaContext::state_seq_save_file).
+    ///
+    /// Wraps `mtmd_input_chunk_save`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ChunkSaveFailed`] if llama.cpp cannot serialize
+    /// this chunk.
+    pub fn save(&self) -> Result<Vec<u8>> {
+        // Two-call protocol: query the length, then fill.
+        let mut needed: usize = 0;
+        let rc = unsafe {
+            sys::mtmd_input_chunk_save(self.ptr, std::ptr::null_mut(), 0, &raw mut needed)
+        };
+        if rc != 0 && needed == 0 {
+            return Err(MtmdError::ChunkSaveFailed(rc));
+        }
+        let mut buf = vec![0u8; needed];
+        let rc = unsafe {
+            sys::mtmd_input_chunk_save(
+                self.ptr,
+                buf.as_mut_ptr().cast::<std::os::raw::c_char>(),
+                buf.len(),
+                &raw mut needed,
+            )
+        };
+        if rc != 0 {
+            return Err(MtmdError::ChunkSaveFailed(rc));
+        }
+        buf.truncate(needed);
+        Ok(buf)
+    }
+
+    /// Copy this chunk, payload and all, into an owned handle.
+    ///
+    /// [`MtmdInputChunk`] borrows from the [`MtmdInputChunks`] list holding it,
+    /// so it dies with that list. Take a copy when a chunk has to outlive the
+    /// tokenization it came from — caching encoded media across requests, for
+    /// instance. Unlike [`Self::to_placeholder`], the result is still usable
+    /// for encoding.
+    ///
+    /// Wraps `mtmd_input_chunk_copy`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ChunkLoadFailed`] if llama.cpp returns null.
+    pub fn to_owned_chunk(&self) -> Result<OwnedMtmdInputChunk> {
+        let ptr = unsafe { sys::mtmd_input_chunk_copy(self.ptr) };
+        NonNull::new(ptr)
+            .map(|ptr| OwnedMtmdInputChunk { ptr })
+            .ok_or(MtmdError::ChunkLoadFailed)
+    }
+
+    /// Copy this chunk as a standalone placeholder — metadata only, no payload.
+    ///
+    /// Same shape as a round trip through [`Self::save`] and
+    /// [`MtmdInputChunks::load_chunk`], without the serialization. Useful for
+    /// keeping a prompt's structure alive after the pixels have been dropped.
+    ///
+    /// Wraps `mtmd_input_chunk_get_placeholder`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ChunkLoadFailed`] if llama.cpp returns null.
+    pub fn to_placeholder(&self) -> Result<OwnedMtmdInputChunk> {
+        let ptr = unsafe { sys::mtmd_input_chunk_get_placeholder(self.ptr) };
+        NonNull::new(ptr)
+            .map(|ptr| OwnedMtmdInputChunk { ptr })
+            .ok_or(MtmdError::ChunkLoadFailed)
     }
 
     /// Return the raw llama token IDs for a **text** chunk.
@@ -1601,10 +1862,704 @@ mod tests {
         assert_eq!(input.text, b"a\0b\0");
     }
 
+    /// Restoring a chunk from garbage must return an error, not abort. The
+    /// underlying C returns null on failure, and a null deref here would take
+    /// the process with it.
+    /// Probing a file that is not an mmproj must report "no modalities"
+    /// rather than crash — a server calls this on a user-supplied path.
+    #[test]
+    fn mmproj_caps_on_a_non_mmproj_file_reports_nothing() {
+        let caps = mmproj_caps("/definitely/not/a/model.gguf").expect("no NUL in path");
+        assert!(!caps.vision);
+        assert!(!caps.audio);
+    }
+
+    #[test]
+    fn mmproj_caps_rejects_interior_nul() {
+        assert!(mmproj_caps("a\0b").is_err());
+    }
+
+    #[test]
+    fn load_chunk_rejects_garbage() {
+        let err = MtmdInputChunks::load_chunk(b"not a serialized chunk").unwrap_err();
+        assert!(matches!(err, MtmdError::ChunkLoadFailed), "got {err:?}");
+    }
+
+    #[test]
+    fn load_chunk_rejects_empty_input() {
+        assert!(MtmdInputChunks::load_chunk(&[]).is_err());
+    }
+
+    /// A truncated buffer is the realistic corruption case for a chunk read
+    /// back off disk beside a session file.
+    #[test]
+    fn load_chunk_rejects_truncated_input() {
+        assert!(MtmdInputChunks::load_chunk(&[0u8; 4]).is_err());
+    }
+
     #[test]
     fn input_text_try_new_is_infallible() {
         let input = MtmdInputText::try_new("marker \u{1} data", true, true)
             .expect("try_new no longer rejects any input");
         assert_eq!(input.text_len, "marker \u{1} data".len());
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OwnedMtmdInputChunk
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A chunk that owns its allocation, as returned by
+/// [`MtmdInputChunks::load_chunk`] or [`MtmdInputChunk::to_placeholder`].
+///
+/// [`MtmdInputChunk`] borrows from the [`MtmdInputChunks`] list that holds it;
+/// this one stands alone and frees itself on drop.
+pub struct OwnedMtmdInputChunk {
+    ptr: NonNull<sys::mtmd_input_chunk>,
+}
+
+impl std::fmt::Debug for OwnedMtmdInputChunk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OwnedMtmdInputChunk")
+            .field("chunk_type", &self.chunk_type())
+            .field("n_tokens", &self.n_tokens())
+            .finish()
+    }
+}
+
+impl Drop for OwnedMtmdInputChunk {
+    fn drop(&mut self) {
+        unsafe { sys::mtmd_input_chunk_free(self.ptr.as_ptr()) }
+    }
+}
+
+impl OwnedMtmdInputChunk {
+    /// The type of this chunk.
+    #[must_use]
+    pub fn chunk_type(&self) -> MtmdInputChunkType {
+        MtmdInputChunkType::from(unsafe { sys::mtmd_input_chunk_get_type(self.ptr.as_ptr()) })
+    }
+
+    /// Total number of tokens in this chunk.
+    #[must_use]
+    pub fn n_tokens(&self) -> usize {
+        unsafe { sys::mtmd_input_chunk_get_n_tokens(self.ptr.as_ptr()) }
+    }
+
+    /// Number of temporal positions.
+    #[must_use]
+    pub fn n_pos(&self) -> i32 {
+        unsafe { sys::mtmd_input_chunk_get_n_pos(self.ptr.as_ptr()) }
+    }
+
+    /// Serialize this chunk's metadata, as [`MtmdInputChunk::save`] does.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ChunkSaveFailed`] if llama.cpp cannot serialize it.
+    pub fn save(&self) -> Result<Vec<u8>> {
+        let mut needed: usize = 0;
+        let rc = unsafe {
+            sys::mtmd_input_chunk_save(
+                self.ptr.as_ptr(),
+                std::ptr::null_mut(),
+                0,
+                &raw mut needed,
+            )
+        };
+        if rc != 0 && needed == 0 {
+            return Err(MtmdError::ChunkSaveFailed(rc));
+        }
+        let mut buf = vec![0u8; needed];
+        let rc = unsafe {
+            sys::mtmd_input_chunk_save(
+                self.ptr.as_ptr(),
+                buf.as_mut_ptr().cast::<std::os::raw::c_char>(),
+                buf.len(),
+                &raw mut needed,
+            )
+        };
+        if rc != 0 {
+            return Err(MtmdError::ChunkSaveFailed(rc));
+        }
+        buf.truncate(needed);
+        Ok(buf)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MtmdBatch
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Encode several media chunks in one pass.
+///
+/// [`MtmdContext::encode_chunk`] handles one chunk at a time; this batches
+/// them, which is what you want for a multi-image prompt or a run of video
+/// frames — the vision encoder runs once over the whole set instead of once per
+/// image.
+///
+/// A batch belongs to the context that created it and borrows it for its
+/// lifetime. Chunks are *not* owned by the batch, so they must outlive it too.
+///
+/// Wraps `mtmd_batch_init` / `mtmd_batch_add_chunk` / `mtmd_batch_encode`.
+pub struct MtmdBatch<'ctx> {
+    ptr: NonNull<sys::mtmd_batch>,
+    _ctx: std::marker::PhantomData<&'ctx MtmdContext>,
+}
+
+impl std::fmt::Debug for MtmdBatch<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdBatch").finish_non_exhaustive()
+    }
+}
+
+impl Drop for MtmdBatch<'_> {
+    fn drop(&mut self) {
+        unsafe { sys::mtmd_batch_free(self.ptr.as_ptr()) }
+    }
+}
+
+impl<'ctx> MtmdBatch<'ctx> {
+    /// Start a batch against `ctx`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::BatchCreateFailed`] if llama.cpp returns null.
+    pub fn new(ctx: &'ctx MtmdContext) -> Result<Self> {
+        let ptr = unsafe { sys::mtmd_batch_init(ctx.ptr.as_ptr()) };
+        NonNull::new(ptr)
+            .map(|ptr| Self {
+                ptr,
+                _ctx: std::marker::PhantomData,
+            })
+            .ok_or(MtmdError::BatchCreateFailed)
+    }
+
+    /// Add a media chunk. Text chunks are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::BatchAddFailed`] — code `2` means the batch is
+    /// full and the chunk was not added (start a new batch), code `3` means it
+    /// cannot be batched with what is already there (differing image
+    /// geometry, say).
+    pub fn add_chunk(&mut self, chunk: &MtmdInputChunk<'_>) -> Result<()> {
+        let rc = unsafe { sys::mtmd_batch_add_chunk(self.ptr.as_ptr(), chunk.ptr) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MtmdError::BatchAddFailed(rc))
+        }
+    }
+
+    /// Encode every chunk added so far.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EncodeError`] on failure.
+    pub fn encode(&mut self) -> Result<()> {
+        let rc = unsafe { sys::mtmd_batch_encode(self.ptr.as_ptr()) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MtmdError::EncodeError(rc))
+        }
+    }
+
+    /// Borrow the embeddings produced for `chunk` by the last [`Self::encode`].
+    ///
+    /// Returns `None` if the chunk was not part of this batch or encoding has
+    /// not run. The slice is owned by the batch and is invalidated by the next
+    /// `encode`.
+    ///
+    /// # Safety of the returned length
+    ///
+    /// llama.cpp reports only a pointer, so the length is derived from the
+    /// chunk's token count and the context's embedding dimension.
+    #[must_use]
+    pub fn output_embd(&self, chunk: &MtmdInputChunk<'_>, n_embd: usize) -> Option<&[f32]> {
+        let ptr = unsafe { sys::mtmd_batch_get_output_embd(self.ptr.as_ptr(), chunk.ptr) };
+        if ptr.is_null() {
+            return None;
+        }
+        let len = chunk.n_tokens().checked_mul(n_embd)?;
+        if len == 0 {
+            return Some(&[]);
+        }
+        Some(unsafe { slice::from_raw_parts(ptr, len) })
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Container for generated audio.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtmdAudioOutType {
+    /// Raw PCM samples.
+    Pcm,
+    /// A complete WAV file: PCM 16-bit little-endian, mono.
+    Wav,
+}
+
+impl MtmdAudioOutType {
+    fn as_raw(self) -> sys::mtmd_helper_gen_audio_outtype {
+        match self {
+            Self::Pcm => sys::MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM,
+            Self::Wav => sys::MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV,
+        }
+    }
+}
+
+/// What to synthesize, and how.
+#[derive(Debug, Clone)]
+pub struct MtmdAudioRequest {
+    /// Sequence id to generate under.
+    pub seq_id: i32,
+    /// Text to speak.
+    pub prompt: String,
+    /// BCP-47-ish language hint, if the pipeline takes one.
+    pub lang: Option<String>,
+    /// Top-k for the backbone sampler.
+    pub top_k: i32,
+    /// Top-p for the backbone sampler.
+    pub top_p: f32,
+    /// Seed; `u32::MAX` means random.
+    pub seed: u32,
+    /// Container for [`MtmdAudioGen::output`].
+    pub out_type: MtmdAudioOutType,
+}
+
+impl MtmdAudioRequest {
+    /// A request to speak `prompt` with upstream's defaults.
+    #[must_use]
+    pub fn new(prompt: impl Into<String>) -> Self {
+        Self {
+            seq_id: 0,
+            prompt: prompt.into(),
+            lang: None,
+            top_k: 40,
+            top_p: 0.9,
+            seed: u32::MAX,
+            out_type: MtmdAudioOutType::Wav,
+        }
+    }
+}
+
+/// Text-to-speech through an mmproj audio-generation pipeline.
+///
+/// This is the *other* direction of multimodal: where [`MtmdBitmap`] feeds
+/// audio in, this drives a pipeline that emits it. The loop is explicitly
+/// stateless on llama.cpp's side, so it runs in two phases:
+///
+/// 1. [`Self::set_input`], then [`Self::step_prompt`] until it returns `0` —
+///    the prompt is consumed `n_batch` tokens at a time.
+/// 2. [`Self::step_gen`] per frame until it reports stop.
+/// 3. [`Self::output`] for the finished audio.
+///
+/// Wraps `mtmd_helper_gen_audio_*`.
+pub struct MtmdAudioGen<'ctx> {
+    ptr: NonNull<sys::mtmd_helper_gen_audio>,
+    _ctx: std::marker::PhantomData<&'ctx MtmdContext>,
+}
+
+impl std::fmt::Debug for MtmdAudioGen<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdAudioGen").finish_non_exhaustive()
+    }
+}
+
+impl Drop for MtmdAudioGen<'_> {
+    fn drop(&mut self) {
+        unsafe { sys::mtmd_helper_gen_audio_free(self.ptr.as_ptr()) }
+    }
+}
+
+impl<'ctx> MtmdAudioGen<'ctx> {
+    /// Attach a generator to a llama context and an mtmd context.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ContextCreateFailed`] if the mmproj has no
+    /// audio-generation pipeline.
+    pub fn new(
+        lctx: &mut crate::context::LlamaContext<'_>,
+        mctx: &'ctx MtmdContext,
+    ) -> Result<Self> {
+        let ptr = unsafe {
+            sys::mtmd_helper_gen_audio_init(lctx.context.as_ptr(), mctx.ptr.as_ptr())
+        };
+        NonNull::new(ptr)
+            .map(|ptr| Self {
+                ptr,
+                _ctx: std::marker::PhantomData,
+            })
+            .ok_or(MtmdError::ContextCreateFailed)
+    }
+
+    /// Clear all state, ready for another utterance.
+    pub fn reset(&mut self) {
+        unsafe { sys::mtmd_helper_gen_audio_reset(self.ptr.as_ptr()) }
+    }
+
+    /// Set what to synthesize. `speaker_ref` is an optional voice reference for
+    /// pipelines that support cloning.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] if llama.cpp rejects the request, or
+    /// [`MtmdError::InvalidPath`] if a string contains an interior NUL.
+    pub fn set_input(
+        &mut self,
+        request: &MtmdAudioRequest,
+        speaker_ref: Option<&MtmdBitmap>,
+    ) -> Result<()> {
+        let prompt = CString::new(request.prompt.as_str())?;
+        let lang = request.lang.as_deref().map(CString::new).transpose()?;
+        let inp = sys::mtmd_helper_gen_audio_inp {
+            seq_id: request.seq_id,
+            prompt: prompt.as_ptr(),
+            prompt_len: request.prompt.len(),
+            speaker_ref: speaker_ref.map_or(std::ptr::null_mut(), |b| b.ptr.as_ptr()),
+            lang: lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+            top_k: request.top_k,
+            top_p: request.top_p,
+            seed: request.seed,
+            out_type: request.out_type.as_raw(),
+        };
+        let rc = unsafe { sys::mtmd_helper_gen_audio_set_input(self.ptr.as_ptr(), &raw const inp) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MtmdError::EvalError(rc))
+        }
+    }
+
+    /// Consume up to `n_batch` prompt tokens.
+    ///
+    /// Returns the number of prompt tokens still outstanding; call again until
+    /// it returns `0`, then move on to [`Self::step_gen`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] if llama.cpp reports a negative code.
+    pub fn step_prompt(&mut self, n_batch: i32) -> Result<i32> {
+        let rc = unsafe { sys::mtmd_helper_gen_audio_step_prompt(self.ptr.as_ptr(), n_batch) };
+        if rc < 0 {
+            return Err(MtmdError::EvalError(rc));
+        }
+        Ok(rc)
+    }
+
+    /// Generate one audio frame.
+    ///
+    /// `sampled` is the backbone token just sampled, or `None` for pipelines
+    /// with no discrete backbone token. `h_state_in` is the hidden state fed
+    /// back from the previous step.
+    ///
+    /// Returns `(hidden_state, stop)`. `stop` marks end-of-speech: the caller
+    /// must break the loop. The hidden state borrows generator memory that the
+    /// next `step_gen` or [`Self::reset`] invalidates, hence the `&mut self`
+    /// borrow being released before you can call again.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] on a negative code.
+    pub fn step_gen(
+        &mut self,
+        sampled: Option<crate::token::LlamaToken>,
+        h_state_in: Option<&[f32]>,
+        n_text_embd: usize,
+    ) -> Result<(Option<Vec<f32>>, bool)> {
+        let token = sampled.map_or(sys::LLAMA_TOKEN_NULL, |t| t.0);
+        let in_ptr = h_state_in.map_or(std::ptr::null(), <[f32]>::as_ptr);
+        let mut out_ptr: *const f32 = std::ptr::null();
+        let mut stop = false;
+        let rc = unsafe {
+            sys::mtmd_helper_gen_audio_step_gen(
+                self.ptr.as_ptr(),
+                token,
+                in_ptr,
+                &raw mut out_ptr,
+                &raw mut stop,
+            )
+        };
+        if rc < 0 {
+            return Err(MtmdError::EvalError(rc));
+        }
+        // Copy rather than borrow: upstream documents the buffer as valid only
+        // until the next step_gen/reset, which a returned slice could outlive.
+        let state = if out_ptr.is_null() || n_text_embd == 0 {
+            None
+        } else {
+            Some(unsafe { slice::from_raw_parts(out_ptr, n_text_embd) }.to_vec())
+        };
+        Ok((state, stop))
+    }
+
+    /// Collect the generated audio.
+    ///
+    /// Returns `(sample_rate, bytes, n_samples)`. `bytes` is raw PCM or a
+    /// complete WAV file depending on the request's
+    /// [`MtmdAudioOutType`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::EvalError`] if nothing has been generated.
+    pub fn output(&mut self) -> Result<(i32, Vec<u8>, i64)> {
+        let mut sample_rate: i32 = 0;
+        let mut data: *const std::os::raw::c_char = std::ptr::null();
+        let mut data_len: usize = 0;
+        let mut n_samples: i64 = 0;
+        let rc = unsafe {
+            sys::mtmd_helper_gen_audio_get_output(
+                self.ptr.as_ptr(),
+                &raw mut sample_rate,
+                &raw mut data,
+                &raw mut data_len,
+                &raw mut n_samples,
+            )
+        };
+        if rc != 0 {
+            return Err(MtmdError::EvalError(rc));
+        }
+        let bytes = if data.is_null() || data_len == 0 {
+            Vec::new()
+        } else {
+            // Copied for the same reason as step_gen: valid only until the next
+            // get_output/reset.
+            unsafe { slice::from_raw_parts(data.cast::<u8>(), data_len) }.to_vec()
+        };
+        Ok((sample_rate, bytes, n_samples))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Explicit input parts
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One element of a marker-free prompt, for
+/// [`MtmdContext::tokenize_from_parts`].
+///
+/// Borrows rather than owns, so the caller keeps control of bitmap lifetimes —
+/// a bitmap is usually reused across several prompts.
+#[derive(Debug)]
+pub enum MtmdInputPart<'a> {
+    /// A run of text, with its own `parse_special` setting.
+    Text(&'a MtmdInputText<'a>),
+    /// An image or audio bitmap spliced in at this position.
+    Bitmap(&'a MtmdBitmap),
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio-generation capabilities
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which audio-generation pipeline an mmproj implements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MtmdGenAudioType {
+    /// Qwen3-TTS.
+    Qwen3Tts,
+    /// `PocketTTS`.
+    PocketTts,
+    /// A pipeline this crate does not know, added upstream since this release.
+    Unknown,
+}
+
+impl MtmdGenAudioType {
+    fn from_raw(raw: sys::mtmd_gen_audio_type) -> Self {
+        match raw {
+            sys::MTMD_GEN_AUDIO_TYPE_QWEN3TTS => Self::Qwen3Tts,
+            sys::MTMD_GEN_AUDIO_TYPE_POCKETTTS => Self::PocketTts,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// What [`MtmdContext::gen_audio_info`] reports about a speech pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MtmdGenAudioInfo {
+    /// The pipeline implemented by this projector.
+    pub pipeline: MtmdGenAudioType,
+    /// Output sample rate in Hz, e.g. 24000 for Qwen3-TTS. Needed to write a
+    /// correct WAV header or resample.
+    pub sample_rate: i32,
+    /// Weight-variant name, when the pipeline has variants.
+    pub model_variant: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Projector capability probe
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which modalities an mmproj file accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MtmdCaps {
+    /// Accepts image input.
+    pub vision: bool,
+    /// Accepts audio input.
+    pub audio: bool,
+}
+
+/// Read an mmproj file's input capabilities without loading it.
+///
+/// [`MtmdContext::init_from_file`] builds the full projector — weights, compute
+/// buffers, the lot. This only reads enough metadata to answer "does this
+/// accept images, audio, or both", which is what a server needs at startup to
+/// decide whether a request is even servable.
+///
+/// Wraps `mtmd_get_cap_from_file`. Returns both flags `false` for a file that
+/// is not a readable mmproj.
+///
+/// # Errors
+///
+/// Returns [`MtmdError::InvalidPath`] if the path contains an interior NUL, or
+/// [`MtmdError::PathNotUtf8`] if it is not UTF-8.
+pub fn mmproj_caps(path: impl AsRef<Path>) -> Result<MtmdCaps> {
+    let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
+    let c_path = CString::new(path)?;
+    let caps = unsafe { sys::mtmd_get_cap_from_file(c_path.as_ptr()) };
+    Ok(MtmdCaps {
+        vision: caps.inp_vision,
+        audio: caps.inp_audio,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lazy bitmaps
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What a lazy-bitmap callback yields for one chunk index.
+#[derive(Debug)]
+pub enum MtmdLazyChunk {
+    /// An image or audio bitmap. Ownership passes to llama.cpp.
+    Bitmap(MtmdBitmap),
+    /// A run of text to splice in at this position.
+    Text(String),
+    /// No more chunks; the placeholder removes itself from the prompt.
+    End,
+}
+
+/// A bitmap whose contents are produced on demand, during tokenization.
+///
+/// An ordinary [`MtmdBitmap`] holds decoded pixels or samples from the moment
+/// it is built. This holds a callback instead, invoked with `0, 1, 2, …` while
+/// the prompt is tokenized and expanding into however many chunks it yields.
+/// That matters for two cases:
+///
+/// - a long video, where materialising every frame up front would not fit in
+///   memory;
+/// - media that may never be reached, because a stop sequence or a token
+///   budget cuts the prompt short first.
+///
+/// The callback must outlive tokenization, so this owns it alongside the
+/// bitmap and drops them in that order.
+///
+/// Wraps `mtmd_bitmap_init_lazy`.
+pub struct MtmdLazyBitmap {
+    // Declaration order is the drop order, and it matters: llama.cpp may touch
+    // `user_data` while freeing the bitmap, so the bitmap must go first.
+    bitmap: MtmdBitmap,
+    _callback: Box<LazyCallbackState>,
+}
+
+impl std::fmt::Debug for MtmdLazyBitmap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdLazyBitmap").finish_non_exhaustive()
+    }
+}
+
+/// Heap home for the user closure, pointed at by `user_data`.
+struct LazyCallbackState {
+    func: Box<dyn FnMut(usize) -> MtmdLazyChunk>,
+}
+
+impl MtmdLazyBitmap {
+    /// Build a lazy bitmap identified by `id` (conventionally a file hash).
+    ///
+    /// `callback` is called with increasing chunk indices until it returns
+    /// [`MtmdLazyChunk::End`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::BitmapCreateFailed`] if llama.cpp returns null, or
+    /// [`MtmdError::InvalidPath`] if `id` contains an interior NUL.
+    pub fn new<F>(ctx: &MtmdContext, id: &str, callback: F) -> Result<Self>
+    where
+        F: FnMut(usize) -> MtmdLazyChunk + 'static,
+    {
+        let c_id = CString::new(id)?;
+        let mut state = Box::new(LazyCallbackState {
+            func: Box::new(callback),
+        });
+        let user_data = std::ptr::from_mut(state.as_mut()).cast::<std::os::raw::c_void>();
+
+        let ptr = unsafe {
+            sys::mtmd_bitmap_init_lazy(
+                ctx.ptr.as_ptr(),
+                c_id.as_ptr(),
+                user_data,
+                Some(lazy_trampoline),
+            )
+        };
+        let bitmap = MtmdBitmap {
+            ptr: NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?,
+        };
+        Ok(Self {
+            bitmap,
+            _callback: state,
+        })
+    }
+
+    /// Borrow this as an ordinary bitmap, for passing to
+    /// [`MtmdContext::tokenize`].
+    #[must_use]
+    pub fn as_bitmap(&self) -> &MtmdBitmap {
+        &self.bitmap
+    }
+}
+
+/// C entry point for [`MtmdLazyBitmap`].
+///
+/// Returns `0` when a chunk was produced, `-1` at EOF, `-2` on error. A Rust
+/// panic must not unwind into C, so it is caught and reported as `-2`.
+extern "C" fn lazy_trampoline(
+    chunk_idx: usize,
+    user_data: *mut std::os::raw::c_void,
+    out_bitmap: *mut *mut sys::mtmd_bitmap,
+    out_text: *mut *mut std::os::raw::c_char,
+) -> std::os::raw::c_int {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if user_data.is_null() {
+            return -2;
+        }
+        let state = unsafe { &mut *user_data.cast::<LazyCallbackState>() };
+        match (state.func)(chunk_idx) {
+            MtmdLazyChunk::Bitmap(bitmap) => {
+                // Ownership moves to llama.cpp, which frees it with
+                // `mtmd_bitmap_free`; skip our own Drop.
+                let raw = bitmap.ptr.as_ptr();
+                std::mem::forget(bitmap);
+                unsafe { *out_bitmap = raw };
+                0
+            }
+            MtmdLazyChunk::Text(text) => {
+                let Ok(c_text) = CString::new(text) else {
+                    return -2;
+                };
+                // llama.cpp releases this with `free()`, so it must come from
+                // malloc — a Rust-allocated buffer would be freed by the wrong
+                // allocator.
+                let dup = unsafe { strdup(c_text.as_ptr()) };
+                if dup.is_null() {
+                    return -2;
+                }
+                unsafe { *out_text = dup };
+                0
+            }
+            MtmdLazyChunk::End => -1,
+        }
+    }));
+    result.unwrap_or(-2)
 }

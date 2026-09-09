@@ -141,7 +141,7 @@ fn start_server(model: &str, port: u16, api_key: Option<&str>) -> Child {
     cmd.args(["local", model]);
     cmd.stdout(Stdio::null()).stderr(Stdio::null());
 
-    let child = cmd.spawn().expect("failed to spawn openai-server");
+    let mut child = cmd.spawn().expect("failed to spawn openai-server");
 
     let base = format!("http://127.0.0.1:{port}");
     let client = Client::new();
@@ -153,6 +153,20 @@ fn start_server(model: &str, port: u16, api_key: Option<&str>) -> Child {
             "[testbench] Server on port {port} did not become ready within \
              {STARTUP_TIMEOUT_SECS}s"
         );
+
+        // The child we just spawned is deliberately leaked below, so a server
+        // from an *earlier* run can still hold this port. If that happens our
+        // child dies on bind while `/health` keeps answering — from the stale
+        // binary. Tests would then silently pass or fail against code that is
+        // no longer on disk, which is far worse than failing here.
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!(
+                "[testbench] openai-server exited immediately ({status}). \
+                 A server from a previous run is probably still bound to port \
+                 {port} — kill it with `pkill -f openai-server` and re-run."
+            );
+        }
+
         if let Ok(r) = client.get(format!("{base}/health")).send() {
             if r.status().is_success() {
                 eprintln!("[testbench] Server ready on {base}");
@@ -612,8 +626,159 @@ fn weather_tool() -> Value {
     })
 }
 
-/// `tool_choice: required` — model MUST call a tool (GBNF grammar enforced).
+/// The Hermes tool-use template, vendored with llama.cpp.
+///
+/// Needed because `tool_choice` only produces a grammar for templates llama.cpp
+/// *recognises*. The test model ships no chat template at all, so llama.cpp
+/// falls back to a generic builtin — correct, but it exercises the autoparser
+/// rather than the tool-grammar path these tests are about.
+const HERMES_TOOL_TEMPLATE: &str = include_str!(
+    "../../../llama-cpp-sys-4/llama.cpp/models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja"
+);
+
+/// With a recognised tool template, a `required` request must come back as a
+/// well-formed completion rather than an error — this exercises template
+/// rendering, grammar construction and sampler setup end to end, without
+/// needing the model to be smart enough to actually call the tool.
 #[test]
+fn tool_request_with_recognised_template_succeeds() {
+    let Some(base) = server_url() else { return };
+    let body = post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"What is the weather in Tokyo?"}],
+            "tools": [weather_tool()],
+            "tool_choice": "required",
+            "chat_template": HERMES_TOOL_TEMPLATE,
+            "max_tokens": 32,
+            "temperature": 0
+        }),
+        200,
+    );
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+}
+
+/// Regression guard for grammar prefill.
+///
+/// llama.cpp writes tool-call grammars to match `generation_prompt + output`,
+/// because that is what its parser later sees. The sampler only sees `output`,
+/// so unless the grammar is advanced past the generation prompt the model is
+/// forced to *re-emit* it — the response then starts with a literal
+/// `<|im_start|>assistant`. This is fully deterministic and needs no model
+/// competence, which makes it the one end-to-end tool assertion the tiny CI
+/// checkpoint can carry.
+#[test]
+fn tool_grammar_does_not_make_the_model_reemit_the_generation_prompt() {
+    let Some(base) = server_url() else { return };
+    let body = post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"What is the weather in Tokyo?"}],
+            "tools": [weather_tool()],
+            "tool_choice": "required",
+            "chat_template": HERMES_TOOL_TEMPLATE,
+            "max_tokens": 24,
+            "temperature": 0
+        }),
+        200,
+    );
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("");
+    assert!(
+        !content.contains("im_start") && !content.contains("imstart"),
+        "grammar was not prefilled with the generation prompt; \
+         the model re-emitted it: {content:?}"
+    );
+}
+
+/// A bad `chat_template` must be a 400, not a panic or a 500 — llama.cpp
+/// throws when it cannot parse Jinja, and that has to be caught at the shim.
+#[test]
+fn invalid_chat_template_returns_400() {
+    let Some(base) = server_url() else { return };
+    post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "chat_template": "{% this is not jinja",
+            "max_tokens": 8
+        }),
+        400,
+    );
+}
+
+#[test]
+fn unknown_tool_choice_returns_400() {
+    let Some(base) = server_url() else { return };
+    post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "tools": [weather_tool()],
+            "tool_choice": "sometimes",
+            "max_tokens": 8
+        }),
+        400,
+    );
+}
+
+/// Naming a function that was never supplied would build a grammar
+/// referencing nothing; it must be rejected up front.
+#[test]
+fn tool_choice_naming_an_absent_function_returns_400() {
+    let Some(base) = server_url() else { return };
+    post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "tools": [weather_tool()],
+            "tool_choice": {"type": "function", "function": {"name": "not_a_tool"}},
+            "max_tokens": 8
+        }),
+        400,
+    );
+}
+
+/// A malformed tool definition must be rejected by llama.cpp's own validator
+/// rather than reaching the template.
+#[test]
+fn malformed_tool_definition_returns_400() {
+    let Some(base) = server_url() else { return };
+    post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"hi"}],
+            "tools": [{"type": "function", "function": {}}],
+            "max_tokens": 8
+        }),
+        400,
+    );
+}
+
+/// `tool_choice: required` — model MUST call a tool (GBNF grammar enforced).
+///
+/// Ignored by default because it needs a model that can actually *use* a tool.
+/// The grammar llama.cpp builds for `required` constrains the tool call's
+/// shape, but its `root` is `<preamble>? tool-calls` with an unbounded
+/// preamble — so a model is guaranteed to emit a well-formed call *eventually*,
+/// not promptly. The stories260K checkpoint CI uses rambles until `max_tokens`
+/// and never reaches the call.
+///
+/// Run against a real model with:
+///
+/// ```text
+/// LLAMA_TEST_MODEL=/path/to/qwen3.gguf cargo test -p openai-server -- --ignored
+/// ```
+#[test]
+#[ignore = "needs a tool-capable model; stories260K cannot emit a tool call"]
 fn tool_calling_required() {
     let Some(base) = server_url() else { return };
     let body = post_json(
@@ -659,6 +824,28 @@ fn tool_calling_required() {
 }
 
 /// `tool_choice: none` — tools listed but model must NOT call any.
+/// An explicit `max_tokens` must be honoured even when tools are present.
+/// The server used to raise anything below 1024 to 1024, which quietly
+/// multiplied a cost-capped request by 32.
+#[test]
+fn explicit_max_tokens_is_honoured_with_tools() {
+    let Some(base) = server_url() else { return };
+    let body = post_json(
+        &base,
+        "/v1/chat/completions",
+        json!({
+            "messages": [{"role":"user","content":"What is the weather in Tokyo?"}],
+            "tools": [weather_tool()],
+            "chat_template": HERMES_TOOL_TEMPLATE,
+            "max_tokens": 16,
+            "temperature": 0
+        }),
+        200,
+    );
+    let used = body["usage"]["completion_tokens"].as_u64().unwrap_or(u64::MAX);
+    assert!(used <= 16, "asked for 16 tokens, got {used}");
+}
+
 #[test]
 fn tool_calling_none() {
     let Some(base) = server_url() else { return };
@@ -693,7 +880,11 @@ fn tool_calling_none() {
 }
 
 /// Multi-turn: send a tool result back and get a final answer.
+///
+/// Ignored for the same reason as [`tool_calling_required`] — step 1 has to
+/// produce a real tool call before the round trip can be exercised.
 #[test]
+#[ignore = "needs a tool-capable model; step 1 requires a real tool call"]
 fn tool_calling_multi_turn() {
     let Some(base) = server_url() else { return };
 

@@ -1,0 +1,21 @@
+[package]
+name = "ngram"
+version = "0.7.0"
+edition = "2021"
+description = "Example: draft-model-free speculative decoding for llama-cpp-4"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.7.0" }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+
+[features]
+cuda = ["llama-cpp-4/cuda"]
+metal = ["llama-cpp-4/metal"]
+native = ["llama-cpp-4/native"]
+vulkan = ["llama-cpp-4/vulkan"]
+
+[lints]
+workspace = true

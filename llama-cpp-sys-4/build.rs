@@ -491,23 +491,6 @@ fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
         }
     }
 
-    // DFlash2 speculative decoding, vendored from the (still unmerged) upstream
-    // PR #27342. Opt-in because it is a pre-merge feature carrying new GGUF KV
-    // keys and tensors: with it applied the build recognises DFlash2 checkpoints
-    // that stock llama.cpp releases do not. Staged last so it lands on top of
-    // the exact-state patches, which also touch common/speculative.cpp.
-    if cfg!(feature = "dflash2") {
-        let name = "0006-dflash2.patch";
-        let source = patches_dir.join(name);
-        assert!(
-            source.is_file(),
-            "the `dflash2` feature is enabled but its patch is absent: {}",
-            source.display()
-        );
-        std::fs::copy(&source, staged_dir.join(name))
-            .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
-    }
-
     true
 }
 
@@ -558,26 +541,97 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
     )
 }
 
-/// Copy a directory tree.  This runs on the *host*, so cfg!(unix/windows) is correct here.
-/// Always perform a real copy. Using hardlinks is unsafe here because
-/// build-time patch application mutates files in the copied tree.
+/// Copy a directory tree. This runs on the *host*, so cfg!(unix/windows) is
+/// correct here. Always a real copy — hardlinks are unsafe because build-time
+/// patch application mutates files in the copied tree.
+///
+/// The copy lands in a temporary sibling and is renamed into place only once it
+/// has succeeded, so `dst` is either absent or complete — never a half-tree.
+/// That matters because the caller writes a version sentinel next to `dst` and
+/// skips the copy on later builds when it matches: a partial tree accepted once
+/// would be reused forever, and the symptom is a baffling CMake error about a
+/// missing `LICENSE` or `ggml-version.h.in` rather than anything about copying.
+///
+/// # Panics
+///
+/// Panics if the copy command cannot be run, exits non-zero, or produces a tree
+/// missing files known to be required.
 fn copy_folder(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).expect("Failed to create dst directory");
-    if cfg!(unix) {
+    let parent = dst
+        .parent()
+        .expect("destination for the llama.cpp copy has no parent directory");
+    std::fs::create_dir_all(parent).expect("Failed to create dst parent directory");
+
+    // Stage under a temporary name in the same directory, so the rename below
+    // is a cheap same-filesystem move.
+    let staging = parent.join(".llama.cpp.copy-tmp");
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).expect("failed to clear the stale copy staging dir");
+    }
+
+    let status = if cfg!(unix) {
         std::process::Command::new("cp")
             .arg("-rf")
             .arg(src)
-            .arg(dst.parent().unwrap())
+            .arg(&staging)
             .status()
-            .expect("Failed to execute cp command");
-    } else if cfg!(windows) {
+            .expect("Failed to execute cp command")
+    } else {
+        // robocopy reports success with exit codes 0-7; 8 and above are real
+        // failures. `.status()` alone would therefore flag ordinary copies as
+        // errors, hence the explicit check further down.
         std::process::Command::new("robocopy.exe")
             .arg("/e")
+            .arg("/nfl")
+            .arg("/ndl")
+            .arg("/njh")
+            .arg("/njs")
             .arg(src)
-            .arg(dst)
+            .arg(&staging)
             .status()
-            .expect("Failed to execute robocopy command");
+            .expect("Failed to execute robocopy command")
+    };
+
+    let ok = if cfg!(windows) {
+        status.code().is_some_and(|c| c < 8)
+    } else {
+        status.success()
+    };
+    assert!(
+        ok,
+        "copying {} to {} failed ({status}). The source tree may have been \
+         changing underneath the copy — a concurrent `git checkout` of the \
+         llama.cpp submodule will do it.",
+        src.display(),
+        staging.display()
+    );
+
+    // A copy can exit zero and still be short if the source moved under it, so
+    // check for files CMake will demand before we commit to this tree.
+    //
+    // Only files whose absence is *fatal* to CMake belong here. `LICENSE` does
+    // not: `cmake/license.cmake` merely warns, and the packaged crate is a
+    // filtered copy that legitimately differs from the git checkout — requiring
+    // it would reject `cargo package` output.
+    for required in [
+        "CMakeLists.txt",
+        "ggml/src/ggml-version.h.in",
+        "src/llama-version.h.in",
+    ] {
+        assert!(
+            staging.join(required).exists(),
+            "the copy of llama.cpp is missing `{required}`, so it is incomplete. \
+             If {} is the vendored submodule, check it is fully checked out; if \
+             it is a `target/package/...` tree, the file is missing from the \
+             `include` list in llama-cpp-sys-4/Cargo.toml.",
+            src.display()
+        );
     }
+
+    if dst.exists() {
+        std::fs::remove_dir_all(dst).expect("failed to remove the previous llama.cpp copy");
+    }
+    std::fs::rename(&staging, dst).expect("failed to move the llama.cpp copy into place");
 }
 
 /// Extract library names from the build output directory.
@@ -1002,60 +1056,53 @@ fn command_exists(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Compile the ext_shim C++ helpers (stable C linkage for C++-only llama.cpp APIs).
+/// Compile every C shim in this crate into one static library.
 ///
-/// Required on both the CMake and prebuilt paths: prebuilt tarballs ship
-/// llama/ggml/common libs only; `ext_shim` is always built from source here
-/// against the vendored llama.cpp headers so it matches the crate revision.
-fn compile_ext_shim(manifest_dir: &Path, llama_dst: &Path) {
-    let shim_dir = manifest_dir.join("ext_shim");
-    let ext_shim_src = shim_dir.join("ext_shim.cpp");
-    if !ext_shim_src.exists() {
-        return;
-    }
+/// The shims wrap C++-only llama.cpp APIs behind `extern "C"`. They are built
+/// from source on both the CMake and prebuilt paths: prebuilt tarballs ship
+/// llama/ggml/common libs only, so the shims must be compiled against the
+/// vendored headers to match this crate's revision.
+///
+/// One library rather than four, because `shim_support` holds state — a single
+/// thread-local error buffer — that all of them share. Separate libraries would
+/// each get their own copy, and `llama_shim_last_error()` would report whatever
+/// the *linker* happened to pick.
+fn compile_shims(manifest_dir: &Path, llama_dst: &Path) {
+    // `shim_support` must come first: it defines the storage the others
+    // reference.
+    const SHIM_DIRS: &[&str] = &["shim_support", "ext_shim", "mtp_shim", "chat_shim", "common_shim"];
 
-    cc::Build::new()
+    let mut build = cc::Build::new();
+    build
         .cpp(true)
         .std("c++17")
-        .file(&ext_shim_src)
-        .include(&shim_dir)
         .include(llama_dst.join("include"))
         .include(llama_dst.join("ggml/include"))
         .include(llama_dst.join("src"))
         .include(llama_dst.join("common"))
-        .warnings(false)
-        .compile("ext_shim");
-    println!("cargo:rerun-if-changed={}", ext_shim_src.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        shim_dir.join("ext_shim.h").display()
-    );
-}
+        .warnings(false);
 
-fn compile_mtp_shim(manifest_dir: &Path, llama_dst: &Path) {
-    let shim_dir = manifest_dir.join("mtp_shim");
-    let mtp_shim_src = shim_dir.join("mtp_shim.cpp");
-    if !mtp_shim_src.exists() {
-        return;
+    let mut any = false;
+    for name in SHIM_DIRS {
+        let shim_dir = manifest_dir.join(name);
+        let src = shim_dir.join(format!("{name}.cpp"));
+        if !src.exists() {
+            continue;
+        }
+        build.file(&src).include(&shim_dir);
+        println!("cargo:rerun-if-changed={}", src.display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            shim_dir.join(format!("{name}.h")).display()
+        );
+        any = true;
     }
 
-    cc::Build::new()
-        .cpp(true)
-        .std("c++17")
-        .file(&mtp_shim_src)
-        .include(&shim_dir)
-        .include(llama_dst.join("include"))
-        .include(llama_dst.join("ggml/include"))
-        .include(llama_dst.join("src"))
-        .include(llama_dst.join("common"))
-        .warnings(false)
-        .compile("mtp_shim");
-    println!("cargo:rerun-if-changed={}", mtp_shim_src.display());
-    println!(
-        "cargo:rerun-if-changed={}",
-        shim_dir.join("mtp_shim.h").display()
-    );
+    if any {
+        build.compile("llama_shims");
+    }
 }
+
 
 fn apple_vulkan_available() -> bool {
     let has_glslc = command_exists("glslc");
@@ -1573,6 +1620,18 @@ fn main() {
             "-I{}",
             Path::new(&manifest_dir).join("ext_shim").display()
         ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("chat_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("common_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("shim_support").display()
+        ))
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .derive_partialeq(true)
         // Do not derive PartialEq on types that contain function-pointer fields.
@@ -1601,6 +1660,7 @@ fn main() {
         .allowlist_type("mtp_state_status")
         .allowlist_function("llama_memory_breakdown_collect")
         .allowlist_type("llama_memory_breakdown_entry")
+        .allowlist_function("llama_quant_.*_guarded")
         .allowlist_function("common_device_memory_collect")
         .allowlist_type("common_device_memory_flat_entry")
         // Speculative strategy selector for the shim (MTP vs EAGLE3). The
@@ -1611,6 +1671,26 @@ fn main() {
         .allowlist_item("MTP_SPEC_TYPE_.*")
         .allowlist_item("MTP_STATE_STATUS_.*")
         .opaque_type("mtp_session")
+        // chat_shim: C wrappers over common/chat.h and json-schema-to-grammar.
+        // The `chat_shim_templates` handle stays opaque — it owns a
+        // `common_chat_templates_ptr`, which bindgen cannot represent.
+        .allowlist_function("chat_shim_.*")
+        .allowlist_type("chat_shim_.*")
+        .allowlist_item("CHAT_SHIM_.*")
+        .opaque_type("chat_shim_templates")
+        .allowlist_function("common_json_schema_to_grammar_c")
+        // common_shim: the non-chat half of common/. The handles stay opaque —
+        // they own C++ containers bindgen cannot represent.
+        .allowlist_function("llama_shim_last_error")
+        .allowlist_type("llama_shim_status")
+        .allowlist_item("LLAMA_SHIM_.*")
+        .allowlist_function("common_shim_.*")
+        .allowlist_type("common_shim_.*")
+        .allowlist_item("COMMON_SHIM_.*")
+        .opaque_type("common_shim_sampler")
+        .opaque_type("common_shim_sampler_params")
+        .opaque_type("common_shim_ngram_cache")
+        .opaque_type("common_shim_ngram_map")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")
         .allowlist_function("common_fit_params")
@@ -1632,6 +1712,18 @@ fn main() {
         // .opaque_type("llama_context_deleter")
         // .blocklist_type("llama_model_deleter")
         .opaque_type("std::.*");
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("chat_shim").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("common_shim").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("shim_support").display()
+    );
 
     // Add RPC support if feature is enabled
     if cfg!(feature = "rpc") {
@@ -1846,8 +1938,7 @@ fn main() {
                 }
             }
 
-            compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
-            compile_ext_shim(Path::new(&manifest_dir), &llama_dst);
+            compile_shims(Path::new(&manifest_dir), &llama_dst);
             return;
         }
 
@@ -2555,8 +2646,7 @@ fn main() {
         }
     }
 
-    compile_mtp_shim(Path::new(&manifest_dir), &llama_dst);
-    compile_ext_shim(Path::new(&manifest_dir), &llama_dst);
+    compile_shims(Path::new(&manifest_dir), &llama_dst);
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
     // This can happen even without the "openmp" feature because cmake's FindOpenMP

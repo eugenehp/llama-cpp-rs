@@ -4,6 +4,11 @@
 // leaving an undocumented crate that trips `missing_docs`.
 #![cfg(feature = "ggml")]
 
+// Results are exactly-representable values (integers and halves) produced by
+// exact f32 operations — add, scale by 2.5, and a view. An epsilon comparison
+// here would weaken the tests without making them more correct.
+#![allow(clippy::float_cmp)]
+
 use llama_cpp_4::ggml::*;
 
 #[test]
@@ -216,4 +221,60 @@ fn bytemuck_cast(data: &[f32]) -> &[u8] {
 
 fn bytemuck_cast_mut(data: &mut [f32]) -> &mut [u8] {
     unsafe { std::slice::from_raw_parts_mut(data.as_mut_ptr().cast(), data.len() * 4) }
+}
+
+/// The pool is not a recoverable resource: a debug ggml aborts on exhaustion
+/// and a release ggml returns null, which the constructors turn into a panic.
+/// `sized_for` exists so callers never find that out at runtime — it must
+/// actually reserve room for what it promises.
+#[test]
+fn sized_for_reserves_room_for_the_tensors_it_promises() {
+    let n = 64;
+    let ctx = GgmlContext::sized_for(n, 0, true);
+    for _ in 0..n {
+        let _ = ctx.new_tensor_1d(llama_cpp_sys_4::GGML_TYPE_F32, 16);
+    }
+    // All `n` were created without exhausting the pool.
+    assert!(ctx.used_mem() <= ctx.mem_size());
+}
+
+#[test]
+fn sized_for_accounts_for_graphs_too() {
+    let with_graph = GgmlContext::sized_for(8, 1, true).mem_size();
+    let without = GgmlContext::sized_for(8, 0, true).mem_size();
+    assert!(
+        with_graph > without,
+        "a graph must add to the pool: {with_graph} vs {without}"
+    );
+    assert!(with_graph - without >= llama_cpp_4::ggml::graph_overhead());
+}
+
+/// Headroom must be observable *before* allocating, which is the whole point
+/// of exposing it — the failure mode it avoids is uncatchable.
+#[test]
+fn used_and_free_memory_track_allocation() {
+    let ctx = GgmlContext::sized_for(32, 0, true);
+    let free_before = ctx.free_mem();
+    let used_before = ctx.used_mem();
+
+    let _t = ctx.new_tensor_2d(llama_cpp_sys_4::GGML_TYPE_F32, 4, 4);
+
+    assert!(
+        ctx.used_mem() > used_before,
+        "allocating a tensor must consume pool"
+    );
+    assert!(ctx.free_mem() < free_before, "free memory must shrink");
+    assert_eq!(
+        ctx.used_mem() + ctx.free_mem(),
+        ctx.mem_size(),
+        "used + free must account for the whole pool"
+    );
+}
+
+#[test]
+fn mem_size_reports_what_was_requested() {
+    // ggml may round up, but never down — a smaller pool than asked for would
+    // make `sized_for`'s arithmetic a lie.
+    let ctx = GgmlContext::new(64 * 1024, true);
+    assert!(ctx.mem_size() >= 64 * 1024);
 }

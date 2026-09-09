@@ -86,7 +86,9 @@ use std::os::raw::c_int;
 use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
+pub mod chat;
 pub mod common;
+pub mod common_sampler;
 pub mod context;
 pub mod eagle;
 pub mod fit;
@@ -96,9 +98,13 @@ pub mod llama_backend;
 pub mod llama_batch;
 pub mod model;
 pub mod mtp;
+pub mod ngram;
 pub mod prelude;
 pub mod quantize;
+pub mod runtime;
 pub mod sampling;
+// Plumbing shared by the shim-backed modules; not part of the public surface.
+mod shim;
 pub mod speculative;
 pub mod token;
 pub mod token_type;

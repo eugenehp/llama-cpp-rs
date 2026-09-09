@@ -47,13 +47,13 @@
 //! ```
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use hf_hub::{split_id, HFClientSync};
 use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -123,6 +123,8 @@ fn main() -> Result<()> {
     let model_path = args.model.resolve()?;
 
     let backend = LlamaBackend::init()?;
+
+    check_model_supports_mtp(&model_path)?;
 
     let model_params = LlamaModelParams::default().with_n_gpu_layers(1000);
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
@@ -360,4 +362,48 @@ fn run_speculative(
     );
     session.print_stats();
     Ok(())
+}
+
+/// Check a checkpoint advertises MTP before loading it.
+///
+/// MTP layers live in the *target* model here, not a separate draft, so this
+/// inspects the model itself. `speculative_types_from_gguf` reads only GGUF
+/// metadata, which turns "this model has no MTP head" from a failed session
+/// constructor after a multi-gigabyte load into an immediate, specific message.
+///
+/// A checkpoint advertising nothing is not rejected: older conversions predate
+/// the metadata key, and the session constructor remains the real gate.
+fn check_model_supports_mtp(path: &Path) -> Result<()> {
+    let path_str = path
+        .to_str()
+        .with_context(|| format!("model path is not UTF-8: {}", path.display()))?;
+
+    let types = speculative_types_from_gguf(path_str)
+        .with_context(|| format!("reading speculative metadata from {}", path.display()))?;
+
+    if types.is_empty() {
+        eprintln!(
+            "note: {} advertises no speculative type; continuing anyway",
+            path.display()
+        );
+        return Ok(());
+    }
+
+    let names: Vec<String> = types
+        .iter()
+        .map(|t| t.name().unwrap_or_else(|_| format!("{t:?}")))
+        .collect();
+
+    if names.iter().any(|n| n == "draft-mtp") {
+        println!("model advertises: {}", names.join(", "));
+        return Ok(());
+    }
+
+    bail!(
+        "{} does not advertise `draft-mtp` — it supports: {}.\n\
+         Use a checkpoint with MTP layers (e.g. DeepSeek V4, GLM-4.5-Air), or \
+         run the `eagle` example for an EAGLE-3 draft.",
+        path.display(),
+        names.join(", ")
+    )
 }

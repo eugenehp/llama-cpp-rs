@@ -380,6 +380,9 @@ pub fn fit_params(
             tensor_buft_overrides.as_mut_ptr(),
             margins.as_mut_ptr(),
             options.n_ctx_min,
+            // `extra`: a second model to fit alongside the main one (a draft
+            // model, say). This entry point fits one model, so there is none.
+            null(),
             options.log_level,
         )
     };

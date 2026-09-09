@@ -758,3 +758,92 @@ fn test_dry_sampler() {
     );
     assert_eq!(sampler.name(), "dry");
 }
+
+
+// ============================================================
+// Named chat templates, ftype, embeddings, suppress tokens
+// ============================================================
+
+/// `chat_template(None)` must agree with the deprecated `get_chat_template`,
+/// which reads `tokenizer.chat_template` out of GGUF by hand. If they diverge,
+/// one of the two is reading the wrong key — and the deprecation notice would
+/// be steering callers onto different behaviour, not just a better API.
+#[test]
+#[allow(deprecated)] // comparing against the deprecated path is the point
+fn test_chat_template_default_matches_manual_lookup() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    match (model.chat_template(None), model.get_chat_template(8192)) {
+        (Ok(via_api), Ok(via_meta)) => assert_eq!(via_api, via_meta),
+        // stories260K ships no chat template; both paths must agree on that.
+        (Err(_), Err(_)) => {}
+        (a, b) => panic!("chat_template and get_chat_template disagree: {a:?} vs {b:?}"),
+    }
+}
+
+/// A name the model does not carry must be an error rather than silently
+/// falling back to the default template — the whole point of the parameter is
+/// telling "has a `tool_use` variant" from "does not".
+#[test]
+fn test_chat_template_unknown_name_is_error() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    assert!(model.chat_template(Some("definitely_not_a_template")).is_err());
+}
+
+#[test]
+fn test_model_ftype_is_known() {
+    let Some((_backend, model, vocab_only)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    if vocab_only {
+        return;
+    }
+    // stories260K is F32; whatever it is, a known ftype must name itself.
+    if let Some(ftype) = model.ftype() {
+        assert!(!ftype.name().is_empty());
+        assert!(!ftype.upstream_name().unwrap().is_empty());
+    }
+}
+
+/// The embedding matrix must be exactly `n_vocab * n_embd` f32s. A mismatch
+/// means the two-call size/fill protocol disagreed with itself.
+#[test]
+fn test_token_embeddings_shape() {
+    let Some(model) = support::model::load_full_model() else {
+        return;
+    };
+    let embd = model.token_embeddings().expect("token embedding matrix");
+    let expected = model.n_vocab() as usize * model.n_embd() as usize;
+    assert_eq!(embd.len(), expected, "expected n_vocab * n_embd f32s");
+    assert!(
+        embd.iter().any(|v| *v != 0.0),
+        "embedding matrix is entirely zero"
+    );
+    assert!(
+        embd.iter().all(|v| v.is_finite()),
+        "embedding matrix contains non-finite values"
+    );
+}
+
+/// Most models declare no suppress tokens; the contract is that this is an
+/// empty slice rather than a null-pointer panic.
+#[test]
+fn test_suppress_tokens_is_empty_or_in_range() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let n_vocab = model.n_vocab();
+    for tok in model.get_vocab().suppress_tokens() {
+        assert!(
+            tok.0 >= 0 && tok.0 < n_vocab,
+            "suppress token {tok:?} outside vocab of {n_vocab}"
+        );
+    }
+}

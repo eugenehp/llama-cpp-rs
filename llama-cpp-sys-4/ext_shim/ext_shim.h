@@ -45,6 +45,33 @@ size_t common_device_memory_collect(
         uint32_t *                               hp_n_ctx_train,
         uint32_t *                               hp_n_expert);
 
+// Guarded wrappers over the `llama_quant_*` preview API.
+//
+// `llama_quant_model_from_metadata` and `llama_quant_init` throw on input they
+// reject (an unknown architecture, a model they cannot quantize). Letting that
+// unwind into Rust aborts the process with "Rust cannot catch foreign
+// exceptions", so both are wrapped to return NULL instead.
+
+struct llama_model * llama_quant_model_from_metadata_guarded(
+        const struct llama_quant_model_desc * desc);
+
+struct quantize_state_impl * llama_quant_init_guarded(
+        const struct llama_model *                  model,
+        const struct llama_model_quantize_params *  params);
+
+// Returns 0 on success, non-zero if the underlying call threw.
+int32_t llama_quant_compute_types_guarded(
+        struct quantize_state_impl * qs,
+        enum llama_ftype             ftype,
+        struct ggml_tensor **        tensors,
+        enum ggml_type *             result_types,
+        size_t                       n_tensors);
+
+// Returns 1 if quantizable, 0 if not, -1 if the underlying call threw.
+int32_t llama_quant_tensor_allows_quantization_guarded(
+        const struct quantize_state_impl * qs,
+        const struct ggml_tensor *         tensor);
+
 #ifdef __cplusplus
 }
 #endif

@@ -88,11 +88,52 @@ jobs:
           fi
       - name: sccache stats
         run: sccache --show-stats || true
+  package:
+    # Builds the crate exactly as crates.io would receive it and compiles that
+    # tree. Nothing else checks the published artifact: the workspace builds
+    # from the git checkout, which has files the `include` list in
+    # llama-cpp-sys-4/Cargo.toml does not ship. A llama.cpp bump that starts
+    # requiring a new file type — `ggml-version.h.in` did, in upstream #28364 —
+    # breaks the published crate while every other job stays green.
+    #
+    # Only llama-cpp-sys-4 can be verified here: llama-cpp-4 depends on it by
+    # version, so `cargo package` cannot resolve until the sys crate is on
+    # crates.io.
+    name: Verify the publishable package builds
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTFLAGS: '-C link-arg=-fuse-ld=mold -C link-arg=-Wl,-rpath,$ORIGIN'
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: dtolnay/rust-toolchain@stable
+      # `--allow-dirty` because the submodule checkout leaves the tree dirty in
+      # CI; the packaging and verification are what matter here, not cleanliness.
+      - name: cargo package (with verification build)
+        run: cargo package -p llama-cpp-sys-4 --allow-dirty
+      - name: sccache stats
+        run: sccache --show-stats || true
+
   feature-combos:
     # Every other job builds the default feature set
     # (openmp,mtmd,dynamic-link), so a break under any other combination stays
-    # hidden until a release tag fires prebuilt-llama.yml. These two cover the
-    # feature-gated bindgen sections (mtmd, rpc) and static linkage.
+    # hidden until a release tag fires prebuilt-llama.yml.
+    #
+    # These jobs *lint* as well as build. `ggml` had accumulated 47 clippy
+    # warnings precisely because nothing here ever turned the feature on — code
+    # behind an off-by-default feature is not covered by the default-feature
+    # jobs, so it drifts silently.
     name: Check non-default feature combos (${{ matrix.label }})
     runs-on: ubuntu-latest
     strategy:
@@ -103,10 +144,16 @@ jobs:
             features: mtmd
           - label: rpc
             features: rpc
-          # Vendors the unmerged upstream PR #27342; this job is what catches
-          # the patch going stale when llama.cpp is bumped.
-          - label: dflash2
-            features: dflash2
+          # Raw ggml tensor/graph API. Off by default, so only this job sees it.
+          - label: ggml
+            features: ggml
+          # Q1 quantization; gates a build-time patch as well as Rust code.
+          - label: q1
+            features: q1
+          # No features at all: static linkage, no mtmd/openmp. The floor every
+          # other combination builds on.
+          - label: no-default-features
+            features: ""
     env:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
@@ -129,7 +176,26 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Build
-        run: cargo build -p llama-cpp-4 --no-default-features --features ${{ matrix.features }}
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo build -p llama-cpp-4 --no-default-features
+          else
+            cargo build -p llama-cpp-4 --no-default-features --features ${{ matrix.features }}
+          fi
+      # Lint too, not just build. A feature-gated module that compiles can still
+      # be accumulating warnings nobody sees.
+      - name: Clippy
+        run: |
+          if [ -z "${{ matrix.features }}" ]; then
+            cargo clippy -p llama-cpp-4 --all-targets --no-default-features -- -D warnings
+          else
+            cargo clippy -p llama-cpp-4 --all-targets --no-default-features \
+              --features ${{ matrix.features }} -- -D warnings
+          fi
+      # `ggml` and `q1` carry their own test files, which nothing else runs.
+      - name: Test
+        if: matrix.features == 'ggml' || matrix.features == 'q1'
+        run: cargo test -p llama-cpp-4 --no-default-features --features ${{ matrix.features }}
       # examples/rpc is its own workspace (see its Cargo.toml), so no other job
       # ever compiles it — which is how it silently went stale.
       - name: Build rpc example

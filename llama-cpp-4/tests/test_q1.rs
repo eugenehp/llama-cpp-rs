@@ -8,6 +8,11 @@
 //! Run with:
 //!   cargo test -p llama-cpp-4 --features q1 --test `test_q1` -- --nocapture
 
+// llama.cpp indexes batch positions and vocab entries with `i32` while Rust
+// collections use `usize`; the checkpoints under test are tiny, so these
+// casts cannot overflow.
+#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 #![cfg(feature = "q1")]
 
 use llama_cpp_4::{
@@ -32,7 +37,7 @@ fn model_path() -> PathBuf {
 }
 
 /// One global backend. llama.cpp only allows one `llama_backend_init` per
-/// process; tests run in parallel on multiple threads so we use OnceLock.
+/// process; tests run in parallel on multiple threads so we use `OnceLock`.
 fn backend() -> &'static LlamaBackend {
     static BACKEND: OnceLock<LlamaBackend> = OnceLock::new();
     BACKEND.get_or_init(|| LlamaBackend::init().expect("backend init failed"))
@@ -210,7 +215,7 @@ fn detokenize_roundtrip() {
 
 // ── inference ─────────────────────────────────────────────────────────────────
 
-/// Forward pass on a short prompt — verifies the full Q1_0_g128 decode path.
+/// Forward pass on a short prompt — verifies the full `Q1_0_g128` decode path.
 #[test]
 fn forward_pass_returns_valid_logits() {
     let Some(model) = load() else { return };
@@ -318,7 +323,7 @@ fn autoregressive_generation() {
 
     assert!(!generated.is_empty(), "no tokens generated");
     assert!(
-        output.chars().any(|c| c.is_alphanumeric()),
+        output.chars().any(char::is_alphanumeric),
         "output has no alphanum: {output:?}"
     );
 }

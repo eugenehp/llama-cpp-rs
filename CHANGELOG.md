@@ -2,6 +2,370 @@
 
 ## Unreleased
 
+## [0.7.0] - 2026-09-09
+
+### Added
+
+- **`QuantizeParams::max_buf_size` / `with_max_buf_size()`**, wrapping the new
+  `llama_model_quantize_params::max_buf_size`
+  ([#27795](https://github.com/ggml-org/llama.cpp/pull/27795)). It caps the
+  bytes of tensor rows held in memory at once (`0` = upstream's 8 GiB default),
+  so a model larger than available RAM can be quantized at the cost of more
+  I/O. Seeded from `llama_model_quantize_default_params()` like every other
+  field on the builder.
+- **New `chat` module wrapping `common/chat.h`** — llama.cpp's own chat-template,
+  tool-calling and output-parsing layer, previously unreachable from Rust
+  because it traffics in `std::string`/`std::vector`/`common_json` and a PEG
+  parser arena. Added `chat_shim`, a third C shim alongside `ext_shim` and
+  `mtp_shim`.
+  - `ChatTemplates::from_model()` / `apply()` render an OpenAI-shaped request
+    into a prompt **plus its sampling constraints**: `ChatParams::grammar`,
+    `grammar_lazy`, and `grammar_triggers`. The lazy path is the point — a
+    grammar applied from token zero stops a thinking model ever opening its
+    `<think>` block, whereas a lazy grammar stays dormant until a trigger such
+    as `<tool_call>` fires.
+  - `ChatParams::parse()` reads model output back into an OpenAI-shaped message
+    with `content`, `reasoning_content` and `tool_calls`, using the parser that
+    template produced rather than scraping for a fixed marker. `is_partial`
+    tolerates a truncated tail for streaming.
+  - `ToolChoice` (`Auto`/`Required`/`None`, plus `parse_oaicompat`),
+    `ReasoningFormat`, `GrammarTrigger`, `ChatTemplates::caps_json()`,
+    `format_name()`, `parse_messages_oaicompat()`, `parse_tools_oaicompat()`.
+  - Note that at `b10881` upstream only emits a GBNF grammar for templates it
+    *recognises* (the per-family parsers under `common/parsers/`); an
+    unrecognised template falls through to the generic autoparser, which
+    constrains via PEG instead and leaves `grammar` empty.
+- **`GgmlContext::sized_for()`, `used_mem()`, `mem_size()`, `free_mem()`.**
+  The ggml context takes a raw `mem_size` byte count with no guidance, and
+  running out is not recoverable — see *Fixed*. `sized_for(n_tensors, n_graphs)`
+  computes the pool from `tensor_overhead()`/`graph_overhead()` instead of
+  guessing, and the accessors let a caller check headroom while building a
+  graph rather than discovering the limit by hitting it.
+- **New `ngram` example**: draft-model-free speculative decoding end to end.
+  `--verify` runs the same prompt with and without drafting and asserts the
+  outputs are byte-identical, which is speculative decoding's losslessness
+  guarantee — so the demo doubles as a check. On a repetitive prompt with the
+  tiny CI checkpoint it produces 32 tokens in 23 target forward passes instead
+  of 32, at a 47% draft-acceptance rate.
+- **`examples/structured` accepts a JSON Schema** (`--json-schema`,
+  `--json-schema-file`), converted to GBNF by llama.cpp. It previously only
+  took hand-written GBNF, which is the gap `json_schema_to_grammar` was added
+  to close.
+- **`examples/eagle` and `examples/mtp` probe the checkpoint before loading
+  it**, via `speculative_types_from_gguf`. A model that does not advertise the
+  needed strategy now fails immediately with a specific message instead of
+  after a multi-gigabyte load. A checkpoint advertising nothing is not
+  rejected — older conversions predate the metadata key.
+- **`LlamaSampler::try_sample` / `try_accept`**, returning errors where
+  `sample` / `accept` panic. See *Fixed*.
+- **New `common_sampler` module** wrapping `common_sampler` — the sampler chain
+  llama.cpp assembles for its own tools, as opposed to the individual
+  `llama_sampler_*` primitives `LlamaSampler` exposes. It gets right several
+  things that are easy to miss by hand: sampler ordering, grammar prefill,
+  merging model-declared `suppress_tokens` into the logit bias, and creating the
+  reasoning-budget sampler when a lazy grammar is active. `CommonSamplerParams`
+  splits the ~35 POD knobs into a plain struct and the container-backed fields
+  into methods, so an upstream bump that adds a field does not break the
+  signature. Includes `CommonSampler::sample_and_accept_n`, the speculative
+  acceptance path every caller previously had to re-implement around an
+  `Eagle3Session`/`MtpSession`.
+- **`ReasoningBudget`**, wrapping `common_reasoning_budget_*`. Caps how many
+  tokens a model may spend inside a `<think>` block and force-closes it when the
+  budget runs out. This is the piece llama.cpp pairs with a *lazy* grammar:
+  the grammar leaves reasoning unconstrained by design, so something else has to
+  bound it — without it a thinking model with a tool grammar can reason until
+  the context ends.
+- **New `ngram` module: speculative decoding with no draft model.** Three
+  strategies, all drafting by looking up where the token history repeats —
+  `ngram_simple_draft` (stateless), `NgramMap` (adapts to how its own drafts
+  land), and `NgramCache` (statistical, save/loadable, consulted as
+  context/dynamic/static tiers). Costs a hash lookup per step instead of a
+  forward pass and needs no extra weights, which is why it wins on code editing,
+  RAG over quoted text and repetitive JSON. Pairs with
+  `CommonSampler::sample_and_accept_n` for verification.
+- **New `runtime` module**:
+  - `speculative_types_from_gguf()` reads which speculative strategies a draft
+    checkpoint supports **without loading it** — a metadata read instead of a
+    multi-gigabyte load followed by a failed session construction. Plus
+    `SpeculativeType` name round-tripping.
+  - `runtime::log` — llama.cpp's own logger: verbosity, timestamps, prefix,
+    colours, JSONL, file output, pause/resume. Distinct from
+    [`log_set`](crate::log_set), which installs a callback.
+  - `runtime::download` — resolve Hugging Face `repo[:tag]` and Docker
+    references through **llama.cpp's own cache**, so a model pulled by
+    `llama-cli` is found here and vice versa. Plus `split_repo_tag`,
+    `remove_cached` and `list_cached_json`.
+- **mtmd**: `MtmdContext::tokenize_from_parts()` (explicit interleaving with
+  per-part `parse_special`, so a media marker in user text is just text),
+  `mmproj_caps()` (probe a projector's modalities without loading it),
+  `MtmdContext::gen_audio_info()`, `MtmdContext::model_can_chat()`,
+  `MtmdInputChunk::to_owned_chunk()`, and `MtmdLazyBitmap` — media produced on
+  demand during tokenization, for video too large to materialise up front or
+  that a stop sequence may never reach.
+- **`ChatParams::grammar_sampler()`**, which builds the correctly-configured
+  sampler for a render. Three things must line up and each is silently wrong on
+  its own: lazy-vs-eager construction, trigger translation (literal triggers
+  need regex-escaping, `pattern_full` needs anchoring, token triggers are not
+  patterns at all — see `ChatParams::sampler_triggers`), and **generation-prompt
+  prefill**. llama.cpp writes tool-call grammars to match
+  `generation_prompt + output`, because that is what its parser later sees; the
+  sampler only sees `output`, so without advancing the grammar past that prefix
+  the model is forced to *re-emit* `<|im_start|>assistant` as generated text.
+  Also adds `ChatParams::generation_prompt()`.
+- **`chat::json_schema_to_grammar()`**, wrapping `json_schema_to_grammar` — the
+  missing half of structured output. Feed the result to `LlamaSampler::grammar`
+  and the model *cannot* emit anything the schema rejects. This is what
+  `response_format: json_schema` needs; until now the `structured` example could
+  only take hand-written GBNF.
+- **`QuantPreview` and `QuantModelDesc`** (`quantize`), wrapping the
+  `llama_quant_*` API: ask which tensors would be quantized and to which `ggml`
+  type, without writing a file. The k-quant mixes keep attention and output
+  tensors at higher precision, so the per-tensor answer differs from the ftype's
+  nominal type — which is exactly what a size estimate or a `--dry-run` plan
+  needs. `QuantModelDesc` builds a synthetic model from metadata, so no
+  checkpoint is required. The tensor-facing methods need the `ggml` feature.
+- **`LlamaModel::chat_template(name)`**, wrapping `llama_model_chat_template`.
+  Reaches *named* templates — `Some("tool_use")` resolves
+  `tokenizer.chat_template.tool_use` — which the existing `get_chat_template`
+  could not, since it reads the default GGUF key directly.
+- **`LlamaModel::ftype()`**, **`LlamaFtype::upstream_name()`** and
+  **`LlamaFtype::default_ggml_type()`**, plus `TryFrom<llama_ftype> for
+  LlamaFtype`. `upstream_name` asks llama.cpp (`"Q4_K - Medium"`) rather than
+  this crate's filename-safe table (`"Q4_K_M"`), so it cannot drift as upstream
+  adds types.
+- **`LlamaModel::token_embeddings()`**, wrapping `llama_model_get_tok_embd` —
+  the whole embedding matrix as `f32`, converted from whatever it is stored as.
+- **`LlamaVocab::suppress_tokens()`**, wrapping
+  `llama_vocab_get_suppress_tokens`: tokens the model declares must never be
+  sampled (`tokenizer.ggml.suppress_tokens`). Feed to `LlamaSampler::logit_bias`.
+- **`LlamaLoadMode::name()` / `from_name()`**, the string round-trip upstream's
+  `--load-mode` flag uses.
+- **mtmd: chunk persistence** — `MtmdInputChunk::save()`,
+  `MtmdInputChunks::load_chunk()`, `MtmdInputChunk::to_placeholder()` and the
+  owning `OwnedMtmdInputChunk`. Metadata only, which is what lets a restored KV
+  cache line back up with the prompt that produced it; pairs with
+  `state_seq_save_file`.
+- **mtmd: `MtmdBatch`**, wrapping `mtmd_batch_init`/`add_chunk`/`encode` — runs
+  the vision encoder once over a multi-image prompt or a run of video frames
+  instead of once per image.
+- **mtmd: `MtmdAudioGen`**, wrapping `mtmd_helper_gen_audio_*` — audio
+  *generation*, a modality that was entirely unbound. Explicit `set_input` →
+  `step_prompt` → `step_gen` → `output` loop, mirroring upstream's stateless
+  design.
+- **mtmd: `MtmdBitmap::set_mergeable()`**, needed when you build video frames
+  yourself with `from_rgb`; frames from `MtmdVideo::read_next` already have it
+  set by the helper.
+- **`LlamaModelParams::with_lazy_mode()` / `lazy_mode()` and the `LlamaLazyMode`
+  enum**, wrapping the new `llama_model_params::lazy_mode`
+  ([#27794](https://github.com/ggml-org/llama.cpp/pull/27794)). `Off` always
+  reads whole tensors up front, `Auto` (upstream's default) reads lazily only
+  for arch-marked tensors above 4 GiB, and `On` does so for every marked tensor
+  regardless of size. Only architectures that flag tensors `TENSOR_READ_LAZY`
+  are affected — currently Gemma-4's per-layer token embedding and Qwen4Exp's
+  PLE rows — and lazy reads require mmap, so llama.cpp warns and loads in full
+  without it. The getter reports the *requested* mode: upstream resolves `Auto`
+  to `Off` during load when a device lacks mmap support (iGPUs,
+  [#28326](https://github.com/ggml-org/llama.cpp/pull/28326)) without writing
+  that back.
+- **`DFlashSession`, `Eagle3Session::new_dflash()` and `new_dflash_with_config()`
+  are now unconditional.** They were behind the `dflash2` feature only because
+  the C++ came from an unmerged PR; that PR is now upstream, so the gate is
+  gone. Existing callers that enabled the feature keep working — they just no
+  longer need it.
+
+### Fixed
+
+- **The published crate did not build.** `ggml/src/ggml-version.h.in` was
+  missing from the package. `llama-cpp-sys-4`'s `include` list covers
+  `ggml/src` by extension (`*.h`, `*.c`, `*.cpp`) rather than with a recursive
+  glob, so when upstream started generating a header from a template
+  ([#28364](https://github.com/ggml-org/llama.cpp/pull/28364), inside the
+  `b10502`→`b10881` range) the input was silently dropped and CMake failed with
+  `File .../ggml-version.h.in does not exist`. The workspace build was
+  unaffected — it compiles the git checkout, which has the file — so only
+  `cargo package` could reveal it. `ggml/src/*.in` and `LICENSE` are now
+  shipped, and a **new CI job runs `cargo package` with its verification
+  build**, which is the check that was missing: nothing previously compiled the
+  artifact crates.io would receive.
+- **A partial copy of the llama.cpp source tree could poison an `OUT_DIR`
+  permanently.** `build.rs` copies the submodule into `OUT_DIR` with `cp -rf`
+  (or `robocopy`) and then writes a version sentinel next to it; later builds
+  skip the copy when that sentinel matches. But the copy's exit status was
+  never checked, so a `cp` that failed part-way — which is what a concurrent
+  `git checkout` of the submodule causes — was accepted, the sentinel written
+  over it, and the truncated tree reused from then on. The symptom is a CMake
+  error about a missing `LICENSE` or `ggml/src/ggml-version.h.in`, which says
+  nothing about copying and is only cleared by `cargo clean`.
+
+  The copy now (a) checks the exit status, allowing for `robocopy`'s 0–7
+  success range, (b) stages into a temporary sibling and renames into place
+  only on success, so the destination is either absent or complete, and
+  (c) asserts that the `configure_file` inputs CMake hard-fails without
+  actually arrived. A failure now names the real cause and leaves no sentinel,
+  so the next build retries. `LICENSE` is deliberately not in that list —
+  `cmake/license.cmake` only warns, and demanding it would reject the
+  legitimately-filtered `cargo package` tree.
+
+- **Two llama.cpp entry points throw C++ exceptions that would abort the
+  process** if called directly from Rust — unwinding across `extern "C"` is
+  undefined behaviour, and in practice yields `fatal runtime error: Rust cannot
+  catch foreign exceptions`. Both are now reached through guarded wrappers:
+  - `llama_quant_model_from_metadata` and `llama_quant_init` throw for input
+    they reject (an unknown architecture, a model they cannot quantize); they
+    are wrapped in `ext_shim` and return null instead.
+  - `llama_load_mode_from_str` throws `std::invalid_argument` for an
+    unrecognised string, so `LlamaLoadMode::from_name` deliberately does *not*
+    call it — it compares against `llama_load_mode_name` output instead, which
+    uses upstream's own strings and cannot throw.
+  Everything in `chat_shim` is guarded the same way, since `common/chat.h`
+  throws on malformed JSON, unparseable templates and unknown `tool_choice`.
+- **Documented that exhausting a `GgmlContext` pool is unrecoverable, and
+  gave callers the means to avoid it.** `ggml.c:1735` warns, then
+  `GGML_ABORT`s under `#ifndef NDEBUG` and returns null otherwise — so a debug
+  build of ggml kills the process and a release build returns null, which this
+  crate's constructors turned into a bare `.expect()`. 22 functions now carry a
+  `# Panics` section saying so, and [`GgmlContext::sized_for`] exists so the
+  situation is avoidable rather than merely documented.
+- **An unsatisfiable grammar aborted the process.** `llama_sampler_accept`
+  reaches llama.cpp's grammar code, which *throws* `"Unexpected empty grammar
+  stack after accepting piece"` when a model's vocabulary cannot satisfy the
+  constraint — a JSON schema against a vocabulary with no `{`, for instance.
+  `LlamaSampler::accept` and `sample` called it directly, so that C++ exception
+  unwound into Rust and killed the process with `fatal runtime error: Rust
+  cannot catch foreign exceptions`. Both now route through a guard: they panic
+  with llama.cpp's own message, and `try_accept` / `try_sample` return it as an
+  error instead. Found while wiring `--json-schema` into `examples/structured`,
+  which reproduced it on the CI checkpoint.
+- **`examples/server` silently overrode an explicit `max_tokens`.** With tools
+  present it raised anything below 1024 to 1024 — but `parse_max_tokens`
+  already *defaults* to 1024, so that could only ever fire on a value the
+  caller had explicitly asked for, handing a request capped at 32 tokens 32x
+  the cost. Removed; the default still gives thinking models room. This also
+  cut the server integration suite from 30s to under a second.
+- **`examples/server`'s test harness silently ran against stale binaries.** It
+  leaks the server child by design (`std::mem::forget`), so a process from an
+  earlier run stays bound to the test port; the next run's child then dies on
+  bind while `/health` keeps answering from the *old* binary, and tests pass or
+  fail against code no longer on disk. `start_server` now polls `try_wait()`
+  and fails with an actionable message instead.
+
+### Changed
+
+- **CI now builds *and lints* `ggml`, `q1` and `--no-default-features`.** The
+  matrix was `mtmd` and `rpc` only, so code behind any other feature was never
+  compiled there — which is exactly how `src/ggml.rs` accumulated 47 clippy
+  warnings unnoticed. The feature-combo jobs now run `clippy -D warnings` as
+  well as `build`, and run the `ggml`/`q1` test files, which nothing else did.
+  All 47 warnings are fixed.
+- **Internal: the four C shims are deduplicated.** `build.rs` had four
+  byte-identical 24-line `compile_*_shim` functions; they are now one
+  `compile_shims()` building every shim into a single library. `chat_shim` and
+  `common_shim` each carried their own copy of the same `guard`/`emit`/error
+  boilerplate — now in `shim_support`, which also means **one** thread-local
+  error buffer rather than two that could disagree about which failure was
+  most recent. Their status enums are unified too: `CHAT_SHIM_BAD_JSON` was
+  `-2` while `COMMON_SHIM_THROWN` was also `-2`, so a shared status mapping
+  would have reported one as the other. On the Rust side, `ChatError` and
+  `CommonSamplerError` are now aliases of one `ShimError`, over one set of
+  `check_status` / `read_string` / `read_tokens` helpers.
+- **`examples/server` now drives tool calling through `llama_cpp_4::chat`**
+  instead of hand-rolling it. `tools.rs` drops from 526 lines of logic to 448,
+  and the ~230 of those that injected a Hermes `<tools>` block into the system
+  prompt and then scanned output for `<tool_call>` markers are gone entirely
+  (the remaining growth is tests: 15 → 27). What changes behaviourally:
+  - **Tool-call syntax is now per model family.** The old scraper only
+    understood Hermes; Functionary (`>>>name`), DeepSeek and the rest silently
+    produced no tool calls. llama.cpp picks the parser from the template.
+  - **`tool_choice: "required"` is enforced by grammar, not by asking.** The
+    old code explicitly gave up on grammar forcing — its comment noted GBNF
+    "prevents thinking models from emitting their reasoning prefix", which is
+    true of an *eager* grammar. Lazy grammars solve exactly that, so the
+    constraint is now real rather than a prompt suggestion.
+  - **`tool_choice: {"type":"function",…}`** narrows the tool list to that
+    function and asks for `Required`, since `common_chat_tool_choice` cannot
+    name one. Naming a function absent from `tools` is a 400 rather than a
+    grammar referencing nothing.
+  - **Request validation is llama.cpp's**: `tools` and `messages` go through
+    `common_chat_tools_parse_oaicompat` / `common_chat_msgs_parse_oaicompat`,
+    so anything the server accepts is something the template can render.
+  - **Reasoning is split into `reasoning_content` for every chat request**, not
+    only ones carrying tools — the old code parsed output only when tools were
+    present.
+  - `response_format.json_schema` is now honoured, through the same grammar
+    path. A per-request `chat_template` still works, building a one-off
+    template set.
+  - The two end-to-end `tool_calling_*` integration tests are now `#[ignore]`d
+    with a reason: the grammar for `required` is `<preamble>? tool-calls` with
+    an *unbounded* preamble, so it guarantees a well-formed call eventually,
+    not promptly — and the 260K-parameter CI checkpoint rambles until
+    `max_tokens`. Six tests that the tiny model *can* verify replace them,
+    including a deterministic guard against the generation-prompt prefill
+    regression.
+- **llama.cpp**: vendored submodule updated to `22397c31a0` (tag `b10881`) from
+  `0adcc3bb5` (`b10502`), 379 upstream commits spanning releases `v0.2.0`,
+  `v0.3.0` and `v0.4.0`. Notable in this window:
+  - **DFlash2 merged upstream**
+    ([#27342](https://github.com/ggml-org/llama.cpp/pull/27342) via
+    [#27816](https://github.com/ggml-org/llama.cpp/pull/27816), landing in
+    `b10658`) — see *Removed*.
+    Follow-ups fuse the DFlash encoder into KV-cache injection
+    ([#27310](https://github.com/ggml-org/llama.cpp/pull/27310)) and fix NVFP4
+    scales for attention ([#28000](https://github.com/ggml-org/llama.cpp/pull/28000)).
+  - **Lazy tensor loading** (`llama_lazy_mode`, `TENSOR_READ_LAZY`,
+    [#27794](https://github.com/ggml-org/llama.cpp/pull/27794),
+    [#27837](https://github.com/ggml-org/llama.cpp/pull/27837)): read rows of
+    arch-marked tensors on demand instead of up front. Defaults to
+    `LLAMA_LAZY_MODE_AUTO`, and is disabled on iGPUs
+    ([#28326](https://github.com/ggml-org/llama.cpp/pull/28326)). Surfaced as
+    [`LlamaModelParams::with_lazy_mode`] — see *Added*.
+  - **mtmd video input**: webp via ffmpeg
+    ([#27520](https://github.com/ggml-org/llama.cpp/pull/27520)), `--video-*`
+    arguments ([#24318](https://github.com/ggml-org/llama.cpp/pull/24318)),
+    and video IDs propagated to bitmaps
+    ([#28601](https://github.com/ggml-org/llama.cpp/pull/28601)).
+  - New architectures — Qwen3.8-Flash-Next, Tencent Hy 4, Spark2_5,
+    NemotronHPuzzle, Kimi-K3 recurrent-state rollback, DSpark for Nemotron3.5,
+    plus MTP for GLM-4.5-Air
+    ([#26534](https://github.com/ggml-org/llama.cpp/pull/26534)).
+  - `ggml_prec` gains `BF16`/`F16`/`Q8`/`Q4` levels; `ggml_mul_mat_set_prec`
+    and `ggml_flash_attn_ext_set_prec` are deprecated in favour of
+    `ggml_prec_set_acc()`. Nothing was removed, so the generated bindings only
+    grow.
+  - Patches `0003`–`0005` apply unchanged.
+- **Saved context state from 0.6.1 will not load.** Upstream bumped
+  `LLAMA_SESSION_VERSION` 9 → 10 and `LLAMA_STATE_SEQ_VERSION` 2 → 3, and the
+  loader requires an exact version match, so files written by
+  `state_save_file`, `state_seq_save_file` or `save_session_file` under 0.6.1
+  are rejected by this build. Regenerate them.
+- Three C signatures the crate calls grew a parameter; all three are threaded
+  through with the upstream default, so behaviour is unchanged:
+  - `common_fit_params` takes a `const common_fit_extra_model *` for a second
+    model sharing the main model's devices
+    ([#27496](https://github.com/ggml-org/llama.cpp/pull/27496)).
+    [`fit_params`] passes `nullptr`; fitting a draft model alongside the target
+    is not yet exposed.
+  - `mtmd_helper_bitmap_init_from_file` / `_from_buf` take an
+    `mtmd_helper_init_opt`, which carries the video-decode settings now that
+    upstream can route webp through ffmpeg. [`MtmdBitmap::from_file`] and
+    [`MtmdBitmap::from_buf`] pass `mtmd_helper_init_opt_default()` and are not
+    yet parameterised by it; deliberate video input still goes through
+    [`MtmdVideo`] with [`MtmdVideoParams`].
+  - Many `mtmd` entry points took `const` pointers
+    ([#28307](https://github.com/ggml-org/llama.cpp/pull/28307)). Rust's
+    `*mut T` → `*const T` coercion absorbs this; no call site changed.
+
+### Removed
+
+- **BREAKING** — **the `dflash2` feature is retired** from both crates, along
+  with `patches/0006-dflash2.patch`. It existed only to vendor unmerged PR
+  [#27342](https://github.com/ggml-org/llama.cpp/pull/27342); `b10881` ships
+  every DFlash2 GGUF KV key (`dflash.conv_group_size`, `dflash.selector_rank`,
+  `dflash.selector_top_k`, `dflash.sample_from_anchor`), the convolution and
+  candidate-selector graph, and the `common/speculative.cpp` integration — so
+  the patch is redundant and no longer applies. A `Cargo.toml` naming
+  `features = ["dflash2"]` now fails to resolve; delete the entry. The Rust API
+  it gated is unaffected and is now always available (see *Added*).
+
 ## [0.6.1] - 2026-08-19
 
 ### Added
@@ -55,6 +419,8 @@
   `mtmd_input_chunk_get_placeholder()`, and a comment noting `mtmd_helper`
   bitmap IDs are now SHA-256 rather than FNV. Patches `0003`–`0005` apply
   unchanged.
+
+## [0.6.0] - 2026-08-17
 
 ### Changed
 

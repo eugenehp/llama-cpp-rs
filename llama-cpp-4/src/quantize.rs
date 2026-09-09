@@ -104,10 +104,14 @@ pub enum LlamaFtype {
     MostlyMXFP4Moe = 38,
     /// NVFP4
     MostlyNVFP4 = 39,
-    /// Q1_0 – 1.5 bpw binary (block size 32)
+    /// `Q1_0` – 1.5 bpw binary (block size 32)
     #[cfg(feature = "q1")]
     MostlyQ1_0 = 40,
-    /// Q1_0_g128 – 1.125 bpw binary (block size 128)
+    /// `Q1_0_g128` – 1.125 bpw binary (block size 128)
+    //
+    // Named after upstream's `LLAMA_FTYPE_MOSTLY_Q1_0_G128`; renaming to
+    // satisfy the casing lint would break the correspondence.
+    #[allow(non_camel_case_types)]
     #[cfg(feature = "q1")]
     MostlyQ1_0_G128 = 41,
 }
@@ -257,6 +261,40 @@ impl LlamaFtype {
         }
     }
 
+    /// llama.cpp's own display name for this type, e.g. `"Q4_K - Medium"`.
+    ///
+    /// Where [`Self::name`] is a terse filename-safe token (`"Q4_K_M"`) kept in
+    /// a table in this crate, this asks llama.cpp, so it cannot drift from
+    /// upstream. Wraps `llama_ftype_name`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FtypeNameError`] if llama.cpp returns null or non-UTF-8.
+    pub fn upstream_name(self) -> Result<&'static str, FtypeNameError> {
+        let ptr = unsafe { llama_cpp_sys_4::llama_ftype_name(self.into()) };
+        if ptr.is_null() {
+            return Err(FtypeNameError::Unnamed(self));
+        }
+        // SAFETY: llama.cpp returns a pointer to a string literal with static
+        // storage duration, so `'static` is sound here.
+        unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_str()
+            .map_err(FtypeNameError::Utf8)
+    }
+
+    /// The `ggml` storage type most tensors get under this ftype.
+    ///
+    /// This is the *default*; the k-quant mixes deliberately store some tensors
+    /// (attention, output) at higher precision, so an individual tensor may not
+    /// use it. Wraps `llama_ftype_get_default_type`.
+    ///
+    /// Returns `None` for a `ggml` type this crate's [`GgmlType`] does not know.
+    #[must_use]
+    pub fn default_ggml_type(self) -> Option<GgmlType> {
+        let raw = unsafe { llama_cpp_sys_4::llama_ftype_get_default_type(self.into()) };
+        GgmlType::try_from(raw).ok()
+    }
+
     /// All available types, ordered roughly from largest to smallest.
     #[must_use]
     pub fn all() -> &'static [Self] {
@@ -303,9 +341,36 @@ impl LlamaFtype {
     }
 }
 
+/// Failure reading llama.cpp's display name for an [`LlamaFtype`].
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum FtypeNameError {
+    /// llama.cpp returned null for this type.
+    #[error("llama.cpp has no name for ftype {0:?}")]
+    Unnamed(LlamaFtype),
+    /// The returned bytes were not valid UTF-8.
+    #[error(transparent)]
+    Utf8(#[from] std::str::Utf8Error),
+}
+
 impl From<LlamaFtype> for llama_cpp_sys_4::llama_ftype {
     fn from(t: LlamaFtype) -> Self {
         t as llama_cpp_sys_4::llama_ftype
+    }
+}
+
+impl TryFrom<llama_cpp_sys_4::llama_ftype> for LlamaFtype {
+    type Error = llama_cpp_sys_4::llama_ftype;
+
+    /// Fails on a discriminant this build does not know — `LLAMA_FTYPE_GUESSED`
+    /// (1024, "the file did not say"), a `q1` type without that feature, or a
+    /// type upstream added since this release. The raw value is returned so the
+    /// caller can report it.
+    fn try_from(raw: llama_cpp_sys_4::llama_ftype) -> Result<Self, Self::Error> {
+        Self::all()
+            .iter()
+            .copied()
+            .find(|t| llama_cpp_sys_4::llama_ftype::from(*t) == raw)
+            .ok_or(raw)
     }
 }
 
@@ -367,6 +432,9 @@ pub enum GgmlType {
     #[cfg(feature = "q1")]
     Q1_0 = 40,
     #[cfg(feature = "q1")]
+    // Mirrors ggml's `GGML_TYPE_Q1_0_G128`; see the note on
+    // `LlamaFtype::MostlyQ1_0_G128`.
+    #[allow(non_camel_case_types)]
     Q1_0_G128 = 41,
     #[cfg(feature = "q1")]
     NVFP4 = 42,
@@ -647,6 +715,10 @@ pub struct QuantizeParams {
     pub keep_split: bool,
     /// Estimate output size without writing anything to disk.
     pub dry_run: bool,
+    /// Cap, in bytes, on the tensor rows held in memory at once (`0` = the
+    /// upstream default of 8 GiB). Lower it to quantize a model larger than
+    /// available RAM at the cost of more I/O.
+    pub max_buf_size: usize,
 
     imatrix: Vec<ImatrixEntry>,
     kv_overrides: Vec<KvOverride>,
@@ -674,6 +746,7 @@ impl QuantizeParams {
             pure: d.pure_,
             keep_split: d.keep_split,
             dry_run: d.dry_run,
+            max_buf_size: d.max_buf_size,
             imatrix: Vec::new(),
             kv_overrides: Vec::new(),
             tt_overrides: Vec::new(),
@@ -741,6 +814,14 @@ impl QuantizeParams {
     #[must_use]
     pub fn with_dry_run(mut self, v: bool) -> Self {
         self.dry_run = v;
+        self
+    }
+
+    /// Cap the bytes of tensor rows kept in memory at once (`0` = upstream
+    /// default, 8 GiB).
+    #[must_use]
+    pub fn with_max_buf_size(mut self, bytes: usize) -> Self {
+        self.max_buf_size = bytes;
         self
     }
 
@@ -918,6 +999,7 @@ impl QuantizeParams {
             pure_: self.pure,
             keep_split: self.keep_split,
             dry_run: self.dry_run,
+            max_buf_size: self.max_buf_size,
             imatrix: if self.imatrix.is_empty() {
                 null()
             } else {
@@ -1019,4 +1101,224 @@ pub fn attn_rot_disabled() -> bool {
         .ok()
         .and_then(|v| v.parse::<i32>().ok())
         .is_some_and(|v| v != 0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Quantization preview
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Ask llama.cpp what it *would* do, without writing a file.
+///
+/// [`crate::model_quantize`] is all-or-nothing: it reads a model, quantizes
+/// every tensor, and writes the result. This exposes the decision layer
+/// underneath — which tensors get quantized at all, and to which `ggml` type —
+/// so a tool can show the plan, or estimate output size, before committing to
+/// a run that may take minutes and tens of gigabytes.
+///
+/// The k-quant mixes are why this is not simply [`LlamaFtype::default_ggml_type`]:
+/// they deliberately keep attention and output tensors at higher precision, so
+/// the per-tensor answer differs from the ftype's nominal type.
+///
+/// Wraps `llama_quant_init` / `llama_quant_free`.
+#[derive(Debug)]
+pub struct QuantPreview<'model> {
+    qs: std::ptr::NonNull<llama_cpp_sys_4::quantize_state_impl>,
+    // The state borrows the model it was built from.
+    _model: std::marker::PhantomData<&'model crate::model::LlamaModel>,
+}
+
+impl Drop for QuantPreview<'_> {
+    fn drop(&mut self) {
+        unsafe { llama_cpp_sys_4::llama_quant_free(self.qs.as_ptr()) }
+    }
+}
+
+impl<'model> QuantPreview<'model> {
+    /// Build a preview for `model` under `params`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuantPreviewError::Init`] if llama.cpp could not build the
+    /// quantization state, which happens for a model it cannot quantize.
+    pub fn new(
+        model: &'model crate::model::LlamaModel,
+        params: &QuantizeParams,
+    ) -> Result<Self, QuantPreviewError> {
+        let guard = params.to_raw();
+        // The guarded wrapper: `llama_quant_init` throws for a model it cannot
+        // quantize, and that unwinding into Rust aborts the process.
+        let qs = unsafe {
+            llama_cpp_sys_4::llama_quant_init_guarded(model.model.as_ptr(), &raw const guard.raw)
+        };
+        std::ptr::NonNull::new(qs)
+            .map(|qs| Self {
+                qs,
+                _model: std::marker::PhantomData,
+            })
+            .ok_or(QuantPreviewError::Init)
+    }
+
+    /// Whether this tensor would be quantized at all.
+    ///
+    /// llama.cpp skips 1-D tensors, tensors below a size threshold, and ones
+    /// whose name marks them as needing full precision — so a `false` here is
+    /// the usual reason a tensor keeps its original type.
+    ///
+    /// Requires the `ggml` feature, which is what exposes [`crate::ggml::GgmlTensor`].
+    #[cfg(feature = "ggml")]
+    #[must_use]
+    pub fn allows_quantization(&self, tensor: &crate::ggml::GgmlTensor) -> bool {
+        // 1 = yes, 0 = no, -1 = the underlying call threw and was caught.
+        let rc = unsafe {
+            llama_cpp_sys_4::llama_quant_tensor_allows_quantization_guarded(
+                self.qs.as_ptr(),
+                tensor.as_ptr(),
+            )
+        };
+        rc == 1
+    }
+
+    /// Compute the storage type each tensor would be assigned under `ftype`.
+    ///
+    /// Every tensor passed must already satisfy [`Self::allows_quantization`] —
+    /// upstream states the caller filters first, and does not re-check.
+    ///
+    /// An entry is `None` when llama.cpp picks a `ggml` type this crate's
+    /// [`GgmlType`] does not know.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuantPreviewError::NotQuantizable`] naming the first tensor
+    /// that fails the filter, rather than letting llama.cpp decide what to do
+    /// with it.
+    ///
+    /// Requires the `ggml` feature.
+    #[cfg(feature = "ggml")]
+    pub fn compute_types(
+        &self,
+        tensors: &[&crate::ggml::GgmlTensor],
+        ftype: LlamaFtype,
+    ) -> Result<Vec<Option<GgmlType>>, QuantPreviewError> {
+        if tensors.is_empty() {
+            return Ok(Vec::new());
+        }
+        for tensor in tensors {
+            if !self.allows_quantization(tensor) {
+                return Err(QuantPreviewError::NotQuantizable(tensor.name().to_owned()));
+            }
+        }
+
+        let mut raw_tensors: Vec<*mut llama_cpp_sys_4::ggml_tensor> =
+            tensors.iter().map(|t| t.as_ptr()).collect();
+        let mut out = vec![0 as llama_cpp_sys_4::ggml_type; tensors.len()];
+        let rc = unsafe {
+            llama_cpp_sys_4::llama_quant_compute_types_guarded(
+                self.qs.as_ptr(),
+                ftype.into(),
+                raw_tensors.as_mut_ptr(),
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        if rc != 0 {
+            return Err(QuantPreviewError::Init);
+        }
+        Ok(out.into_iter().map(|t| GgmlType::try_from(t).ok()).collect())
+    }
+}
+
+/// Failure building or using a [`QuantPreview`].
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum QuantPreviewError {
+    /// llama.cpp could not build a quantization state for this model.
+    #[error("could not initialize quantization state")]
+    Init,
+    /// A tensor that would not be quantized was passed to
+    /// [`QuantPreview::compute_types`].
+    #[error("tensor {0:?} is not quantizable; filter with allows_quantization first")]
+    NotQuantizable(String),
+    /// The mock-model descriptor contained an interior NUL byte.
+    #[error("architecture name contained an interior NUL byte")]
+    Nul(#[from] NulError),
+    /// llama.cpp could not build a model from the descriptor.
+    #[error("could not build a mock model from the descriptor")]
+    MockModel,
+}
+
+/// Shape of a synthetic model, for previewing a quantization plan without a
+/// real checkpoint on disk.
+///
+/// Upstream marks `llama_quant_model_from_metadata` as being for testing; it is
+/// exposed here for the same reason — it lets you ask "what would a `Q4_K_M` of a
+/// model this shape look like?" without downloading one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuantModelDesc {
+    /// Architecture name, e.g. `"llama"`.
+    pub architecture: String,
+    /// Embedding dimension.
+    pub n_embd: u32,
+    /// Feed-forward dimension.
+    pub n_ff: u32,
+    /// Number of layers.
+    pub n_layer: u32,
+    /// Number of attention heads.
+    pub n_head: u32,
+    /// Number of key/value heads.
+    pub n_head_kv: u32,
+    /// Number of experts (0 for a dense model).
+    pub n_expert: u32,
+    /// Per-head key dimension.
+    pub n_embd_head_k: u32,
+    /// Per-head value dimension.
+    pub n_embd_head_v: u32,
+}
+
+impl QuantModelDesc {
+    /// A dense llama-shaped descriptor with the given dimensions.
+    #[must_use]
+    pub fn llama(n_embd: u32, n_ff: u32, n_layer: u32, n_head: u32) -> Self {
+        Self {
+            architecture: "llama".to_owned(),
+            n_embd,
+            n_ff,
+            n_layer,
+            n_head,
+            n_head_kv: n_head,
+            n_expert: 0,
+            n_embd_head_k: n_embd / n_head.max(1),
+            n_embd_head_v: n_embd / n_head.max(1),
+        }
+    }
+
+    /// Build a synthetic model from this descriptor.
+    ///
+    /// The returned model owns llama.cpp memory and frees it on drop, exactly
+    /// like a loaded one — it simply has no weights.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QuantPreviewError::MockModel`] if llama.cpp rejects the
+    /// descriptor, or [`QuantPreviewError::Nul`] for a bad architecture name.
+    pub fn build(&self) -> Result<crate::model::LlamaModel, QuantPreviewError> {
+        let arch = CString::new(self.architecture.as_str())?;
+        let desc = llama_cpp_sys_4::llama_quant_model_desc {
+            architecture: arch.as_ptr(),
+            n_embd: self.n_embd,
+            n_ff: self.n_ff,
+            n_layer: self.n_layer,
+            n_head: self.n_head,
+            n_head_kv: self.n_head_kv,
+            n_expert: self.n_expert,
+            n_embd_head_k: self.n_embd_head_k,
+            n_embd_head_v: self.n_embd_head_v,
+        };
+        // Guarded: an architecture llama.cpp does not know makes the raw entry
+        // point throw, which aborts the process on the way back into Rust.
+        let raw =
+            unsafe { llama_cpp_sys_4::llama_quant_model_from_metadata_guarded(&raw const desc) };
+        let ptr = std::ptr::NonNull::new(raw).ok_or(QuantPreviewError::MockModel)?;
+        // SAFETY: upstream documents the result as owned by the caller and
+        // freed with `llama_model_free`, which is what `LlamaModel` does.
+        Ok(unsafe { crate::model::LlamaModel::from_raw(ptr) })
+    }
 }

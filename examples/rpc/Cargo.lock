@@ -1412,7 +1412,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "enumflags2",
  "llama-cpp-sys-4",
@@ -1422,7 +1422,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "bindgen",
  "cc",
@@ -1952,7 +1952,7 @@ dependencies = [
 
 [[package]]
 name = "rpc-example"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "clap",

@@ -47,12 +47,12 @@
 //! `--n-rs-seq >= n-draft-max` so those rollbacks succeed.
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use llama_cpp_4::prelude::*;
 use std::io::Write;
 use std::num::NonZeroU32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -113,6 +113,8 @@ fn main() -> Result<()> {
     let target_model_params = LlamaModelParams::default().with_n_gpu_layers(args.n_gpu_layers);
     let target_model = LlamaModel::load_from_file(&backend, &args.target, &target_model_params)
         .with_context(|| format!("failed to load target model from {}", args.target.display()))?;
+
+    check_draft_supports(&args.draft, "draft-eagle3")?;
 
     let draft_model_params = LlamaModelParams::default().with_n_gpu_layers(args.n_gpu_layers);
     let draft_model = LlamaModel::load_from_file(&backend, &args.draft, &draft_model_params)
@@ -328,4 +330,47 @@ fn run_speculative(
     );
     session.print_stats();
     Ok(())
+}
+
+/// Check a draft checkpoint advertises `draft-eagle3` before loading it.
+///
+/// `speculative_types_from_gguf` reads GGUF metadata only, so a mismatch costs
+/// a metadata read rather than a multi-gigabyte load followed by a session
+/// constructor that fails with a much less specific message.
+///
+/// A checkpoint that advertises nothing is not rejected: older conversions
+/// predate the metadata key, and the session constructor remains the real
+/// gate.
+fn check_draft_supports(path: &Path, want: &str) -> Result<()> {
+    let path_str = path
+        .to_str()
+        .with_context(|| format!("draft path is not UTF-8: {}", path.display()))?;
+
+    let types = speculative_types_from_gguf(path_str)
+        .with_context(|| format!("reading speculative metadata from {}", path.display()))?;
+
+    if types.is_empty() {
+        eprintln!(
+            "note: {} advertises no speculative type; continuing anyway",
+            path.display()
+        );
+        return Ok(());
+    }
+
+    let names: Vec<String> = types
+        .iter()
+        .map(|t| t.name().unwrap_or_else(|_| format!("{t:?}")))
+        .collect();
+
+    if names.iter().any(|n| n == want) {
+        println!("draft model advertises: {}", names.join(", "));
+        return Ok(());
+    }
+
+    bail!(
+        "{} does not advertise `{want}` — it supports: {}.\n\
+         Use a checkpoint built for {want}, or run the matching example.",
+        path.display(),
+        names.join(", ")
+    )
 }

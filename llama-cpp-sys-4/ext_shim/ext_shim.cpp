@@ -85,3 +85,67 @@ size_t common_device_memory_collect(
         return (size_t) -1;
     }
 }
+
+// ── guarded llama_quant_* wrappers ──────────────────────────────────────────
+//
+// These entry points throw for input they reject. A C++ exception unwinding
+// through `extern "C"` into Rust is undefined behaviour and in practice aborts
+// the process, so every one is caught here and reported as a null/error return.
+
+struct llama_model * llama_quant_model_from_metadata_guarded(
+        const struct llama_quant_model_desc * desc) {
+    if (!desc) {
+        return nullptr;
+    }
+    try {
+        return llama_quant_model_from_metadata(desc);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+struct quantize_state_impl * llama_quant_init_guarded(
+        const struct llama_model *                 model,
+        const struct llama_model_quantize_params * params) {
+    if (!model || !params) {
+        return nullptr;
+    }
+    try {
+        return llama_quant_init(model, params);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int32_t llama_quant_compute_types_guarded(
+        struct quantize_state_impl * qs,
+        enum llama_ftype             ftype,
+        struct ggml_tensor **        tensors,
+        enum ggml_type *             result_types,
+        size_t                       n_tensors) {
+    if (!qs || !tensors || !result_types) {
+        return -1;
+    }
+    if (n_tensors == 0) {
+        return 0;
+    }
+    try {
+        llama_quant_compute_types(qs, ftype, tensors, result_types, n_tensors);
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
+
+int32_t llama_quant_tensor_allows_quantization_guarded(
+        const struct quantize_state_impl * qs,
+        const struct ggml_tensor *         tensor) {
+    if (!qs || !tensor) {
+        return -1;
+    }
+    try {
+        return llama_quant_tensor_allows_quantization(qs, tensor) ? 1 : 0;
+    } catch (...) {
+        return -1;
+    }
+}

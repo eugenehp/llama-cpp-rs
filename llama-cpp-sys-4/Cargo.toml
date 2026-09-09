@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
@@ -22,12 +22,24 @@ include = [
     # MTP shim — small C++ wrapper around common/speculative.cpp
     "/mtp_shim/**/*",
 
+    # shim_support — status codes and error buffer shared by every shim
+    "/shim_support/**/*",
+
     # ext_shim — C wrappers for C++-only llama.cpp helpers (memory breakdown, fit)
     "/ext_shim/**/*",
+
+    # chat_shim — C wrappers for common/chat.h and json-schema-to-grammar
+    "/chat_shim/**/*",
+
+    # common_shim — C wrappers for the rest of common/ (sampler, ngram, …)
+    "/common_shim/**/*",
 
     # llama.cpp top-level
     "/llama.cpp/CMakeLists.txt",
     "/llama.cpp/convert_hf_to_gguf.py",
+    # Vendored project's licence. CMake's license.cmake warns without it, and
+    # shipping it alongside the vendored sources is the right thing regardless.
+    "/llama.cpp/LICENSE",
 
     # llama.cpp cmake
     "/llama.cpp/cmake",
@@ -48,6 +60,12 @@ include = [
     "/llama.cpp/ggml/src/*.h",
     "/llama.cpp/ggml/src/*.c",
     "/llama.cpp/ggml/src/*.cpp",
+    # `configure_file` inputs. These are matched by extension here, not by a
+    # recursive glob like `/llama.cpp/src/**/*`, so a new template upstream is
+    # silently dropped from the package and only `cargo package` reveals it —
+    # which is how `ggml-version.h.in` (llama.cpp #28364) broke the published
+    # crate.
+    "/llama.cpp/ggml/src/*.in",
 
     # ggml legacy top-level backend files
     "/llama.cpp/ggml/src/ggml-cuda.cu",
@@ -146,9 +164,6 @@ rpc = []
 mtmd = []
 q1 = []
 prebuilt = []
-# DFlash2 speculative decoding, vendored from the unmerged upstream PR #27342.
-# Applies patches/0006-dflash2.patch; see the README before enabling.
-dflash2 = []
 
 # By default, static libraries are built
 # Enable dynamic-link feature to build shared libraries instead

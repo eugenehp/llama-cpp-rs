@@ -212,9 +212,8 @@ impl Eagle3SessionConfig {
 /// [`Eagle3Session::new_dflash_with_config`].
 ///
 /// `DFlash2` checkpoints are detected from GGUF metadata and need no extra
-/// flag, but running them requires the `dflash2` build feature, which vendors
-/// the unmerged upstream PR #27342.
-#[cfg(feature = "dflash2")]
+/// flag or build feature — upstream merged PR #27342 in `b10658`, so the
+/// vendored llama.cpp recognises them out of the box.
 pub type DFlashSession<'ctx, 'target_model, 'draft_model> =
     Eagle3Session<'ctx, 'target_model, 'draft_model>;
 
@@ -226,9 +225,9 @@ pub type DFlashSession<'ctx, 'target_model, 'draft_model> =
 /// wrapper retains no manually enforced lifetime and is neither `Send` nor
 /// `Sync`.
 ///
-/// With the `dflash2` feature this same type also drives `DFlash` drafts via
-/// `new_dflash` (aliased as `DFlashSession`). The two backends share one type
-/// because the drafting protocol is identical; only construction differs.
+/// This same type also drives `DFlash` drafts via `new_dflash` (aliased as
+/// `DFlashSession`). The two backends share one type because the drafting
+/// protocol is identical; only construction differs.
 pub struct Eagle3Session<'ctx, 'target_model, 'draft_model> {
     raw: NonNull<llama_cpp_sys_4::mtp_session>,
     config: Eagle3SessionConfig,
@@ -303,7 +302,6 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// Returns [`Eagle3SessionError::Init`] (e.g. the draft model is not a valid
     /// `DFlash` model), [`Eagle3SessionError::InvalidConfig`], or
     /// [`Eagle3SessionError::IncompatibleContexts`].
-    #[cfg(feature = "dflash2")]
     pub fn new_dflash_with_config(
         target: &'ctx mut LlamaContext<'target_model>,
         draft: &'ctx mut LlamaContext<'draft_model>,
@@ -325,7 +323,6 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// # Errors
     ///
     /// See [`Self::new_dflash_with_config`].
-    #[cfg(feature = "dflash2")]
     pub fn new_dflash(
         target: &'ctx mut LlamaContext<'target_model>,
         draft: &'ctx mut LlamaContext<'draft_model>,
@@ -873,7 +870,6 @@ mod tests {
 
     /// The shim dispatches on this value, so a collision with an existing spec
     /// type would silently select the wrong speculative backend.
-    #[cfg(feature = "dflash2")]
     #[test]
     fn dflash_spec_type_is_distinct() {
         use llama_cpp_sys_4::{MTP_SPEC_TYPE_DFLASH, MTP_SPEC_TYPE_EAGLE3, MTP_SPEC_TYPE_MTP};
@@ -883,13 +879,15 @@ mod tests {
         assert_eq!(MTP_SPEC_TYPE_DFLASH, 2);
     }
 
-    /// Compile-time guard that the feature-gated surface is actually reachable
-    /// under `--features dflash2` (the alias and both constructors resolve).
-    #[cfg(feature = "dflash2")]
+    /// Compile-time guard that the `DFlash` surface stays reachable (the alias
+    /// and both constructors resolve).
     #[test]
     fn dflash_api_surface_is_exposed() {
-        let _alias: Option<super::DFlashSession<'_, '_, '_>> = None;
-        let _with_config = super::Eagle3Session::new_dflash_with_config;
-        let _shorthand = super::Eagle3Session::new_dflash;
+        // Naming each item is the guard: this stops compiling if the alias or
+        // either constructor goes missing.
+        let alias: Option<super::DFlashSession<'_, '_, '_>> = None;
+        assert!(alias.is_none());
+        let _ = super::Eagle3Session::new_dflash_with_config;
+        let _ = super::Eagle3Session::new_dflash;
     }
 }

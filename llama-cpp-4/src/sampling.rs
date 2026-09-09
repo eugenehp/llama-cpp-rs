@@ -6,7 +6,7 @@ use std::fmt::{Debug, Formatter};
 use std::ptr::NonNull;
 
 use llama_cpp_sys_4::{
-    common::common_sampler_params, llama_logit_bias, llama_sampler, llama_sampler_accept,
+    common::common_sampler_params, llama_logit_bias, llama_sampler,
     llama_sampler_chain_add, llama_sampler_chain_default_params, llama_sampler_chain_init,
     llama_sampler_chain_n, llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_copy,
     llama_sampler_free, llama_sampler_get_seed, llama_sampler_init_adaptive_p,
@@ -16,7 +16,7 @@ use llama_cpp_sys_4::{
     llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
     llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_n_sigma,
     llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
-    llama_sampler_name, llama_sampler_reset, llama_sampler_sample,
+    llama_sampler_name, llama_sampler_reset,
 };
 
 use crate::context::LlamaContext;
@@ -115,11 +115,46 @@ impl LlamaSampler {
 
     /// Sample and accept a token from the idx-th output of the last evaluation
     #[must_use]
+    /// # Panics
+    ///
+    /// Panics if llama.cpp's grammar code rejects the state — see
+    /// [`Self::try_sample`], which returns the error instead. This *panics*
+    /// rather than aborting because the call is routed through a guard; calling
+    /// `llama_sampler_sample` directly would let a C++ exception unwind into
+    /// Rust and kill the process.
     pub fn sample(&self, ctx: &LlamaContext, idx: i32) -> LlamaToken {
-        let token =
-            unsafe { llama_sampler_sample(self.sampler.as_ptr(), ctx.context.as_ptr(), idx) };
+        self.try_sample(ctx, idx)
+            .unwrap_or_else(|e| panic!("sampling failed: {e}"))
+    }
 
-        LlamaToken(token)
+    /// Sample a token, reporting llama.cpp's failures instead of panicking.
+    ///
+    /// The realistic failure is a grammar that can no longer accept anything:
+    /// llama.cpp raises *"Unexpected empty grammar stack"* when a model's
+    /// vocabulary cannot satisfy the constraint — a JSON schema against a
+    /// vocabulary with no `{`, say. That is a property of the model/grammar
+    /// pair, not a bug, so it is worth handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShimError::Failed`](crate::shim::ShimError::Failed) carrying
+    /// llama.cpp's message.
+    pub fn try_sample(
+        &self,
+        ctx: &LlamaContext,
+        idx: i32,
+    ) -> Result<LlamaToken, crate::shim::ShimError> {
+        let mut status = llama_cpp_sys_4::LLAMA_SHIM_OK;
+        let token = unsafe {
+            llama_cpp_sys_4::common_shim_sampler_sample_raw(
+                self.sampler.as_ptr(),
+                ctx.context.as_ptr(),
+                idx,
+                &raw mut status,
+            )
+        };
+        crate::shim::check_status(status)?;
+        Ok(LlamaToken(token))
     }
 
     /// Applies this sampler to a [`LlamaTokenDataArray`].
@@ -129,15 +164,37 @@ impl LlamaSampler {
 
     /// Accepts a token from the sampler, possibly updating the internal state of certain samplers
     /// (e.g. grammar, repetition, etc.)
+    /// # Panics
+    ///
+    /// Panics if the token leaves a grammar with nothing it can accept — see
+    /// [`Self::try_accept`].
     pub fn accept(&mut self, token: LlamaToken) {
-        unsafe { llama_sampler_accept(self.sampler.as_ptr(), token.0) }
+        self.try_accept(token)
+            .unwrap_or_else(|e| panic!("accepting token {}: {e}", token.0));
+    }
+
+    /// Accept a token, reporting llama.cpp's failures instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ShimError::Failed`](crate::shim::ShimError::Failed) when the
+    /// grammar cannot accept this token — see [`Self::try_sample`].
+    pub fn try_accept(&mut self, token: LlamaToken) -> Result<(), crate::shim::ShimError> {
+        let status = unsafe {
+            llama_cpp_sys_4::common_shim_sampler_accept_raw(self.sampler.as_ptr(), token.0)
+        };
+        crate::shim::check_status(status)
     }
 
     /// Accepts several tokens from the sampler or context, possibly updating the internal state of
     /// certain samplers (e.g. grammar, repetition, etc.)
+    /// # Panics
+    ///
+    /// Panics on the first token the grammar cannot accept — see
+    /// [`Self::try_accept`].
     pub fn accept_many(&mut self, tokens: impl IntoIterator<Item = impl Borrow<LlamaToken>>) {
         for token in tokens {
-            unsafe { llama_sampler_accept(self.sampler.as_ptr(), token.borrow().0) }
+            self.accept(*token.borrow());
         }
     }
 
@@ -856,6 +913,22 @@ impl LlamaSampler {
         Self {
             sampler: NonNull::new(sampler).expect("sampler_init returned null"),
         }
+    }
+
+    /// Adopt a raw `llama_sampler *`, taking ownership.
+    ///
+    /// # Safety
+    ///
+    /// `raw` must come from a llama.cpp entry point documented as returning a
+    /// sampler the caller owns and releases with `llama_sampler_free`, and must
+    /// not be owned by anything else — [`Drop`] frees it.
+    pub(crate) unsafe fn from_raw_ptr(raw: NonNull<llama_sampler>) -> Self {
+        Self { sampler: raw }
+    }
+
+    /// The underlying `llama_sampler *`. Borrowed; still owned by `self`.
+    pub(crate) fn as_ptr(&self) -> *mut llama_sampler {
+        self.sampler.as_ptr()
     }
 
     /// Creates a new instance of `LlamaSampler` with common sampling parameters.

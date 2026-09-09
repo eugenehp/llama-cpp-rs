@@ -36,7 +36,6 @@ enum mtp_spec_type {
     // checkpoints — which additionally carry the grouped dynamic convolution
     // and candidate-selector tensors — select the same type and are detected
     // from the checkpoint's GGUF metadata, so no distinct value is needed.
-    // Requires the `dflash2` build feature for DFlash2 checkpoints.
     MTP_SPEC_TYPE_DFLASH = 2,
 };
 

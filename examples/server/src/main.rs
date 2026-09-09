@@ -1,4 +1,4 @@
-//! OpenAI-compatible chat/completion/embedding server using llama.cpp.
+//! `OpenAI`-compatible chat/completion/embedding server using llama.cpp.
 //!
 //! # Endpoints
 //!
@@ -62,9 +62,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{mpsc, RwLock, Semaphore};
-use tools::{extract_tool_calls, inject_tools, normalise_messages, parse_tool_choice, parse_tools};
+use tools::{build_chat_params, messages_json, parse_output, parse_tool_choice, parse_tools};
 #[cfg(feature = "mtmd")]
-use tools::{normalise_messages_multimodal, ImageSource};
+use tools::{rewrite_multimodal, ImageSource};
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -513,7 +513,10 @@ fn gen_file_id(data: &[u8]) -> String {
 struct AppState {
     backend: LlamaBackend,
     model: LlamaModel,
-    chat_template: Option<String>,
+    /// llama.cpp's chat layer for this model: templates, tool grammars, and
+    /// the per-family output parsers. Built once — parsing the Jinja program
+    /// is not free, and it never changes for a loaded model.
+    chat_templates: ChatTemplates,
     model_name: String,
     default_ctx_size: Option<NonZeroU32>,
     /// Limits the number of concurrent inference calls.
@@ -630,17 +633,6 @@ fn parse_stop_sequences(req: &Value) -> Result<Vec<String>, HttpError> {
     }
 }
 
-/// Convert `(role, content)` pairs into the `LlamaChatMessage` vec that
-/// `apply_chat_template` expects.
-fn to_chat_messages(pairs: Vec<(String, String)>) -> Result<Vec<LlamaChatMessage>, HttpError> {
-    pairs
-        .into_iter()
-        .map(|(role, content)| {
-            LlamaChatMessage::new(role.clone(), content)
-                .map_err(|e| bad_request(format!("invalid message (role={role}): {e}")))
-        })
-        .collect()
-}
 
 // ---------------------------------------------------------------------------
 // Core inference engine
@@ -656,8 +648,15 @@ struct InferenceParams {
     seed: u32,
     max_tokens: u32,
     stop_seqs: Vec<String>,
-    /// Optional GBNF grammar string.
+    /// Optional GBNF grammar string, for requests that bypass the chat layer
+    /// (`/v1/completions`).
     grammar: Option<String>,
+    /// The chat render this request came from, when there was one. Carries the
+    /// grammar, its triggers and the generation prompt, which
+    /// [`ChatParams::grammar_sampler`] needs together — building the sampler
+    /// from the grammar string alone drops the prefill and forces the model to
+    /// re-emit the generation prompt.
+    chat: Option<ChatParams>,
     /// Raw bytes for each media item (image or audio), in the order their
     /// markers appear in `prompt`.  Populated only when the `mtmd` feature is
     /// active and the request contains multimodal content.
@@ -698,9 +697,52 @@ impl InferenceParams {
             max_tokens,
             stop_seqs,
             grammar,
+            chat: None, // set by the chat path; /v1/completions leaves it None
             image_bytes: Vec::new(), // populated later by the multimodal path
         })
     }
+}
+
+/// Build the `OpenAI` `message` object for a parsed assistant turn.
+///
+/// `content` is null rather than `""` when the turn is only tool calls — the
+/// `OpenAI` schema distinguishes the two, and some clients branch on it.
+/// Reasoning is surfaced as `reasoning_content`, matching what upstream's
+/// server emits, and omitted when the format did not split any out.
+fn assistant_message(msg: &tools::ParsedMessage, tool_calls: bool) -> Value {
+    let mut out = json!({ "role": "assistant" });
+    out["content"] = if tool_calls && msg.content.is_empty() {
+        Value::Null
+    } else {
+        Value::String(msg.content.clone())
+    };
+    if !msg.reasoning.is_empty() {
+        out["reasoning_content"] = Value::String(msg.reasoning.clone());
+    }
+    if tool_calls {
+        out["tool_calls"] = Value::Array(
+            msg.tool_calls
+                .iter()
+                .map(tools::ToolCall::to_value)
+                .collect(),
+        );
+    }
+    out
+}
+
+/// Build the grammar sampler for a request.
+///
+/// A chat request delegates to [`ChatParams::grammar_sampler`], which knows
+/// about lazy triggers and generation-prompt prefill. A `/v1/completions`
+/// request has only a raw user grammar, which must *not* be prefilled.
+fn build_grammar_sampler(model: &LlamaModel, params: &InferenceParams) -> Option<LlamaSampler> {
+    if let Some(chat) = &params.chat {
+        return chat.grammar_sampler(model);
+    }
+    params
+        .grammar
+        .as_ref()
+        .map(|gbnf| LlamaSampler::grammar(model, gbnf, "root"))
 }
 
 /// Why the decode loop stopped.
@@ -927,8 +969,8 @@ where
 
     // ── Sampler chain ─────────────────────────────────────────────────────────
     let mut chain: Vec<LlamaSampler> = Vec::new();
-    if let Some(gbnf) = &params.grammar {
-        chain.push(LlamaSampler::grammar(&state.model, gbnf, "root"));
+    if let Some(grammar) = build_grammar_sampler(&state.model, params) {
+        chain.push(grammar);
     }
     if params.temperature > 0.0 {
         if params.top_k > 0 {
@@ -1120,8 +1162,8 @@ where
 
     // ── Sampler chain ─────────────────────────────────────────────────────────
     let mut chain: Vec<LlamaSampler> = Vec::new();
-    if let Some(gbnf) = &params.grammar {
-        chain.push(LlamaSampler::grammar(&state.model, gbnf, "root"));
+    if let Some(grammar) = build_grammar_sampler(&state.model, params) {
+        chain.push(grammar);
     }
     if params.temperature > 0.0 {
         if params.top_k > 0 {
@@ -1316,17 +1358,15 @@ async fn chat_completions(
     };
 
     // ── Parse messages (with multimodal support when available) ─────────────
-    // When `mtmd` is active and the server has an mmproj model, use the
-    // multimodal normaliser: it replaces image_url / image_file parts with
-    // the mtmd media marker and returns the sources for later resolution.
-    // Otherwise fall back to the text-only normaliser (images are stripped).
-    // Always run the multimodal parser so we can count image parts,
-    // even when there is no mmproj — we use the count only for the warning.
+    // When `mtmd` is active, image/audio content parts are collapsed to text
+    // carrying the media marker *before* the JSON reaches the chat template —
+    // llama.cpp renders the prompt, but only this server knows where the image
+    // embeddings get spliced in.
     #[cfg(feature = "mtmd")]
-    let (base_msg_pairs, image_sources) = {
+    let (messages, image_sources) = {
         let marker = MtmdContext::default_marker();
         tracing::debug!("mtmd media marker: {:?}", marker);
-        let (pairs, sources) = match normalise_messages_multimodal(&parsed, marker) {
+        let (json, sources) = match rewrite_multimodal(&parsed, marker) {
             Ok(r) => r,
             Err(e) => return error_response(e),
         };
@@ -1345,54 +1385,91 @@ async fn chat_completions(
                  Restart with `--mmproj <path-to-mmproj.gguf>` and a vision-capable model \
                  to enable multimodal inference."
             );
-            // Fall back to the text-only normaliser so markers are not left in the prompt.
-            match normalise_messages(&parsed) {
-                Ok(text_pairs) => (text_pairs, vec![]),
+            // No mmproj: hand llama.cpp the untouched request so it strips the
+            // parts itself, rather than leaving dangling markers in the prompt.
+            match messages_json(&parsed) {
+                Ok(json) => (json, vec![]),
                 Err(e) => return error_response(e),
             }
         } else {
-            (pairs, sources)
+            (json, sources)
         }
     };
 
     #[cfg(not(feature = "mtmd"))]
-    let base_msg_pairs = match normalise_messages(&parsed) {
+    let messages = match messages_json(&parsed) {
         Ok(m) => m,
         Err(e) => return error_response(e),
     };
 
-    // ── Build prompt from messages ───────────────────────────────────────────
-    let prompt = {
-        let mut msg_pairs = base_msg_pairs;
-
-        // Inject tool definitions + usage instructions into the system message.
-        inject_tools(&mut msg_pairs, &tool_defs, &tool_choice);
-
-        let chat_msgs = match to_chat_messages(msg_pairs) {
-            Ok(m) => m,
-            Err(e) => return error_response(e),
-        };
-
-        let template_override = match parsed.get("chat_template") {
-            Some(Value::String(s)) => Some(s.clone()),
-            Some(Value::Null) | None => None,
-            _ => return error_response(bad_request("'chat_template' must be a string")),
-        };
-        let template = template_override.or_else(|| state.chat_template.clone());
-        match state
-            .model
-            .apply_chat_template(template.as_deref(), &chat_msgs, true)
-        {
-            Ok(p) => p,
-            Err(e) => return error_response(internal_error(format!("chat template: {e}"))),
-        }
+    // ── Render prompt + sampling constraints ─────────────────────────────────
+    // `apply` returns the prompt *and* the grammar, triggers and parser that go
+    // with it. Everything downstream — sampler construction and output parsing
+    // — is driven from this one value, which is what keeps them consistent.
+    let request_grammar = match parsed.get("grammar") {
+        Some(Value::String(g)) => Some(g.clone()),
+        _ => None,
     };
+    let json_schema = parsed
+        .pointer("/response_format/json_schema/schema")
+        .map(std::string::ToString::to_string);
+
+    // A per-request `chat_template` builds a one-off template set. That parses
+    // Jinja on the request path, which is why it is not the default — but the
+    // override is rare and the alternative is not supporting it at all.
+    let request_templates = match parsed.get("chat_template") {
+        Some(Value::String(src)) => match ChatTemplates::from_model(&state.model, Some(src)) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                return error_response(bad_request(format!("invalid 'chat_template': {e}")))
+            }
+        },
+        Some(Value::Null) | None => None,
+        _ => return error_response(bad_request("'chat_template' must be a string")),
+    };
+    let templates = request_templates.as_ref().unwrap_or(&state.chat_templates);
+
+    let chat = match build_chat_params(
+        templates,
+        &messages,
+        &tool_defs,
+        &tool_choice,
+        json_schema.as_deref(),
+        request_grammar.as_deref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => return error_response(e),
+    };
+    tracing::debug!(
+        format = chat.format,
+        grammar_lazy = chat.grammar_lazy,
+        n_triggers = chat.grammar_triggers.len(),
+        has_grammar = !chat.grammar.is_empty(),
+        "chat template applied"
+    );
+    let prompt = chat.prompt.clone();
 
     // ── Sampling params ───────────────────────────────────────────────────────
     let mut params = match InferenceParams::from_request(&parsed, prompt) {
         Ok(p) => p,
         Err(e) => return error_response(e),
     };
+
+    // The render supersedes any grammar the request supplied: llama.cpp already
+    // folded a `grammar`/`json_schema` into it, and when tools are present the
+    // tool grammar is the only valid constraint.
+    params.grammar = None;
+    params.chat = Some(chat.clone());
+
+    // Stop sequences the format needs (end-of-tool-call markers, say) are
+    // additive to whatever the caller asked for.
+    if let Ok(Value::Array(stops)) = serde_json::from_str(&chat.additional_stops_json) {
+        for stop in stops.iter().filter_map(Value::as_str) {
+            if !params.stop_seqs.iter().any(|s| s == stop) {
+                params.stop_seqs.push(stop.to_owned());
+            }
+        }
+    }
 
     // ── Resolve image sources → raw bytes (mtmd path only) ───────────────────
     #[cfg(feature = "mtmd")]
@@ -1411,17 +1488,11 @@ async fn chat_completions(
         }
     }
 
-    // When tools are in play, give the model enough room to think and then
-    // emit a complete tool call (thinking models like Qwen3.5 need extra
-    // tokens for their <think>…</think> block before the <tool_call>).
-    // Grammar-based forcing is intentionally NOT used here: GBNF grammars
-    // conflict with models that use special tokens such as <tool_call>, and
-    // they prevent thinking models from emitting their reasoning prefix.
-    // The system-prompt injection (inject_tools) is sufficient for capable
-    // models and avoids all of those compatibility issues.
-    if !tool_defs.is_empty() && params.max_tokens < 1024 {
-        params.max_tokens = 1024;
-    }
+    // Note: no max_tokens override for tool requests. `parse_max_tokens`
+    // already defaults to 1024, so the old `if max_tokens < 1024 { = 1024 }`
+    // could only ever fire on an *explicit* smaller value — silently handing a
+    // caller who asked for 32 tokens 32x the cost. Thinking models still get
+    // 1024 by default; a caller who asks for less means it.
 
     let model_name = parsed
         .get("model")
@@ -1433,19 +1504,23 @@ async fn chat_completions(
     let id = format!("chatcmpl-{created}");
 
     if streaming {
-        run_chat_stream(state, params, id, model_name, created, has_tools).await
+        run_chat_stream(state, params, chat, id, model_name, created, has_tools).await
     } else {
-        run_chat_blocking(state, params, id, model_name, created, has_tools).await
+        run_chat_blocking(state, params, chat, id, model_name, created).await
     }
 }
 
+// No `has_tools` here any more: the template's parser is run unconditionally.
+// It costs nothing when there are no tools, and it means a reasoning model's
+// <think> block is split out of `content` even for a plain chat request —
+// which the old "only parse when tools are present" branch never did.
 async fn run_chat_blocking(
     state: web::Data<AppState>,
     params: InferenceParams,
+    chat: ChatParams,
     id: String,
     model_name: String,
     created: u64,
-    has_tools: bool,
 ) -> HttpResponse {
     let permit = state.inference_semaphore.clone().acquire_owned().await;
     let state2 = state.clone();
@@ -1464,29 +1539,20 @@ async fn run_chat_blocking(
         Ok(Ok((raw_output, completion_tokens, finish_reason))) => {
             let prompt_tokens = 0u32; // cheap approximation; full count needs a 2nd tokenise pass
 
-            // Parse tool calls out of the raw output.
-            let (content, tool_calls) = if has_tools {
-                extract_tool_calls(&raw_output)
-            } else {
-                (raw_output, vec![])
+            // Parse with the template's own parser, so tool-call syntax is
+            // understood per model family rather than scraped for one marker.
+            let parsed_msg = match parse_output(&chat, &raw_output, false) {
+                Ok(m) => m,
+                Err(e) => return error_response(e),
             };
 
-            let (final_finish, message) = if tool_calls.is_empty() {
+            let (final_finish, message) = if parsed_msg.tool_calls.is_empty() {
                 (
                     finish_reason.as_str(),
-                    json!({ "role": "assistant", "content": content }),
+                    assistant_message(&parsed_msg, false),
                 )
             } else {
-                let calls_json: Vec<Value> =
-                    tool_calls.iter().map(tools::ToolCall::to_value).collect();
-                (
-                    "tool_calls",
-                    json!({
-                        "role": "assistant",
-                        "content": if content.is_empty() { Value::Null } else { Value::String(content) },
-                        "tool_calls": calls_json
-                    }),
-                )
+                ("tool_calls", assistant_message(&parsed_msg, true))
             };
 
             HttpResponse::Ok().content_type("application/json").body(
@@ -1513,6 +1579,7 @@ async fn run_chat_blocking(
 async fn run_chat_stream(
     state: web::Data<AppState>,
     params: InferenceParams,
+    chat: ChatParams,
     id: String,
     model_name: String,
     created: u64,
@@ -1548,7 +1615,9 @@ async fn run_chat_stream(
                 finish_reason = fr;
             }
 
-            let (content, tool_calls) = extract_tool_calls(&raw);
+            let parsed_msg = parse_output(&chat, &raw, false).unwrap_or_default();
+            let content = parsed_msg.content.clone();
+            let tool_calls = parsed_msg.tool_calls.clone();
 
             if tool_calls.is_empty() {
                 // No tool calls — stream content as a single delta.
@@ -2311,11 +2380,13 @@ async fn main() -> std::io::Result<()> {
     let model = LlamaModel::load_from_file(&backend, &model_path, &model_params)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-    let chat_template = model.get_chat_template(65536).ok();
-    if chat_template.is_some() {
+    if model.chat_template(None).is_ok() {
         tracing::info!("Loaded built-in chat template from model");
     } else {
-        tracing::warn!("No built-in chat template — supply 'chat_template' per request");
+        tracing::warn!(
+            "No built-in chat template — llama.cpp will fall back to ChatML. \
+             Pass 'chat_template' per request to override."
+        );
     }
 
     let parallel = args.parallel.max(1);
@@ -2397,10 +2468,35 @@ async fn main() -> std::io::Result<()> {
         );
     }
 
+    // Build the chat layer once. A `--chat-template` override applies here, so
+    // the templates, the tool grammar and the output parser all agree on which
+    // template is in play. llama.cpp falls back to a builtin ChatML template
+    // for models that ship none, so this succeeds for any model that loads.
+    // `None` here means "use whatever the model ships"; llama.cpp falls back to
+    // a builtin ChatML template when it ships none. Passing the model's own
+    // template back in as an override would work but would make
+    // `was_explicit()` lie about where it came from.
+    let chat_templates = match ChatTemplates::from_model(&model, None) {
+        Ok(t) => {
+            tracing::info!(
+                source = t.source(None).unwrap_or_default(),
+                explicit = t.was_explicit(),
+                supports_thinking = t.supports_enable_thinking(),
+                "chat templates ready"
+            );
+            t
+        }
+        Err(e) => {
+            return Err(std::io::Error::other(format!(
+                "failed to build chat templates: {e}"
+            )))
+        }
+    };
+
     let state = web::Data::new(AppState {
         backend,
         model,
-        chat_template,
+        chat_templates,
         model_name,
         default_ctx_size: args.ctx_size,
         inference_semaphore: Arc::new(Semaphore::new(parallel)),

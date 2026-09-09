@@ -1,7 +1,7 @@
 //! Safe wrappers around core ggml graph computation APIs.
 //!
 //! This module provides the building blocks for creating and executing tensor computation
-//! graphs using ggml backends. It's used for operations like LoRA merging, importance
+//! graphs using ggml backends. It's used for operations like `LoRA` merging, importance
 //! matrix computation, and control vector generation.
 //!
 //! # Example
@@ -49,6 +49,20 @@ impl GgmlContext {
     /// - `mem_size`: Memory pool size in bytes for tensor metadata.
     /// - `no_alloc`: If true, tensor data is not allocated (use with backend allocation).
     ///
+    /// # Sizing the pool
+    ///
+    /// Every tensor and graph created from this context is carved out of
+    /// `mem_size`, and **running out is not a recoverable error**:
+    ///
+    /// - a *release* build of ggml returns null, which the constructors here
+    ///   turn into a panic;
+    /// - a *debug* build of ggml calls `GGML_ABORT` and kills the process
+    ///   before returning, so no amount of Rust-side care helps.
+    ///
+    /// So size it up front rather than guessing. [`Self::sized_for`] does the
+    /// arithmetic; [`Self::used_mem`] and [`Self::mem_size`] let you check
+    /// headroom while building a graph.
+    ///
     /// # Panics
     ///
     /// Panics if ggml returns a null pointer.
@@ -65,7 +79,56 @@ impl GgmlContext {
         }
     }
 
+    /// Create a context sized for `n_tensors` tensors and `n_graphs` graphs.
+    ///
+    /// Turns "pick a number and hope" into arithmetic: the pool holds metadata,
+    /// whose per-item cost ggml reports through [`tensor_overhead`] and
+    /// [`graph_overhead`]. A little slack is added for ggml's own bookkeeping.
+    ///
+    /// Views, reshapes and every intermediate an operation produces are tensors
+    /// too — count graph *nodes*, not just the tensors you name.
+    ///
+    /// ```
+    /// # use llama_cpp_4::ggml::GgmlContext;
+    /// // Room for 64 tensors and one graph.
+    /// let ctx = GgmlContext::sized_for(64, 1, true);
+    /// assert!(ctx.mem_size() >= 64 * llama_cpp_4::ggml::tensor_overhead());
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns a null pointer.
+    #[must_use]
+    pub fn sized_for(n_tensors: usize, n_graphs: usize, no_alloc: bool) -> Self {
+        // The +1 tensor and the 1 KiB tail cover ggml's per-object headers and
+        // alignment padding, which are not part of the published overheads.
+        let mem_size = (n_tensors + 1) * tensor_overhead() + n_graphs * graph_overhead() + 1024;
+        Self::new(mem_size, no_alloc)
+    }
+
+    /// Bytes of the pool used so far.
+    ///
+    /// Compare with [`Self::mem_size`] while building a graph to see whether it
+    /// will fit, rather than finding out by aborting.
+    #[must_use]
+    pub fn used_mem(&self) -> usize {
+        unsafe { llama_cpp_sys_4::ggml_used_mem(self.ctx.as_ptr()) }
+    }
+
+    /// Total size of the pool, as passed to [`Self::new`].
+    #[must_use]
+    pub fn mem_size(&self) -> usize {
+        unsafe { llama_cpp_sys_4::ggml_get_mem_size(self.ctx.as_ptr()) }
+    }
+
+    /// Bytes still available in the pool.
+    #[must_use]
+    pub fn free_mem(&self) -> usize {
+        self.mem_size().saturating_sub(self.used_mem())
+    }
+
     /// Get the raw context pointer.
+    #[must_use]
     pub fn as_ptr(&self) -> *mut llama_cpp_sys_4::ggml_context {
         self.ctx.as_ptr()
     }
@@ -73,6 +136,12 @@ impl GgmlContext {
     // ── Tensor creation ──────────────────────────────────────
 
     /// Create a 1D tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_tensor_1d(&self, typ: ggml_type, ne0: i64) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_new_tensor_1d(self.ctx.as_ptr(), typ, ne0) };
@@ -80,6 +149,12 @@ impl GgmlContext {
     }
 
     /// Create a 2D tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_tensor_2d(&self, typ: ggml_type, ne0: i64, ne1: i64) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_new_tensor_2d(self.ctx.as_ptr(), typ, ne0, ne1) };
@@ -87,6 +162,12 @@ impl GgmlContext {
     }
 
     /// Create a 3D tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_tensor_3d(&self, typ: ggml_type, ne0: i64, ne1: i64, ne2: i64) -> GgmlTensor {
         let t =
@@ -95,6 +176,12 @@ impl GgmlContext {
     }
 
     /// Create a 4D tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_tensor_4d(
         &self,
@@ -111,6 +198,12 @@ impl GgmlContext {
     }
 
     /// Create a tensor with the same shape and type as another.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn dup_tensor(&self, src: &GgmlTensor) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_dup_tensor(self.ctx.as_ptr(), src.0.as_ptr()) };
@@ -118,10 +211,23 @@ impl GgmlContext {
     }
 
     /// Create a new tensor with arbitrary dimensions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_tensor(&self, typ: ggml_type, ne: &[i64]) -> GgmlTensor {
         let t = unsafe {
-            llama_cpp_sys_4::ggml_new_tensor(self.ctx.as_ptr(), typ, ne.len() as i32, ne.as_ptr())
+            llama_cpp_sys_4::ggml_new_tensor(
+                self.ctx.as_ptr(),
+                typ,
+                // ggml caps dimensions at GGML_MAX_DIMS (4); anything longer is
+                // rejected by ggml itself, so this cannot truncate meaningfully.
+                i32::try_from(ne.len()).unwrap_or(i32::MAX),
+                ne.as_ptr(),
+            )
         };
         GgmlTensor(NonNull::new(t).expect("ggml_new_tensor returned null"))
     }
@@ -129,6 +235,12 @@ impl GgmlContext {
     // ── Tensor operations (build graph nodes) ────────────────
 
     /// Element-wise addition: `a + b`
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn add(&self, a: &GgmlTensor, b: &GgmlTensor) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_add(self.ctx.as_ptr(), a.0.as_ptr(), b.0.as_ptr()) };
@@ -136,6 +248,12 @@ impl GgmlContext {
     }
 
     /// Matrix multiplication: `a @ b`
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn mul_mat(&self, a: &GgmlTensor, b: &GgmlTensor) -> GgmlTensor {
         let t =
@@ -144,6 +262,12 @@ impl GgmlContext {
     }
 
     /// Scale tensor: `a * s`
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn scale(&self, a: &GgmlTensor, s: f32) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_scale(self.ctx.as_ptr(), a.0.as_ptr(), s) };
@@ -151,6 +275,12 @@ impl GgmlContext {
     }
 
     /// Cast tensor to a different type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn cast(&self, a: &GgmlTensor, typ: ggml_type) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_cast(self.ctx.as_ptr(), a.0.as_ptr(), typ) };
@@ -158,6 +288,12 @@ impl GgmlContext {
     }
 
     /// Make tensor contiguous in memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn cont(&self, a: &GgmlTensor) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_cont(self.ctx.as_ptr(), a.0.as_ptr()) };
@@ -165,6 +301,12 @@ impl GgmlContext {
     }
 
     /// Transpose a tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn transpose(&self, a: &GgmlTensor) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_transpose(self.ctx.as_ptr(), a.0.as_ptr()) };
@@ -172,6 +314,12 @@ impl GgmlContext {
     }
 
     /// Reshape to 1D.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn reshape_1d(&self, a: &GgmlTensor, ne0: i64) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_reshape_1d(self.ctx.as_ptr(), a.0.as_ptr(), ne0) };
@@ -179,6 +327,12 @@ impl GgmlContext {
     }
 
     /// Reshape to 2D.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn reshape_2d(&self, a: &GgmlTensor, ne0: i64, ne1: i64) -> GgmlTensor {
         let t =
@@ -187,6 +341,12 @@ impl GgmlContext {
     }
 
     /// Create a 1D view of a tensor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn view_1d(&self, a: &GgmlTensor, ne0: i64, offset: usize) -> GgmlTensor {
         let t =
@@ -197,6 +357,12 @@ impl GgmlContext {
     // ── Graph creation ───────────────────────────────────────
 
     /// Create a new computation graph.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn new_graph(&self) -> GgmlGraph {
         let g = unsafe { llama_cpp_sys_4::ggml_new_graph(self.ctx.as_ptr()) };
@@ -238,11 +404,18 @@ pub struct GgmlTensor(pub(crate) NonNull<llama_cpp_sys_4::ggml_tensor>);
 
 impl GgmlTensor {
     /// Get the raw tensor pointer.
+    #[must_use]
     pub fn as_ptr(&self) -> *mut llama_cpp_sys_4::ggml_tensor {
         self.0.as_ptr()
     }
 
     /// Set the tensor's name.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     pub fn set_name(&self, name: &str) {
         let c_name = std::ffi::CString::new(name).expect("name contains null bytes");
         unsafe { llama_cpp_sys_4::ggml_set_name(self.0.as_ptr(), c_name.as_ptr()) };
@@ -329,6 +502,12 @@ impl GgmlGraph {
     }
 
     /// Get a node (output tensor) by index. Use -1 for the last node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml returns null, which in a release build means the
+    /// context's memory pool is exhausted. A debug build of ggml aborts
+    /// before returning — see [`GgmlContext::new`] for how to size the pool.
     #[must_use]
     pub fn node(&mut self, i: i32) -> GgmlTensor {
         let t = unsafe { llama_cpp_sys_4::ggml_graph_node(self.0.as_ptr(), i) };
@@ -346,6 +525,11 @@ pub struct GgmlBackend {
 
 impl GgmlBackend {
     /// Create a CPU backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml cannot initialise the CPU backend, which would mean the
+    /// build has no CPU backend compiled in.
     #[must_use]
     pub fn cpu() -> Self {
         let backend = unsafe { llama_cpp_sys_4::ggml_backend_cpu_init() };
@@ -361,6 +545,7 @@ impl GgmlBackend {
     /// Allocate all tensors in a context on this backend.
     ///
     /// Returns the buffer handle which must be kept alive.
+    #[must_use]
     pub fn alloc_ctx_tensors(
         &self,
         ctx: &GgmlContext,
@@ -374,11 +559,13 @@ impl GgmlBackend {
     }
 
     /// Get the default buffer type for this backend.
+    #[must_use]
     pub fn default_buffer_type(&self) -> llama_cpp_sys_4::ggml_backend_buffer_type_t {
         unsafe { llama_cpp_sys_4::ggml_backend_get_default_buffer_type(self.backend) }
     }
 
     /// Get the raw backend pointer.
+    #[must_use]
     pub fn as_ptr(&self) -> llama_cpp_sys_4::ggml_backend_t {
         self.backend
     }
@@ -400,6 +587,10 @@ pub struct GgmlAllocr {
 
 impl GgmlAllocr {
     /// Create a new graph allocator for the given backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics if ggml cannot allocate the graph allocator.
     #[must_use]
     pub fn new(backend: &GgmlBackend) -> Self {
         let alloc = unsafe { llama_cpp_sys_4::ggml_gallocr_new(backend.default_buffer_type()) };

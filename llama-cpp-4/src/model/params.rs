@@ -32,6 +32,83 @@ pub enum LlamaLoadMode {
     DirectIo = llama_cpp_sys_4::LLAMA_LOAD_MODE_DIRECT_IO as _,
 }
 
+impl LlamaLoadMode {
+    /// llama.cpp's own name for this mode: `"auto"`, `"none"`, `"mmap"`,
+    /// `"mlock"`, `"mmap+mlock"` or `"dio"`.
+    ///
+    /// Wraps `llama_load_mode_name`, so the spelling always matches what
+    /// upstream's logs print and what its `--load-mode` flag accepts.
+    ///
+    /// # Panics
+    ///
+    /// Panics if llama.cpp returns a non-UTF-8 name, which would mean the
+    /// upstream table was corrupted.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        let ptr = unsafe { llama_cpp_sys_4::llama_load_mode_name(self as _) };
+        assert!(!ptr.is_null(), "llama_load_mode_name returned null");
+        // SAFETY: upstream returns a pointer to a string literal, so `'static`
+        // holds.
+        unsafe { CStr::from_ptr(ptr) }
+            .to_str()
+            .expect("llama_load_mode_name returned non-UTF-8")
+    }
+
+    /// Parse a mode from llama.cpp's own spelling — the inverse of
+    /// [`Self::name`]. Returns `None` if `name` matches no mode.
+    ///
+    /// ```
+    /// # use llama_cpp_4::model::params::LlamaLoadMode;
+    /// assert_eq!(LlamaLoadMode::from_name("mmap+mlock"), Some(LlamaLoadMode::MmapMlock));
+    /// assert_eq!(LlamaLoadMode::from_name("nonsense"), None);
+    /// ```
+    //
+    // Deliberately *not* a call to `llama_load_mode_from_str`: that function
+    // throws `std::invalid_argument` for an unrecognised string, and letting a
+    // C++ exception unwind across the `extern "C"` boundary into Rust is
+    // undefined behaviour. Comparing against `name()` uses upstream's own
+    // strings, so this cannot drift from the C table it mirrors — the
+    // round-trip test pins that.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        [
+            Self::Auto,
+            Self::None,
+            Self::Mmap,
+            Self::Mlock,
+            Self::MmapMlock,
+            Self::DirectIo,
+        ]
+        .into_iter()
+        .find(|mode| mode.name() == name)
+    }
+}
+
+/// Whether tensors the architecture marks as lazy are read on demand rather
+/// than up front.
+///
+/// Only tensors the model architecture flags carry this at all — today that is
+/// Gemma-4's per-layer token embedding and `Qwen4Exp`'s PLE rows — so on every
+/// other architecture the setting has no effect. Lazy reading always needs
+/// mmap; without it llama.cpp warns and loads the tensor in full regardless.
+///
+/// `llama_lazy_mode` is an unsigned enum upstream (all discriminants are
+/// non-negative), unlike the signed [`LlamaLoadMode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum LlamaLazyMode {
+    /// Never read lazily — always pull the whole tensor up front.
+    Off = llama_cpp_sys_4::LLAMA_LAZY_MODE_OFF as _,
+    /// Read lazily only for marked tensors larger than 4 GiB. llama.cpp's
+    /// default, and downgraded to [`LlamaLazyMode::Off`] at load time if any
+    /// backend device lacks mmap support (iGPUs, for instance).
+    Auto = llama_cpp_sys_4::LLAMA_LAZY_MODE_AUTO as _,
+    /// Read every marked tensor's rows on demand, whatever its size. Trades
+    /// I/O for resident memory; the 4 GiB floor exists because the per-read
+    /// overhead is not worth it on small tensors.
+    On = llama_cpp_sys_4::LLAMA_LAZY_MODE_ON as _,
+}
+
 /// A safe wrapper around `llama_model_params`.
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaModelParams {
@@ -46,6 +123,7 @@ impl Debug for LlamaModelParams {
             .field("main_gpu", &self.params.main_gpu)
             .field("vocab_only", &self.params.vocab_only)
             .field("load_mode", &self.load_mode())
+            .field("lazy_mode", &self.lazy_mode())
             .field("load_mtp", &self.load_mtp())
             .field("kv_overrides", &"vec of kv_overrides")
             .finish()
@@ -163,6 +241,20 @@ impl LlamaModelParams {
         }
     }
 
+    /// Returns whether arch-marked tensors are read on demand.
+    ///
+    /// This is the requested mode, not the effective one: llama.cpp resolves
+    /// [`LlamaLazyMode::Auto`] down to [`LlamaLazyMode::Off`] during load when a
+    /// device lacks mmap support, and that resolution is not written back here.
+    #[must_use]
+    pub fn lazy_mode(&self) -> LlamaLazyMode {
+        match self.params.lazy_mode {
+            llama_cpp_sys_4::LLAMA_LAZY_MODE_OFF => LlamaLazyMode::Off,
+            llama_cpp_sys_4::LLAMA_LAZY_MODE_ON => LlamaLazyMode::On,
+            _ => LlamaLazyMode::Auto,
+        }
+    }
+
     /// Whether the model's MTP (multi-token prediction) layers will be loaded.
     ///
     /// MTP layers drive multi-token-prediction speculative decoding for models
@@ -230,6 +322,24 @@ impl LlamaModelParams {
     #[must_use]
     pub fn with_load_mode(mut self, load_mode: LlamaLoadMode) -> Self {
         self.params.load_mode = load_mode as llama_cpp_sys_4::llama_load_mode;
+        self
+    }
+
+    /// Sets whether arch-marked tensors are read on demand.
+    ///
+    /// Reach for [`LlamaLazyMode::On`] when a Gemma-4 or `Qwen4Exp` model's marked
+    /// tensors will not fit in RAM and the extra I/O is the better trade;
+    /// [`LlamaLazyMode::Off`] pins everything in memory up front. Corresponds to
+    /// `llama_model_params.lazy_mode`, added upstream in llama.cpp PR #27794.
+    ///
+    /// ```
+    /// # use llama_cpp_4::model::params::{LlamaLazyMode, LlamaModelParams};
+    /// let params = LlamaModelParams::default().with_lazy_mode(LlamaLazyMode::On);
+    /// assert_eq!(params.lazy_mode(), LlamaLazyMode::On);
+    /// ```
+    #[must_use]
+    pub fn with_lazy_mode(mut self, lazy_mode: LlamaLazyMode) -> Self {
+        self.params.lazy_mode = lazy_mode as llama_cpp_sys_4::llama_lazy_mode;
         self
     }
 

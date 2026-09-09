@@ -3,6 +3,11 @@
 //! Generate text that is constrained to a specific format using GBNF grammars.
 //! This is how you force a model to produce valid JSON, XML, tool calls, etc.
 //!
+//! Grammars can be written by hand (`--grammar`) or derived from a JSON Schema
+//! (`--json-schema`), which is what `OpenAI`'s `response_format: json_schema`
+//! means: the sampler cannot emit a token the schema rejects, so the output is
+//! valid by construction rather than by asking politely.
+//!
 //! ## Usage
 //!
 //! ```console
@@ -26,6 +31,11 @@
 //!
 //! # Custom GBNF grammar from a file
 //! cargo run -p structured -- --grammar-file my_grammar.gbnf -p "Generate something"
+//!
+//! # JSON Schema — llama.cpp converts it to GBNF, so the schema is *enforced*
+//! cargo run -p structured -- -p "Describe Tokyo" \
+//!   --json-schema '{"type":"object","properties":{"city":{"type":"string"},
+//!                   "population":{"type":"integer"}},"required":["city","population"]}'
 //!
 //! # Use a local model
 //! cargo run -p structured -- local path/to/model.gguf --format word -p "Hello"
@@ -81,6 +91,14 @@ struct Args {
     /// Path to a GBNF grammar file (overrides --format)
     #[arg(long)]
     grammar_file: Option<PathBuf>,
+
+    /// Inline JSON Schema, converted to GBNF by llama.cpp (overrides --format)
+    #[arg(long)]
+    json_schema: Option<String>,
+
+    /// Path to a JSON Schema file, converted to GBNF (overrides --format)
+    #[arg(long)]
+    json_schema_file: Option<PathBuf>,
 
     /// Temperature (0 = greedy)
     #[arg(long, default_value_t = 0.0)]
@@ -160,18 +178,30 @@ fn grammar_for_format(format: Format) -> &'static str {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Resolve grammar: --grammar > --grammar-file > --format
+    // Resolve grammar. A JSON Schema is converted by llama.cpp itself, so the
+    // constraint the sampler enforces is exactly the schema — the model cannot
+    // emit anything it rejects, rather than being asked nicely in the prompt.
+    //
+    // Precedence: --grammar > --grammar-file > --json-schema > --json-schema-file > --format
     let grammar = if let Some(g) = &args.grammar {
         g.clone()
     } else if let Some(path) = &args.grammar_file {
         std::fs::read_to_string(path)
             .with_context(|| format!("failed to read grammar file: {}", path.display()))?
+    } else if let Some(schema) = &args.json_schema {
+        json_schema_to_grammar(schema, false).context("converting --json-schema to GBNF")?
+    } else if let Some(path) = &args.json_schema_file {
+        let schema = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read schema file: {}", path.display()))?;
+        json_schema_to_grammar(&schema, false)
+            .with_context(|| format!("converting {} to GBNF", path.display()))?
     } else if let Some(fmt) = args.format {
         grammar_for_format(fmt).to_string()
     } else {
         bail!(
-            "Specify an output format with --format, --grammar, or --grammar-file.\n\
-             Available formats: json, json-schema, xml, list, tool-call, yes-no"
+            "Specify an output format with --format, --grammar, --grammar-file, \
+             --json-schema or --json-schema-file.\n\
+             Available formats: word, lowercase, identifier, csv-words, digits"
         );
     };
 
@@ -217,7 +247,7 @@ fn main() -> Result<()> {
 
     // ── Build the prompt ──
     // Try to use chat template if available, otherwise use raw prompt
-    let full_prompt = match model.get_chat_template(2048) {
+    let full_prompt = match model.chat_template(None) {
         Ok(_template) => {
             // Use a simple chatml-style prompt
             format!(
@@ -266,8 +296,28 @@ fn main() -> Result<()> {
     let mut output = String::new();
 
     while n_cur < n_len {
-        let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-        sampler.accept(token);
+        // A grammar can become unsatisfiable mid-generation: llama.cpp reports
+        // "Unexpected empty grammar stack" when the model's vocabulary cannot
+        // produce anything the constraint allows. That is a property of the
+        // model/grammar pair — a 512-token story vocabulary cannot spell JSON —
+        // so report it rather than treating it as a crash.
+        let token = match sampler.try_sample(&ctx, batch.n_tokens() - 1) {
+            Ok(t) => t,
+            Err(e) => {
+                bail!(
+                    "the grammar cannot be satisfied by this model's vocabulary: {e}\n\
+                     Try a simpler grammar, or a model whose tokenizer can spell the \
+                     characters the grammar requires."
+                );
+            }
+        };
+        if let Err(e) = sampler.try_accept(token) {
+            bail!(
+                "the grammar cannot be satisfied by this model's vocabulary: {e}\n\
+                 Try a simpler grammar, or a model whose tokenizer can spell the \
+                 characters the grammar requires."
+            );
+        }
 
         if model.is_eog_token(token) {
             break;
