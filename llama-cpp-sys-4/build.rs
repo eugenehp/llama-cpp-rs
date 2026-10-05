@@ -1786,6 +1786,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH_ENGINE");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
+    println!("cargo:rerun-if-env-changed=LLAMA_OPENSSL");
 
     // Rerun if prebuilt feature is toggled
     #[cfg(feature = "prebuilt")]
@@ -2045,6 +2046,18 @@ fn main() {
     // The OUT_DIR copy is a top-level CMake project (LLAMA_STANDALONE=ON), so
     // LLAMA_BUILD_APP defaults ON upstream; we only need the library.
     config.define("LLAMA_BUILD_APP", "OFF");
+
+    // `LLAMA_OPENSSL=0` builds llama.cpp's common HTTP client (cpp-httplib)
+    // without OpenSSL. Upstream defaults it ON, so any OpenSSL that CMake can
+    // find gets linked into common — a second TLS stack that applications
+    // which download models themselves never use, but must ship and patch.
+    // Without it, an https:// request through common/http.h fails with an
+    // explicit "HTTPS is not supported" error rather than falling back to
+    // plain HTTP. Unset (the default) keeps llama.cpp's own default.
+    if let Ok(v) = env::var("LLAMA_OPENSSL") {
+        let on = !matches!(v.to_ascii_lowercase().as_str(), "0" | "off" | "false");
+        config.define("LLAMA_OPENSSL", if on { "ON" } else { "OFF" });
+    }
 
     // Disable expensive CMake tests and checks for faster builds
     config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");
