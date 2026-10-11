@@ -1,8 +1,14 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
+# The floor is set by the dependency graph, not by this crate's own syntax.
+# `llama-cpp-sys-4`'s `ureq` build-dependency pulls url -> idna -> icu_*, which
+# declare 1.88; this crate's own code only needs 1.82 (for `&raw const`). Lower
+# it only after checking the graph again:
+#   cargo metadata | jq -r '.packages[]|select(.rust_version)|.rust_version'
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/eugenehp/llama-cpp-rs"
 keywords = ["llama", "llm", "ggml", "gguf", "inference"]
@@ -10,6 +16,14 @@ categories = ["api-bindings", "external-ffi-bindings"]
 links = "llama"
 
 include = [
+    # Licence texts. `license = "MIT OR Apache-2.0"` is only a declaration;
+    # Cargo can package a file only from inside the package directory, and the
+    # repository's copies live at the workspace root — so without these the
+    # published crate ships a licence it does not contain. Keep them in sync
+    # with the root copies.
+    "LICENSE-MIT",
+    "LICENSE-APACHE",
+
     # Crate sources
     "build.rs",
     "prebuilt_download.rs",
@@ -79,11 +93,17 @@ include = [
     "/llama.cpp/ggml/src/ggml-cann/**/*",
     "/llama.cpp/ggml/src/ggml-cpu/**/*",
     "/llama.cpp/ggml/src/ggml-cuda/**/*",
+    # GGML_ET and GGML_OPENVINO default OFF, so cmake never descends into these
+    # today — but `ggml_add_backend()` is called for both unconditionally, so
+    # the day a feature turns one on, a published crate without the directory
+    # fails to configure. Same trap as `ggml-version.h.in`, noted above.
+    "/llama.cpp/ggml/src/ggml-et/**/*",
     "/llama.cpp/ggml/src/ggml-hexagon/**/*",
     "/llama.cpp/ggml/src/ggml-hip/**/*",
     "/llama.cpp/ggml/src/ggml-metal/**/*",
     "/llama.cpp/ggml/src/ggml-musa/**/*",
     "/llama.cpp/ggml/src/ggml-opencl/**/*",
+    "/llama.cpp/ggml/src/ggml-openvino/**/*",
     "/llama.cpp/ggml/src/ggml-rpc/**/*",
     "/llama.cpp/ggml/src/ggml-sycl/**/*",
     "/llama.cpp/ggml/src/ggml-virtgpu/**/*",

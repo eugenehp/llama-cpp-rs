@@ -88,6 +88,113 @@ jobs:
           fi
       - name: sccache stats
         run: sccache --show-stats || true
+  msrv:
+    # `rust-version` in llama-cpp-4/Cargo.toml and llama-cpp-sys-4/Cargo.toml is
+    # a promise to consumers, and nothing else here checks it: every other job
+    # runs `stable`, so the day someone uses a newer language or std feature the
+    # declared floor silently becomes a lie and downstream gets a syntax error
+    # instead of "requires rustc X".
+    #
+    # Only the two published crates are built. The examples pull dependencies
+    # with much higher floors (actix-web, sysinfo, hf-hub) and are not published,
+    # so holding them to the library's MSRV would be meaningless.
+    name: Build at the declared MSRV
+    runs-on: ubuntu-latest
+    env:
+      # Overrides rust-toolchain.toml, which pins the *development* toolchain.
+      RUSTUP_TOOLCHAIN: "1.88"
+      RUSTFLAGS: '-C link-arg=-Wl,-rpath,$ORIGIN'
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88"
+      # Read the floor out of the manifest rather than repeating it, so the two
+      # cannot drift apart.
+      - name: Check the job matches the declared rust-version
+        run: |
+          declared=$(awk -F'"' '/^rust-version/ {print $2; exit}' llama-cpp-4/Cargo.toml)
+          if [ "$declared" != "$RUSTUP_TOOLCHAIN" ]; then
+            echo "::error::llama-cpp-4 declares rust-version $declared but this job pins $RUSTUP_TOOLCHAIN"
+            exit 1
+          fi
+          test "$(awk -F'"' '/^rust-version/ {print $2; exit}' llama-cpp-sys-4/Cargo.toml)" = "$declared" \
+            || { echo "::error::the two crates declare different rust-version values"; exit 1; }
+      - name: Build the published crates at the MSRV
+        run: cargo build -p llama-cpp-4 -p llama-cpp-sys-4
+
+  supply-chain:
+    # Nothing checked advisories or licences before. `llama-cpp-sys-4` runs
+    # `ureq` + `rustls` inside its build script, and the examples pull actix-web,
+    # reqwest and hf-hub, so the graph is big enough to hide a vulnerable
+    # transitive dependency — one was hiding in it (see `deny.toml`).
+    #
+    # No llama.cpp build: cargo-deny reads the manifests and lockfile, so this
+    # is the cheapest job here and gives the fastest signal.
+    name: Advisories, licences and sources
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny
+        run: cargo deny check
+      # `deny.toml` carries a dated exception for an advisory that cannot be
+      # fixed from here. Surface when an entry has outlived its reason rather
+      # than letting it become permanent.
+      - name: Report ignored advisories
+        if: always()
+        run: |
+          echo "Advisories currently ignored (review these):"
+          grep -n 'id = "RUSTSEC' deny.toml || echo "  none"
+
+  semver:
+    # `llama-cpp-4` tracks a fast-moving upstream, and 0.8.0 shipped a
+    # deliberate set of breaking changes. Nothing verified that a *patch*
+    # release does not do the same by accident — which for a 0.x crate is what
+    # semver forbids.
+    #
+    # Non-blocking: the baseline is the published crate, so this cannot run
+    # before the first publish of a new minor, and a rustdoc-JSON mismatch
+    # should not hold up a merge.
+    name: Check API compatibility against the published crate
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTFLAGS: '-C link-arg=-Wl,-rpath,$ORIGIN'
+    steps:
+      - name: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      # `--release-type` is deliberately omitted: cargo-semver-checks then reads
+      # the version in Cargo.toml and applies 0.x rules, where a breaking change
+      # requires a minor bump. A minor bump with breaks passes; a patch bump with
+      # breaks fails, which is the case worth catching.
+      - name: cargo semver-checks
+        run: cargo semver-checks check-release -p llama-cpp-4
+
   package:
     # Builds the crate exactly as crates.io would receive it and compiles that
     # tree. Nothing else checks the published artifact: the workspace builds
@@ -150,6 +257,12 @@ jobs:
           # Q1 quantization; gates a build-time patch as well as Rust code.
           - label: q1
             features: q1
+          # BLAS was in the same position metal was: built only by
+          # prebuilt-llama.yml on a `v*` tag. It is the one remaining backend
+          # that needs nothing but an apt package, so it belongs on the gate.
+          - label: blas
+            features: blas
+            apt: libopenblas-dev
           # No features at all: static linkage, no mtmd/openmp. The floor every
           # other combination builds on.
           - label: no-default-features
@@ -170,7 +283,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run:
-          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git mold ${{ matrix.apt }}
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.11
       - name: Setup Rust
@@ -220,6 +333,14 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --workspace --exclude llama-jni
+      # Metal is the backend this project leads with on macOS, and it was only
+      # ever built by prebuilt-llama.yml — which fires on a `v*` tag. So an
+      # upstream ggml-metal change broke the release, not the pull request that
+      # pulled it in. The runner is already paid for here.
+      - name: Build and lint the metal backend
+        run: |
+          cargo build -p llama-cpp-4 --no-default-features --features metal
+          cargo clippy -p llama-cpp-4 --all-targets --no-default-features --features metal -- -D warnings
       - name: sccache stats
         run: sccache --show-stats || true
   windows:

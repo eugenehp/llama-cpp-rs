@@ -10,6 +10,10 @@
 //! `fopen` gets wrong for a non-ASCII path on Windows. Only closing and seeking
 //! have to be declared here.
 
+// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
+// way. See the note on the lint in the workspace `Cargo.toml`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::{c_char, c_int, CString};
 use std::io;
 use std::path::Path;
@@ -68,6 +72,10 @@ impl CFile {
             )
         })?;
 
+        // SAFETY: both arguments are NUL-terminated C strings that outlive the
+        // call — `c_path` is a live `CString` and the mode is a literal.
+        // `ggml_fopen` only reads them, and returns either null or a handle this
+        // type then owns.
         let raw = unsafe {
             llama_cpp_sys_4::ggml_fopen(c_path.as_ptr(), c"rb".as_ptr().cast::<c_char>())
         };
@@ -92,6 +100,8 @@ impl CFile {
                     format!("offset {offset} does not fit this target's file offset type"),
                 )
             })?;
+            // SAFETY: `self.raw` is a live handle for as long as `self` is —
+            // only `Drop` closes it — and `SEEK_SET` is a valid `whence`.
             unsafe { _fseeki64(self.raw.as_ptr(), offset, SEEK_SET) }
         };
         #[cfg(not(windows))]
@@ -102,6 +112,9 @@ impl CFile {
                     format!("offset {offset} does not fit this target's file offset type"),
                 )
             })?;
+            // SAFETY: as above. `offset` was narrowed to `c_long` by the
+            // `try_from` that precedes it, which is what makes the declared
+            // `c_long` parameter type the right ABI on every target here.
             unsafe { fseek(self.raw.as_ptr(), offset, SEEK_SET) }
         };
 
@@ -119,6 +132,10 @@ impl CFile {
 
 impl Drop for CFile {
     fn drop(&mut self) {
+        // SAFETY: `self.raw` came from `ggml_fopen` in `open_read` and is
+        // closed exactly once, here. `CFile` is neither `Copy` nor `Clone`, so
+        // there is no second owner, and nothing hands the raw handle out except
+        // `as_ptr`, which borrows.
         unsafe { fclose(self.raw.as_ptr()) };
     }
 }

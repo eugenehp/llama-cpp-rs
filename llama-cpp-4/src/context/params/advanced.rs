@@ -236,12 +236,19 @@ impl LlamaContextParams {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use llama_cpp_4::context::params::LlamaContextParams;
+    /// # use llama_cpp_4::llama_backend::LlamaBackend;
+    /// # use llama_cpp_4::model::LlamaModel;
+    /// # fn f(backend: &LlamaBackend, model: &LlamaModel)
+    /// #     -> Result<(), Box<dyn std::error::Error>> {
     /// let target = model.new_context(&backend, LlamaContextParams::default())?;
     /// let draft = model.new_context(
     ///     &backend,
     ///     LlamaContextParams::default().with_ctx_other(&target),
     /// )?;
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn with_ctx_other(mut self, other: &crate::context::LlamaContext<'_>) -> Self {
@@ -404,14 +411,17 @@ impl LlamaContextParams {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
     /// use llama_cpp_4::context::params::LlamaContextParams;
     /// use llama_cpp_4::sampling::LlamaSampler;
-    ///
-    /// let chain = LlamaSampler::chain_default(&model)?;
+    /// # use llama_cpp_4::model::LlamaModel;
+    /// # fn f(model: &LlamaModel) -> Result<(), Box<dyn std::error::Error>> {
+    /// let chain = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
     /// let params = LlamaContextParams::default()
     ///     .with_sampler_seq_configs([(0, chain)]);
     /// assert_eq!(params.n_sampler_seq_configs(), 1);
+    /// # Ok(())
+    /// # }
     /// ```
     #[must_use]
     pub fn with_sampler_seq_configs(

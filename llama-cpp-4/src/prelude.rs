@@ -30,7 +30,7 @@
 //! | Memory & fit | [`fit_params`], [`FitParams`], [`FitParamsResult`], [`get_device_memory_data`], [`DeviceMemoryReport`], [`DeviceMemoryEntry`], [`DeviceMemoryHyperParams`], [`MemoryBreakdownEntry`] |
 //! | Tensor capture | [`TensorCapture`], [`CapturedTensor`], [`TensorTransactions`], [`TensorTransaction`], [`TensorSelector`], [`TensorAccess`], … |
 //! | Quantization | [`QuantizeParams`], [`TensorTypeOverride`], [`GgmlType`], [`LlamaFtype`], [`model_quantize`], [`attn_rot_disabled`], [`set_attn_rot_disabled`] |
-//! | Errors | [`Result`], [`LLamaCppError`], [`ShimError`] (the type behind the shim-backed aliases) and one per area: [`DecodeError`], [`EncodeError`], [`ProcessError`], [`EmbeddingsError`], [`BatchAddError`], [`BatchExtError`], [`ChatError`], [`CommonSamplerError`], [`NgramError`], [`RuntimeError`], [`MtpSessionError`], [`Eagle3SessionError`], [`SpeculativeStateError`], [`DetokenizeError`], [`FitParamsError`], [`DeviceMemoryError`], [`FtypeNameError`], [`QuantPreviewError`], [`LlamaModelLoadError`], [`LlamaContextLoadError`], [`LlamaLoraAdapterInitError`], [`LlamaLoraAdapterSetError`], [`LlamaLoraAdapterRemoveError`], [`ApplyChatTemplateError`], [`NewLlamaChatMessageError`], [`ParamsCloneError`] |
+//! | Errors | [`Result`], [`LLamaCppError`], [`ShimError`] (the type behind the shim-backed aliases) and one per area: [`DecodeError`], [`EncodeError`], [`ProcessError`], [`EmbeddingsError`], [`BatchAddError`], [`BatchExtError`], [`ChatError`], [`CommonSamplerError`], [`NgramError`], [`RuntimeError`], [`MtpSessionError`], [`Eagle3SessionError`], [`SpeculativeStateError`], [`DetokenizeError`], [`FitParamsError`], [`DeviceMemoryError`], [`FtypeNameError`], [`QuantPreviewError`], [`SamplerInitError`], [`LlamaModelLoadError`], [`LlamaContextLoadError`], [`LlamaLoraAdapterInitError`], [`LlamaLoraAdapterSetError`], [`LlamaLoraAdapterRemoveError`], [`ApplyChatTemplateError`], [`NewLlamaChatMessageError`], [`ParamsCloneError`] |
 //! | Utilities | [`ggml_time_us`], [`llama_time_us`], [`print_system_info`], [`supports_gpu_offload`], [`max_devices`] |
 //!
 //! With the `mtmd` feature: [`MtmdContext`], [`MtmdBitmap`], [`MtmdContextParams`],
@@ -180,7 +180,7 @@ pub use crate::model::{
     AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaLoraAdapter,
     LlamaModel, Special,
 };
-pub use crate::sampling::{LlamaSampler, LlamaSamplerParams};
+pub use crate::sampling::{LlamaSampler, LlamaSamplerParams, SamplerInitError};
 pub use crate::speculative::{SpeculativeStateError, MAX_SPECULATIVE_STATE_BYTES};
 pub use crate::token::data::LlamaTokenData;
 pub use crate::token::data_array::LlamaTokenDataArray;

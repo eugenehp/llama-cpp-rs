@@ -53,6 +53,10 @@
 //! # }
 //! ```
 
+// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
+// way. See the note on the lint in the workspace `Cargo.toml`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::ptr::NonNull;
 
 use llama_cpp_sys_4::{llama_pos, llama_seq_id};
@@ -420,6 +424,9 @@ impl LlamaBatchExt {
     ///
     /// Returns [`BatchExtError::NullReturn`] if llama.cpp could not allocate.
     pub fn new(ctx: &LlamaContext<'_>) -> Result<Self, BatchExtError> {
+        // SAFETY: `ctx.context` is a `NonNull` held by a live `&LlamaContext`.
+        // `llama_batch_ext_init` only reads the context (batch size, sequence
+        // count, model geometry) and returns an owned batch or null.
         let raw = unsafe { llama_cpp_sys_4::llama_batch_ext_init(ctx.context.as_ptr()) };
         let raw = NonNull::new(raw).ok_or(BatchExtError::NullReturn)?;
 
@@ -452,6 +459,8 @@ impl LlamaBatchExt {
     /// [`BatchEntry`] handles from before the call are no longer valid; the
     /// `set_*` methods reject them rather than writing to a recycled entry.
     pub fn clear(&mut self) {
+        // SAFETY: `self.raw` is live for as long as `self` — only `Drop` frees
+        // it — and `clear` just truncates the batch's own vectors.
         unsafe { llama_cpp_sys_4::llama_batch_ext_clear(self.raw.as_ptr()) }
         self.entries.clear();
         self.initialized_logits.clear();
@@ -534,6 +543,10 @@ impl LlamaBatchExt {
             return Err(BatchExtError::InvalidToken(id));
         }
         let idx =
+            // SAFETY: `self.raw` is live, and `id` was range-checked against
+            // `n_vocab` just above so the call cannot take the post-append
+            // rejection path. `seq_id` is validated by upstream, which returns
+            // `-3` rather than misbehaving.
             unsafe { llama_cpp_sys_4::llama_batch_ext_add_token(self.raw.as_ptr(), seq_id, id) };
         self.finish_add(idx, seq_id, Entry::token(), BatchExtError::InvalidToken(id))
     }
@@ -563,6 +576,10 @@ impl LlamaBatchExt {
         seq_id: llama_seq_id,
     ) -> Result<BatchEntry, BatchExtError> {
         self.check_embd_width(embd)?;
+        // SAFETY: `self.raw` is live. `embd.as_raw()` describes a block whose
+        // `n_rows * n_embd` equals the length of the borrowed slice —
+        // `EmbeddingRows::new` enforces that — so llama.cpp reads exactly the
+        // values it is given, and it copies them before returning.
         let idx = unsafe {
             llama_cpp_sys_4::llama_batch_ext_add_embd(self.raw.as_ptr(), seq_id, embd.as_raw())
         };
@@ -592,6 +609,7 @@ impl LlamaBatchExt {
     ///
     /// [`BatchExtError::Full`] or [`BatchExtError::InvalidSeqId`].
     pub fn add_empty(&mut self, seq_id: llama_seq_id) -> Result<BatchEntry, BatchExtError> {
+        // SAFETY: `self.raw` is live; the call takes only scalars besides it.
         let idx = unsafe { llama_cpp_sys_4::llama_batch_ext_add(self.raw.as_ptr(), seq_id) };
         // `llama_batch_ext_add` has no -2 case; any negative is -1 or -3.
         self.finish_add(
@@ -655,6 +673,8 @@ impl LlamaBatchExt {
     ) -> Result<(), BatchExtError> {
         self.check_entry(entry)?;
         let ok =
+            // SAFETY: `self.raw` is live and `check_entry` above proved
+            // `entry.0` indexes an entry that exists in this batch.
             unsafe { llama_cpp_sys_4::llama_batch_ext_add_seq(self.raw.as_ptr(), entry.0, seq_id) };
         if ok {
             Ok(())
@@ -704,6 +724,11 @@ impl LlamaBatchExt {
                 got: pos.len(),
             });
         }
+        // SAFETY: `self.raw` is live and `check_entry` proved `entry.0` exists.
+        // The critical part is the arity: upstream reads one `llama_pos` for a
+        // token entry and `n_pos_per_embd` for an embedding one, straight off
+        // this pointer, and the length check above proved `pos` holds exactly
+        // that many.
         let ok = unsafe {
             llama_cpp_sys_4::llama_batch_ext_set_pos(self.raw.as_ptr(), entry.0, pos.as_ptr())
         };
@@ -730,6 +755,9 @@ impl LlamaBatchExt {
             return Err(BatchExtError::EmbeddingAlreadySet(entry.0));
         }
         self.check_embd_width(embd)?;
+        // SAFETY: `self.raw` is live, `check_entry` proved `entry.0` exists,
+        // and `EmbeddingRows` guarantees the block's declared shape matches the
+        // slice behind it. llama.cpp copies the values out before returning.
         let ok = unsafe {
             llama_cpp_sys_4::llama_batch_ext_set_embd_token(
                 self.raw.as_ptr(),
@@ -765,6 +793,8 @@ impl LlamaBatchExt {
         if self.check_entry(entry)?.has_state {
             return Err(BatchExtError::StateAlreadySet(entry.0));
         }
+        // SAFETY: as for `set_token_embedding`. A context that takes no state
+        // embedding is reported by upstream as `false`, not misread.
         let ok = unsafe {
             llama_cpp_sys_4::llama_batch_ext_set_embd_state(
                 self.raw.as_ptr(),
@@ -792,6 +822,8 @@ impl LlamaBatchExt {
     /// [`BatchExtError::NoSuchEntry`] for a stale handle.
     pub fn set_output(&mut self, entry: BatchEntry, value: bool) -> Result<(), BatchExtError> {
         self.check_entry(entry)?;
+        // SAFETY: `self.raw` is live and `check_entry` proved `entry.0` exists;
+        // the rest of the call is a `bool`.
         let ok = unsafe {
             llama_cpp_sys_4::llama_batch_ext_set_output_logits(self.raw.as_ptr(), entry.0, value)
         };
@@ -821,6 +853,9 @@ impl LlamaBatchExt {
         order: LlamaDecisionOrder,
     ) -> Result<(), BatchExtError> {
         self.check_entry(entry)?;
+        // SAFETY: `self.raw` is live, `check_entry` proved `entry.0` exists,
+        // and `order.into()` can only produce one of the `llama_decision_order`
+        // discriminants.
         let ok = unsafe {
             llama_cpp_sys_4::llama_batch_ext_set_decision_order(
                 self.raw.as_ptr(),
@@ -880,6 +915,11 @@ impl Drop for LlamaBatchExt {
         // `llama_batch_ext` has no destructor beyond freeing its own vectors —
         // it never dereferences the context pointer it holds — so this is safe
         // even once the originating context is gone.
+        // SAFETY: `self.raw` came from `llama_batch_ext_init` in `new` and is
+        // freed exactly once, here; `LlamaBatchExt` is neither `Copy` nor
+        // `Clone`. As the comment above notes, the destructor never touches
+        // the context pointer the batch holds, so this is sound even once that
+        // context is gone.
         unsafe { llama_cpp_sys_4::llama_batch_ext_free(self.raw.as_ptr()) }
     }
 }

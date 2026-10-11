@@ -23,22 +23,27 @@
 //!
 //! # Quick start
 //!
-//! ```ignore
+//! ```no_run
 //! use llama_cpp_4::context::params::{LlamaContextParams, LlamaContextType};
 //! use llama_cpp_4::mtp::{MtpSession, MtpSessionConfig};
-//!
-//! let n_draft_max = 3;
+//! # use llama_cpp_4::llama_backend::LlamaBackend;
+//! # use llama_cpp_4::model::LlamaModel;
+//! # fn f(backend: &LlamaBackend, model: &LlamaModel)
+//! #     -> Result<(), Box<dyn std::error::Error>> {
+//! let n_draft_max: i32 = 3;
 //!
 //! let mut target = model.new_context(&backend, LlamaContextParams::default())?;
 //! let mut draft = model.new_context(
 //!     &backend,
 //!     LlamaContextParams::default()
 //!         .with_ctx_type(LlamaContextType::Mtp)
-//!         .with_n_rs_seq(n_draft_max.max(4)),
+//!         .with_n_rs_seq(n_draft_max.max(4).unsigned_abs()),
 //! )?;
 //!
 //! let config = MtpSessionConfig::new(1, n_draft_max).with_p_min(0.0);
 //! let mut session = MtpSession::new_with_config(&mut target, &mut draft, config)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Speculative loop
@@ -77,13 +82,22 @@
 //! When [`crate::model::LlamaModel::n_layer_nextn`] returns a value greater than `1`, set the
 //! draft context head before each [`MtpSession::draft`] call:
 //!
-//! ```ignore
+//! ```no_run
+//! # use llama_cpp_4::model::LlamaModel;
+//! # use llama_cpp_4::mtp::MtpSession;
+//! # use llama_cpp_4::token::LlamaToken;
+//! # fn f(model: &LlamaModel, session: &mut MtpSession<'_, '_>, n_past: i32,
+//! #      last_token: LlamaToken) -> Result<(), Box<dyn std::error::Error>> {
 //! for head in 0..model.n_layer_nextn() {
-//!     draft.set_nextn_layer_offset(head);
+//!     // The session borrows the draft context exclusively, so reach it
+//!     // through the session rather than through the original binding.
+//!     session.draft_context_mut().set_nextn_layer_offset(head);
 //!     let drafts = session.draft(0, n_past, last_token)?;
 //!     // verify on target ...
 //! }
-//! draft.set_nextn_layer_offset(0); // restore default
+//! session.draft_context_mut().set_nextn_layer_offset(0); // restore default
+//! # Ok(())
+//! # }
 //! ```
 //!
 
@@ -293,8 +307,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
 
     /// Construct an MTP draft session with full speculative draft parameters.
     ///
-    /// `target` must be a [`LlamaContextType::Default`](crate::context::params::LlamaContextType::Default) context.
-    /// `draft` must be a [`LlamaContextType::Mtp`](crate::context::params::LlamaContextType::Mtp) context from the same model,
+    /// `target` must be a [`LlamaContextType::Default`] context.
+    /// `draft` must be a [`LlamaContextType::Mtp`] context from the same model,
     /// with [`LlamaContextParams::with_n_rs_seq`](crate::context::params::LlamaContextParams::with_n_rs_seq)
     /// `>= config.n_draft_max`.
     ///

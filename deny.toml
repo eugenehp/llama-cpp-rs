@@ -1,0 +1,91 @@
+# cargo-deny configuration. Run with `cargo deny check`.
+#
+# Checked in CI by the `supply-chain` job in
+# .github/workflows/llama-cpp-rs-check.yml. Nothing checked advisories or
+# licences before: `llama-cpp-sys-4` runs `ureq` + `rustls` inside its build
+# script, and the examples pull in actix-web, reqwest and hf-hub, so the graph
+# is large enough that a vulnerable transitive dependency can sit there
+# unnoticed. One already was — see `[advisories].ignore` below.
+
+[graph]
+# Check the host target plus the ones the release workflow builds for. Leaving
+# this unset checks every target, which drags in platform crates nobody builds.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "warn"
+ignore = [
+    # RUSTSEC-2026-0258 — h2 accepts and queues empty DATA frames without
+    # limit, so an undrained stream can grow memory unboundedly or panic on
+    # overflow. Low severity, fixed in h2 0.4.16.
+    #
+    # Not fixable from this repository: the only path to it is
+    # openai-server -> actix-web 4.15 -> actix-http 3.18 -> h2 "^0.3.27", and
+    # 0.3.27 is the newest 0.3.x. It needs actix-web to move to h2 0.4.
+    #
+    # Scope: `examples/server` only. Neither published crate
+    # (`llama-cpp-4`, `llama-cpp-sys-4`) depends on h2 — verify with
+    # `cargo tree -p llama-cpp-4 -i h2`, which finds nothing.
+    #
+    # Re-check when actix-web next releases; drop this entry the moment it is
+    # on h2 0.4.
+    { id = "RUSTSEC-2026-0258", reason = "example-only; blocked on actix-web moving to h2 0.4" },
+]
+
+[licenses]
+version = 2
+# Every licence actually present in the graph, all permissive. Adding one here
+# should be a deliberate decision, which is the point of listing them.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    # Permissive data licence, used by the webpki root-certificate crates.
+    "CDLA-Permissive-2.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    # File-level weak copyleft, and only reached by two leaf crates (`colored`,
+    # `option-ext`) that are linked, never modified — so the per-file source
+    # obligation is not triggered.
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# The vendored llama.cpp submodule is MIT, and its text ships with the crate as
+# `llama.cpp/LICENSE`; cargo-deny reads the manifest, not the submodule.
+[[licenses.clarify]]
+crate = "llama-cpp-sys-4"
+expression = "MIT OR Apache-2.0"
+license-files = [
+    { path = "LICENSE-MIT", hash = 0x0 },
+]
+
+[bans]
+# Duplicate majors are a fact of a graph this size (two `syn`, two `h2`, two
+# `http`); warn so they stay visible without gating.
+multiple-versions = "warn"
+wildcards = "deny"
+# A path dependency inside the workspace has no version requirement to state,
+# which is not the "wildcard dependency" hazard this check is for.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

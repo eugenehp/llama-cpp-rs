@@ -1,5 +1,9 @@
 //! Safe wrapper around `llama_batch`.
 
+// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
+// way. See the note on the lint in the workspace `Cargo.toml`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use crate::token::LlamaToken;
 use llama_cpp_sys_4::{llama_batch, llama_batch_free, llama_batch_init, llama_pos, llama_seq_id};
 
@@ -56,6 +60,13 @@ impl LlamaBatch {
         }
         let offset = self.llama_batch.n_tokens;
         let offset_usize = usize::try_from(offset).expect("cannot fit n_tokens into a usize");
+        // SAFETY: every write below is at index `offset_usize`, which the
+        // capacity check above proved is `< self.allocated`. `llama_batch_init`
+        // allocated `allocated` elements for `token`, `pos`, `n_seq_id`,
+        // `seq_id` and `logits`, so each pointer is valid and aligned for a
+        // write at that index. `seq_id[offset]` is its own allocation of
+        // `n_seq_max` elements; `seq_ids.len()` is bounded by the caller, which
+        // is the one invariant this type does *not* check — see the note below.
         unsafe {
             // batch.token   [batch.n_tokens] = id;
             self.llama_batch.token.add(offset_usize).write(id);
@@ -69,6 +80,10 @@ impl LlamaBatch {
             // for (size_t i = 0; i < seq_ids.size(); ++i) {
             //     batch.seq_id[batch.n_tokens][i] = seq_ids[i];
             // }
+            // NOTE: `llama_batch_init` sized each `seq_id[i]` row to the
+            // `n_seq_max` passed to `LlamaBatch::new`. Passing more than that
+            // many ids here writes past the row — the one unchecked precondition
+            // left in this type.
             for (i, seq_id) in seq_ids.iter().enumerate() {
                 let tmp = *self.llama_batch.seq_id.add(offset_usize);
                 tmp.add(i).write(*seq_id);
@@ -141,6 +156,10 @@ impl LlamaBatch {
     #[must_use]
     pub fn new(n_tokens: usize, n_seq_max: i32) -> Self {
         let n_tokens_i32 = i32::try_from(n_tokens).expect("cannot fit n_tokens into a i32");
+        // SAFETY: `llama_batch_init` only reads its three scalar arguments and
+        // returns an owned batch; `n_tokens_i32` was just range-checked. The
+        // `0` means "no embeddings", which is why `llama_batch.embd` stays null
+        // for the whole life of this type.
         let batch = unsafe { llama_batch_init(n_tokens_i32, 0, n_seq_max) };
 
         LlamaBatch {
@@ -170,6 +189,12 @@ impl LlamaBatch {
     #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     #[must_use]
     pub fn get_one(tokens: &mut [LlamaToken]) -> llama_batch {
+        // SAFETY: `LlamaToken` is `#[repr(transparent)]` over `llama_token`, so
+        // the cast is a no-op in layout, and the slice gives a valid pointer
+        // for `tokens.len()` elements. The returned batch *borrows* that
+        // pointer — which is why this returns the raw `llama_batch` rather than
+        // a `LlamaBatch`: there is no owned allocation to free, and the caller
+        // carries the obligation documented above to keep `tokens` alive.
         unsafe {
             llama_cpp_sys_4::llama_batch_get_one(tokens.as_mut_ptr().cast(), tokens.len() as i32)
         }
@@ -189,6 +214,10 @@ impl Drop for LlamaBatch {
     /// # Ok(())
     /// # }
     fn drop(&mut self) {
+        // SAFETY: `self.llama_batch` came from `llama_batch_init` in
+        // `LlamaBatch::new` and is freed exactly once, here. Nothing else in
+        // this type replaces it, and `LlamaBatch` is not `Copy`/`Clone`, so
+        // there is no second owner.
         unsafe {
             llama_batch_free(self.llama_batch);
         }

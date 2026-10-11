@@ -23,7 +23,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.7.0"
+llama-cpp-4 = "0.8.0"
 ```
 
 Import the common types with the prelude:
@@ -173,7 +173,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.7.0`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.8.0`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -766,7 +766,7 @@ running the binary directly fails with `libggml-base.so.0: cannot open shared
 object file`. To sidestep runtime lookup entirely, link statically instead:
 
 ```toml
-llama-cpp-4 = { version = "0.7.0", default-features = false }
+llama-cpp-4 = { version = "0.8.0", default-features = false }
 ```
 
 ---
@@ -900,7 +900,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.7.0},
+  version   = {0.8.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

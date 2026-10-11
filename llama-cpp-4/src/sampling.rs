@@ -24,6 +24,37 @@ use crate::model::LlamaModel;
 use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 
+/// Why a sampler could not be constructed.
+///
+/// The panicking constructors — [`LlamaSampler::grammar`] and friends — are
+/// kept for the common case where the grammar is a literal or came from
+/// [`ChatParams::grammar`](crate::chat::ChatParams), and a failure really is a
+/// bug. These exist for the case they handle badly: a grammar, rule name or
+/// trigger pattern that arrived from a request, where an interior NUL is bad
+/// *input* rather than a broken invariant.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SamplerInitError {
+    /// A caller-supplied string contained an interior NUL, so it cannot cross
+    /// the FFI boundary. `field` names which argument.
+    #[error("{field} contains an interior NUL byte")]
+    InteriorNul {
+        /// Name of the offending argument.
+        field: &'static str,
+        /// The underlying conversion error.
+        #[source]
+        source: std::ffi::NulError,
+    },
+    /// llama.cpp returned null. For a grammar sampler this is what an
+    /// unparseable GBNF grammar looks like; it logs the parse error itself.
+    #[error("llama.cpp could not build the {0} sampler (see the llama.cpp log)")]
+    NullReturn(&'static str),
+}
+
+/// Convert a caller string, naming the argument so the error says which one.
+fn c_string(field: &'static str, value: &str) -> Result<CString, SamplerInitError> {
+    CString::new(value).map_err(|source| SamplerInitError::InteriorNul { field, source })
+}
+
 /// A safe wrapper around `llama_sampler`.
 pub struct LlamaSampler {
     pub(crate) sampler: NonNull<llama_sampler>,
@@ -422,12 +453,36 @@ impl LlamaSampler {
     ///
     /// # Panics
     /// - If either of `grammar_str` or `grammar_root` contain null bytes.
-    /// - If llama.cpp returns a null pointer.
+    /// - If llama.cpp returns a null pointer, which is also what an
+    ///   unparseable GBNF grammar looks like.
+    ///
+    /// Prefer [`Self::try_grammar`] when the grammar did not come from your own
+    /// source — a grammar built from a request is input, and both failures above
+    /// are then reachable without a bug.
     #[must_use]
     pub fn grammar(model: &LlamaModel, grammar_str: &str, grammar_root: &str) -> Self {
-        let grammar_str = CString::new(grammar_str).unwrap();
-        let grammar_root = CString::new(grammar_root).unwrap();
+        Self::try_grammar(model, grammar_str, grammar_root)
+            .unwrap_or_else(|e| panic!("building grammar sampler: {e}"))
+    }
 
+    /// [`Self::grammar`], reporting llama.cpp's and the conversion's failures
+    /// instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// [`SamplerInitError::InteriorNul`] if either string contains a NUL, or
+    /// [`SamplerInitError::NullReturn`] if llama.cpp rejected the grammar.
+    pub fn try_grammar(
+        model: &LlamaModel,
+        grammar_str: &str,
+        grammar_root: &str,
+    ) -> Result<Self, SamplerInitError> {
+        let grammar_str = c_string("grammar_str", grammar_str)?;
+        let grammar_root = c_string("grammar_root", grammar_root)?;
+
+        // SAFETY: both pointers come from live `CString`s that outlast the call,
+        // and llama.cpp only reads them. The vocab reference is borrowed from
+        // `model` for the duration.
         let sampler = unsafe {
             llama_sampler_init_grammar(
                 model.get_vocab().vocab.as_ref(),
@@ -435,9 +490,9 @@ impl LlamaSampler {
                 grammar_root.as_ptr(),
             )
         };
-        Self {
-            sampler: NonNull::new(sampler).unwrap(),
-        }
+        NonNull::new(sampler)
+            .map(|sampler| Self { sampler })
+            .ok_or(SamplerInitError::NullReturn("grammar"))
     }
 
     /// DRY sampler, designed by p-e-w, as described in:
@@ -458,9 +513,12 @@ impl LlamaSampler {
         penalty_last_n: i32,
         seq_breakers: impl IntoIterator<Item = impl AsRef<[u8]>>,
     ) -> Self {
+        // A NUL in a sequence breaker is the same class of input error the
+        // grammar constructors have a `try_` variant for; `dry` keeps the panic
+        // because its breakers are conventionally literals (`"\n"`, `":"`).
         let seq_breakers: Vec<CString> = seq_breakers
             .into_iter()
-            .map(|s| CString::new(s.as_ref()).unwrap())
+            .map(|s| CString::new(s.as_ref()).expect("sequence breaker contains an interior NUL"))
             .collect();
         // CString::as_ptr() returns *const c_char, which matches what the binding
         // expects on every platform (signed on macOS/x86 Linux, unsigned on musl ARM).
@@ -800,6 +858,9 @@ impl LlamaSampler {
     /// - If `grammar_str` or `grammar_root` contain null bytes.
     /// - If any trigger pattern contains null bytes.
     /// - If llama.cpp returns a null pointer.
+    ///
+    /// Prefer [`Self::try_grammar_lazy_patterns`] when any of those strings came
+    /// from a request rather than your own source.
     #[must_use]
     pub fn grammar_lazy_patterns(
         model: &LlamaModel,
@@ -808,15 +869,43 @@ impl LlamaSampler {
         trigger_patterns: &[&str],
         trigger_tokens: &[LlamaToken],
     ) -> Self {
-        let grammar_str = CString::new(grammar_str).unwrap();
-        let grammar_root = CString::new(grammar_root).unwrap();
-        let pattern_cstrings: Vec<CString> = trigger_patterns
+        Self::try_grammar_lazy_patterns(
+            model,
+            grammar_str,
+            grammar_root,
+            trigger_patterns,
+            trigger_tokens,
+        )
+        .unwrap_or_else(|e| panic!("building lazy grammar sampler: {e}"))
+    }
+
+    /// [`Self::grammar_lazy_patterns`], reporting failures instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// [`SamplerInitError::InteriorNul`] for a NUL in the grammar, the rule name
+    /// or any trigger pattern, or [`SamplerInitError::NullReturn`] if llama.cpp
+    /// rejected the grammar.
+    pub fn try_grammar_lazy_patterns(
+        model: &LlamaModel,
+        grammar_str: &str,
+        grammar_root: &str,
+        trigger_patterns: &[&str],
+        trigger_tokens: &[LlamaToken],
+    ) -> Result<Self, SamplerInitError> {
+        let grammar_str = c_string("grammar_str", grammar_str)?;
+        let grammar_root = c_string("grammar_root", grammar_root)?;
+        let pattern_cstrings = trigger_patterns
             .iter()
-            .map(|w| CString::new(*w).unwrap())
-            .collect();
+            .map(|pattern| c_string("trigger_patterns", pattern))
+            .collect::<Result<Vec<CString>, _>>()?;
         let mut pattern_ptrs: Vec<*const c_char> =
             pattern_cstrings.iter().map(|s| s.as_ptr()).collect();
 
+        // SAFETY: every pointer is borrowed from a `CString`/slice that outlives
+        // the call, and the two lengths describe exactly those buffers.
+        // `trigger_tokens` is `#[repr(transparent)]` over `llama_token`, so the
+        // cast is a layout no-op. llama.cpp copies what it needs.
         let sampler = unsafe {
             llama_sampler_init_grammar_lazy_patterns(
                 model.get_vocab().vocab.as_ref(),
@@ -828,9 +917,9 @@ impl LlamaSampler {
                 trigger_tokens.len(),
             )
         };
-        Self {
-            sampler: NonNull::new(sampler).unwrap(),
-        }
+        NonNull::new(sampler)
+            .map(|sampler| Self { sampler })
+            .ok_or(SamplerInitError::NullReturn("lazy grammar"))
     }
 
     /// Clone this sampler.

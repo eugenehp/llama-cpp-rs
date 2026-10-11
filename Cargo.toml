@@ -47,4 +47,31 @@ missing_docs = { level = "warn" }
 missing_debug_implementations = { level = "warn" }
 
 [workspace.lints.clippy]
-pedantic = { level = "warn" }
+# Priority -1 so the explicit lint below can override the group; Cargo requires
+# a group to be ordered relative to any individual lint it contains.
+pedantic = { level = "warn", priority = -1 }
+
+# `undocumented_unsafe_blocks` is the lint that matters most for an FFI crate,
+# and it is deliberately *not* enabled workspace-wide yet: there are ~1100
+# `unsafe` blocks and only a fraction carry a `SAFETY:` comment, so switching it
+# on globally would mean a thousand warnings (and, with CI's `-D warnings`, a
+# red build) that nobody can action in one change.
+#
+# It is being adopted as a ratchet instead. A module whose `unsafe` blocks are
+# all justified gets, at the top of the file:
+#
+#     #![deny(clippy::undocumented_unsafe_blocks)]
+#
+# which makes that module's coverage permanent — a new undocumented block there
+# fails the build. Done so far: `context/tensor_transaction.rs`, `cfile.rs`,
+# `llama_backend.rs`, `llama_batch.rs`, `llama_batch_ext.rs`. The remaining
+# large ones, worst first: `model.rs`, `mtmd.rs`, `context.rs`, `ggml.rs`,
+# `sampling.rs`.
+#
+# Once every module carries it, move the lint here at `deny` and delete the
+# per-module attributes.
+#
+# A `SAFETY:` comment earns its place by naming the precondition and why it
+# holds *here* — "calls into C" is not a justification. `tensor_transaction.rs`
+# is the reference for the standard.
+undocumented_unsafe_blocks = { level = "allow", priority = 0 }

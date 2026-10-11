@@ -4,6 +4,16 @@ on:
   repository_dispatch:
     types: [ trigger-update-toml-version ]
   workflow_dispatch:
+    inputs:
+      level:
+        description: Which component to bump
+        type: choice
+        options: [ patch, minor, major ]
+        default: patch
+      version:
+        description: Exact version to set (overrides `level`)
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,35 +29,86 @@ jobs:
         with:
           submodules: recursive
 
+      # Every manifest in the repo carries the release version, both as its own
+      # `version` and as the `version = "…"` requirement on each sibling path
+      # dependency. The previous version of this step listed four of them by
+      # hand (llama-cpp-sys-4, llama-cpp-4, examples/simple,
+      # examples/embeddings), so a bump left the other twenty-one behind and
+      # `cargo package` then failed on a version requirement that no longer
+      # resolved. Discover them instead.
+      #
+      # `examples/rpc` is its own workspace with its own lock, so it needs a
+      # separate `cargo check` to be updated.
       - name: Update version in TOML files
         env:
           GH_TOKEN: ${{ github.token }}
+          LEVEL: ${{ github.event.inputs.level || 'patch' }}
+          EXACT: ${{ github.event.inputs.version || '' }}
         run: |
-          # Extract the current version from the TOML file
-          CURRENT_VERSION=$(awk -F '"' '/^version/ {print $2}' llama-cpp-4/Cargo.toml)
-          # Increment the version
-          NEXT_VERSION=$(echo "$CURRENT_VERSION" | awk -F. -v OFS=. '{++$NF; print}')
-          # Update version in llama-cpp-sys-4 Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" llama-cpp-sys-4/Cargo.toml
-          # Update version in llama-cpp-4 Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" llama-cpp-4/Cargo.toml
-          sed -i "s/\(llama-cpp-sys-4 = { path = \"\.\.\/llama-cpp-sys-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/g" llama-cpp-4/Cargo.toml
-          # Update the version in the simple Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" examples/simple/Cargo.toml
-          sed -i "s/^\(llama-cpp-4 = { path = \"\.\.\/llama-cpp-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/" examples/simple/Cargo.toml       
-          # Update the version in the root embeddings Cargo.toml
-          sed -i "s/^version = \".*\"/version = \"$NEXT_VERSION\"/g" examples/embeddings/Cargo.toml
-          sed -i "s/^\(llama-cpp-4 = { path = \"\.\.\/llama-cpp-4\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/" examples/embeddings/Cargo.toml
-          # Update Cargo.lock by running cargo check
-          cargo check
-          # Commit the changes
+          set -euo pipefail
+
+          CURRENT_VERSION=$(awk -F '"' '/^version/ {print $2; exit}' llama-cpp-4/Cargo.toml)
+
+          if [ -n "$EXACT" ]; then
+            NEXT_VERSION="$EXACT"
+          else
+            NEXT_VERSION=$(echo "$CURRENT_VERSION" | awk -F. -v OFS=. -v level="$LEVEL" '{
+              if (level == "major")      { $1++; $2 = 0; $3 = 0 }
+              else if (level == "minor") { $2++; $3 = 0 }
+              else                       { $3++ }
+              print
+            }')
+          fi
+          echo "Bumping $CURRENT_VERSION -> $NEXT_VERSION ($LEVEL)"
+
+          MANIFESTS=$(find . -name Cargo.toml -not -path './target/*' -not -path '*/target/*' \
+                               -not -path './llama-cpp-sys-4/llama.cpp/*' | sort)
+
+          for manifest in $MANIFESTS; do
+            # The package's own version, and the requirement on any sibling
+            # path dependency — both are the release version, and nothing else
+            # in these manifests carries it.
+            sed -i \
+              -e "s/^version = \"$CURRENT_VERSION\"\$/version = \"$NEXT_VERSION\"/" \
+              -e "s/\(path = \"[^\"]*\", version = \)\"$CURRENT_VERSION\"/\1\"$NEXT_VERSION\"/g" \
+              "$manifest"
+          done
+
+          # Fail loudly rather than opening a half-bumped PR.
+          if grep -rn "\"$CURRENT_VERSION\"" $MANIFESTS; then
+            echo "::error::some manifests still reference $CURRENT_VERSION"
+            exit 1
+          fi
+
+          echo "Updated:"
+          git diff --name-only
+
+      - name: Refresh both lockfiles
+        run: |
+          set -euo pipefail
+          cargo check --workspace --quiet || cargo update --workspace --quiet
+          cargo check --manifest-path examples/rpc/Cargo.toml --quiet \
+            || cargo update --manifest-path examples/rpc/Cargo.toml --quiet
+
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          NEXT_VERSION=$(awk -F '"' '/^version/ {print $2; exit}' llama-cpp-4/Cargo.toml)
+
           git config --global user.email "actions@github.com"
           git config --global user.name "GitHub Actions"
-          git add llama-cpp-sys-4/Cargo.toml llama-cpp-4/Cargo.toml examples/simple/Cargo.toml examples/embeddings/Cargo.toml Cargo.lock
+          git checkout -b "version-bump-$NEXT_VERSION"
+          # Stage every manifest and lock that moved, rather than a fixed list.
+          git add -- '*Cargo.toml' '*Cargo.lock'
           git commit -m "Bump version to $NEXT_VERSION [skip ci]"
-          # Create a  branch for the changes
-          git checkout -b version-bump-$NEXT_VERSION
-          # Push the changes and create a pull request
-          git push origin version-bump-$NEXT_VERSION --force
-          gh pr create --base main --head version-bump-$NEXT_VERSION --title "Bumped version to $NEXT_VERSION" --fill
+          git push origin "version-bump-$NEXT_VERSION" --force
+          gh pr create --base main --head "version-bump-$NEXT_VERSION" \
+            --title "Bumped version to $NEXT_VERSION" \
+            --body "Mechanical version bump to \`$NEXT_VERSION\` across every manifest, plus both lockfiles.
 
+          Remember, for a release, that this does **not** touch:
+          - \`CHANGELOG.md\` — cut the \`## [$NEXT_VERSION] - <date>\` heading by hand
+          - the \`**Crate version:**\` banners in \`llama-cpp-4/README.md\` and \`llama-cpp-sys-4/README.md\`
+          - the install snippets and citation block in \`README.md\`"

@@ -673,12 +673,20 @@ impl<'model> LlamaContext<'model> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use llama_cpp_4::model::LlamaModel;
+    /// # use llama_cpp_4::mtp::MtpSession;
+    /// # use llama_cpp_4::token::LlamaToken;
+    /// # fn f(model: &LlamaModel, session: &mut MtpSession<'_, '_>, n_past: i32,
+    /// #      last_token: LlamaToken) -> Result<(), Box<dyn std::error::Error>> {
     /// for head in 0..model.n_layer_nextn() {
-    ///     draft.set_nextn_layer_offset(head);
+    ///     // Via the session: it borrows the draft context exclusively.
+    ///     session.draft_context_mut().set_nextn_layer_offset(head);
     ///     let drafts = session.draft(0, n_past, last_token)?;
     /// }
-    /// draft.set_nextn_layer_offset(0);
+    /// session.draft_context_mut().set_nextn_layer_offset(0);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn set_nextn_layer_offset(&mut self, offset: i32) {
         unsafe {

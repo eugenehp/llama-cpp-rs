@@ -8,6 +8,10 @@
 //! back exactly once only after the handler returns successfully and every
 //! output value passes validation.
 
+// This module already documents every `unsafe` block; the lint locks that in.
+// See the note on it in the workspace `Cargo.toml`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::c_void;
 use std::fmt;
 use std::panic::{catch_unwind, AssertUnwindSafe};

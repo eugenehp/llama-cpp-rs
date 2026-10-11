@@ -1,5 +1,9 @@
 //! Representation of an initialized llama backend
 
+// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
+// way. See the note on the lint in the workspace `Cargo.toml`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use crate::LLamaCppError;
 use llama_cpp_sys_4::ggml_log_level;
 use std::sync::atomic::AtomicBool;
@@ -47,6 +51,11 @@ impl LlamaBackend {
     #[tracing::instrument(skip_all)]
     pub fn init() -> crate::Result<LlamaBackend> {
         Self::mark_init()?;
+        // SAFETY: `llama_backend_init` must be called exactly once per process
+        // before any other llama.cpp entry point. `mark_init` is the gate: it
+        // compare-exchanges a global from false to true and has already
+        // returned `Err` above if anyone got here first, so this cannot run
+        // twice even from several threads.
         unsafe { llama_cpp_sys_4::llama_backend_init() }
         Ok(LlamaBackend {})
     }
@@ -70,6 +79,9 @@ impl LlamaBackend {
     #[tracing::instrument(skip_all)]
     pub fn init_numa(strategy: NumaStrategy) -> crate::Result<LlamaBackend> {
         Self::mark_init()?;
+        // SAFETY: same once-only gate as `init`. The argument is a
+        // `ggml_numa_strategy` built by the `From` impl below, so it is always
+        // one of the discriminants llama.cpp matches on.
         unsafe {
             llama_cpp_sys_4::llama_numa_init(llama_cpp_sys_4::ggml_numa_strategy::from(strategy));
         }
@@ -85,6 +97,12 @@ impl LlamaBackend {
         ) {
         }
 
+        // SAFETY: `void_log` is a `'static` fn item with the exact signature
+        // `ggml_log_callback` requires, and it touches none of its arguments —
+        // so it is sound for llama.cpp to call from any thread, at any time,
+        // for the rest of the process. The null user-data pointer is never
+        // dereferenced because `void_log` ignores it. `&mut self` is what keeps
+        // this from racing another `void_log`/`llama_log_set` caller.
         unsafe {
             llama_cpp_sys_4::llama_log_set(Some(void_log), std::ptr::null_mut());
         }
@@ -190,6 +208,11 @@ impl Drop for LlamaBackend {
                 unreachable!("This should not be reachable as the only ways to obtain a llama backend involve marking the backend as initialized.")
             }
         }
+        // SAFETY: paired with the `llama_backend_init` in `init`/`init_numa`.
+        // Reaching `Drop` means a `LlamaBackend` existed, which means the
+        // backend was initialized, and the compare-exchange just above flipped
+        // the global back to false — so this runs once and nothing else can be
+        // mid-call.
         unsafe { llama_cpp_sys_4::llama_backend_free() }
     }
 }

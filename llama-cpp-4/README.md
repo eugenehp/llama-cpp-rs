@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.7.0
+**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.8.0
 
 ---
 
@@ -15,12 +15,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.7.0"
+llama-cpp-4 = "0.8.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.7.0", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.7.0", features = ["metal"] }
-# llama-cpp-4 = { version = "0.7.0", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.8.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.8.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.8.0", features = ["vulkan"] }
 ```
 
 ---
@@ -437,6 +437,18 @@ fn main() -> anyhow::Result<()> {
 This crate wraps a C++ library via FFI. The safe API prevents most misuse, but
 some patterns (e.g. using a context after its model is dropped) can still cause
 UB. File an issue if you spot any.
+
+One precondition is deliberately unchecked and worth knowing: `LlamaBatch::add`
+writes as many sequence ids as you pass, while `LlamaBatch::new(n_tokens,
+n_seq_max)` sized each row to `n_seq_max` — so passing more ids than that writes
+past the row. `LlamaBatchExt` checks its equivalents.
+
+If you are contributing: `clippy::undocumented_unsafe_blocks` is being adopted
+module by module, and a module that carries
+`#![deny(clippy::undocumented_unsafe_blocks)]` must stay at full coverage. See
+the note on the lint in the workspace `Cargo.toml` for which modules are done
+and what a `SAFETY:` comment is expected to say;
+`llama-cpp-4/src/context/tensor_transaction.rs` is the reference.
 
 ## Examples in this repo
 

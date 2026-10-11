@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## [0.8.0] - 2026-10-11
+
 ### Breaking
 
 - **`ChatParams::parse_with` is gone**, and with it the `parse_tool_calls` and
@@ -190,6 +192,65 @@
   lived in a private module, so its variants had nowhere to be documented and
   every `[`ChatError::Failed`]`-style doc link resolved to a private item.
 
+- **`LlamaSampler::try_grammar` and `try_grammar_lazy_patterns`**, with a
+  `SamplerInitError`. The panicking constructors stay — for a grammar literal, or
+  one from [`ChatParams::grammar`], a failure really is a bug — but they
+  `CString::new(..).unwrap()` a *caller-supplied* string, and an interior NUL
+  there is bad input, not a broken invariant. The same applies to llama.cpp
+  returning null, which is what an unparseable GBNF grammar looks like. Both now
+  have a fallible form, continuing the migration `try_sample`/`try_accept`
+  started, and the error names which argument was at fault.
+- **A declared MSRV.** Both published crates now set `rust-version = "1.88"`,
+  and a new `msrv` CI job builds them on exactly that toolchain. Nothing
+  checked it before — every other job runs `stable` — so the day someone used a
+  newer language or std feature the floor would silently become a lie and
+  downstream would get a syntax error instead of *"requires rustc X"*.
+  - `1.88` comes from the dependency graph, not from this crate: the `ureq`
+    build-dependency pulls `url` → `idna` → `icu_*`, which declare 1.88. The
+    crate's own code only needs 1.82, for `&raw const` (60 uses). The comment
+    above each `rust-version` records that, and the job reads the value out of
+    the manifest rather than repeating it, so the two cannot drift.
+  - Only the published crates are held to it. The examples depend on
+    `actix-web`, `sysinfo` and `hf-hub`, whose floors are far higher.
+- **`rust-toolchain.toml`**, pinning the development toolchain. `cargo fmt
+  --check` and `cargo clippy -D warnings` are both CI gates and both move with
+  the compiler — rustfmt changes its output between releases and clippy adds
+  lints — so with CI on `stable` and contributors on whatever they have, a gate
+  can go red from a toolchain bump nobody made. This is not the MSRV; the `msrv`
+  job sets `RUSTUP_TOOLCHAIN` to override the file.
+
+### Fixed
+
+- **Neither published crate shipped its licence texts.** `license = "MIT OR
+  Apache-2.0"` is a declaration; Cargo can only package files from inside the
+  package directory, and `LICENSE-MIT`/`LICENSE-APACHE` existed only at the
+  workspace root. Verified against the built `.crate`: no `LICENSE*` at all. Both
+  crates now carry copies, and `llama-cpp-sys-4`'s `include` list names them —
+  without that the list would have excluded them again.
+- **`ggml-et` and `ggml-openvino` were the only two ggml backend directories
+  missing from `llama-cpp-sys-4`'s `include` list** (16 of 18 were there), so the
+  published crate did not contain them. Latent rather than live: both options
+  default `OFF`, so cmake never descended into them — but `ggml/src/CMakeLists.txt`
+  calls `ggml_add_backend()` for both unconditionally, so the day a feature turned
+  one on, configure would fail on a published crate. The same trap as
+  `ggml-version.h.in`. The package grew 1800 → 1974 files.
+- **Six documentation examples were wrong, and `ignore` was hiding it.** Marking
+  a doc example `ignore` means rustdoc never compiles it, so it rots silently.
+  Converting the self-contained ones to `no_run` immediately surfaced:
+  - `LlamaSampler::chain_default` — a function that has never existed
+    (`chain_simple` is the real one), in the `with_sampler_seq_configs` example.
+  - A type error in the `mtp` module's setup example: `MtpSessionConfig::new`
+    takes `(u32, i32)` while `with_n_rs_seq` takes `u32`, so the single inferred
+    `n_draft_max` the example used could not satisfy both.
+  - Two `set_nextn_layer_offset` loops that told you to call
+    `draft.set_nextn_layer_offset(..)` while an `MtpSession` was alive. Since
+    0.6.0 the session borrows the draft context *exclusively*, so that cannot
+    compile in real use; they now go through `session.draft_context_mut()`.
+  - 6 examples converted, 128 → 132 compiled doctests. The 15 that remain
+    `ignore` are one-to-five-line fragments referencing ambient bindings, or
+    document a `pub(crate)` function — `ignore` is the honest marker for those,
+    and scaffolding them would add more hidden setup than visible example.
+
 ### Changed
 
 - **llama.cpp**: vendored submodule updated to `5c8854fd88` (tag `b11557`) from
@@ -266,6 +327,68 @@
   and builds; the cost is that it moves unrelated crates too.
   `examples/rpc` is its own workspace with its own lock and needed the same
   treatment; it still failed to build after the root lock was fixed.
+
+- **`clippy::undocumented_unsafe_blocks` is being adopted as a ratchet.** The
+  crate has ~1100 `unsafe` blocks and had 62 `SAFETY:` comments — about 6%, which
+  for an FFI binding is the largest quality gap by volume, and nothing flagged it
+  because the lint is in clippy's `restriction` group. Enabling it workspace-wide
+  would mean a thousand warnings and, under CI's `-D warnings`, a red build.
+  - Instead, a module whose `unsafe` blocks are *all* justified carries
+    `#![deny(clippy::undocumented_unsafe_blocks)]`, which makes its coverage
+    permanent. Done in this release: `context/tensor_transaction.rs` (which was
+    already at 15/15 and is the reference for the standard), plus `cfile.rs`,
+    `llama_backend.rs`, `llama_batch.rs` and `llama_batch_ext.rs` — 39 blocks
+    now locked in.
+  - The justifications name the precondition and why it holds at that call site.
+    Writing them surfaced one genuinely unchecked invariant worth recording:
+    `LlamaBatch::add` sizes nothing against the `n_seq_max` that
+    `llama_batch_init` allocated each `seq_id` row with, so passing more
+    sequence ids than that writes past the row. It is now called out in the
+    code.
+  - The workspace `Cargo.toml` documents the ratchet, lists what is done, and
+    names the remaining modules worst-first (`model.rs`, `mtmd.rs`,
+    `context.rs`, `ggml.rs`, `sampling.rs`).
+- **`update-toml-version.yaml` bumps every manifest, at a chosen level.** It
+  listed four manifests by hand (`llama-cpp-sys-4`, `llama-cpp-4`,
+  `examples/simple`, `examples/embeddings`) out of the 25 that carry the
+  version, and only ever incremented the patch — so firing it left 21 manifests
+  behind at the old version, with `cargo package` then failing on a requirement
+  that no longer resolved. It now discovers manifests, takes `patch`/`minor`/
+  `major` (or an exact version) as a `workflow_dispatch` input, refreshes
+  `examples/rpc`'s separate lockfile too, fails if any manifest still mentions
+  the old version, and the PR body lists what a release still needs by hand.
+- **Supply-chain and API-compatibility gates.** Two new CI jobs, and
+  `deny.toml`:
+  - `supply-chain` runs `cargo deny check` (advisories, licences, bans,
+    sources). Nothing checked any of that before, and something was hiding:
+    **RUSTSEC-2026-0258**, an unbounded empty-DATA-frame flaw in `h2 0.3.27`.
+    It is reachable only through `examples/server` → `actix-web 4.15` →
+    `actix-http` → `h2 "^0.3.27"`, and 0.3.27 is the newest 0.3.x, so it cannot
+    be fixed from this repository — it needs actix-web on h2 0.4. Neither
+    published crate depends on `h2` (`cargo tree -p llama-cpp-4 -i h2` finds
+    nothing). `deny.toml` records it as a dated exception with that reasoning,
+    and the job prints the ignore list on every run so an entry cannot quietly
+    become permanent. The licence allow-list enumerates the 16 licences
+    actually present, all permissive. This job builds no C++, so it is the
+    fastest signal in the workflow.
+  - `semver` runs `cargo semver-checks check-release` against the published
+    crate. 0.8.0 ships deliberate breaking changes; nothing verified that a
+    future *patch* release does not do the same by accident, which for a 0.x
+    crate is exactly what semver forbids. Non-blocking, since the baseline is
+    whatever is on crates.io.
+  - `android/llama-jni` was the one manifest depending on `llama-cpp-4` by path
+    with no version — inconsistent with the other 22, and invisible to the
+    version-bump workflow. It now pins the version like the rest.
+- **The macOS and BLAS backends are built on the pull-request gate.** Both were
+  only ever built by `prebuilt-llama.yml`, which fires on a `v*` tag — so an
+  upstream `ggml-metal` change broke the *release*, not the pull request that
+  pulled it in. The `mac` job already pays for a macOS runner and now builds and
+  lints `--features metal`; `blas` joins the Linux feature matrix, needing
+  nothing but `libopenblas-dev`.
+- Documentation: the last six rustdoc warnings are gone (redundant explicit link
+  targets in `eagle.rs` and `mtp.rs`), so `cargo doc` is clean. Together with
+  the `ShimError` re-export and the examples under *Fixed*, that is 22
+  documentation defects fixed in this release.
 
 ## [0.7.0] - 2026-09-09
 

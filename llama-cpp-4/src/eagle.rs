@@ -17,15 +17,18 @@
 //! | | EAGLE-3 ([`Eagle3Session`]) | MTP ([`crate::mtp::MtpSession`]) |
 //! |---|---|---|
 //! | Draft weights | a **separate** EAGLE-3 draft model | the **same** model as the target |
-//! | Draft context type | [`LlamaContextType::Default`](crate::context::params::LlamaContextType::Default) | [`LlamaContextType::Mtp`](crate::context::params::LlamaContextType::Mtp) |
+//! | Draft context type | [`LlamaContextType::Default`] | [`LlamaContextType::Mtp`] |
 //! | Requirement | draft model must expose 3 target-extract layers | target model must have MTP heads |
 //!
 //! # Setup
 //!
-//! ```ignore
+//! ```no_run
 //! use llama_cpp_4::context::params::LlamaContextParams;
 //! use llama_cpp_4::eagle::{Eagle3Session, Eagle3SessionConfig};
-//!
+//! # use llama_cpp_4::llama_backend::LlamaBackend;
+//! # use llama_cpp_4::model::LlamaModel;
+//! # fn f(backend: &LlamaBackend, main_model: &LlamaModel, eagle3_model: &LlamaModel)
+//! #     -> Result<(), Box<dyn std::error::Error>> {
 //! let n_draft_max = 3;
 //!
 //! // Target: the main model, a normal (default) context.
@@ -36,6 +39,8 @@
 //!
 //! let config = Eagle3SessionConfig::new(1, n_draft_max);
 //! let mut session = Eagle3Session::new_with_config(&mut target, &mut draft, config)?;
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # Speculative loop
@@ -259,7 +264,7 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// parameters.
     ///
     /// `target` must be a
-    /// [`LlamaContextType::Default`](crate::context::params::LlamaContextType::Default)
+    /// [`LlamaContextType::Default`]
     /// context over the main model. `draft` must be a `Default` context over a
     /// **separate EAGLE-3 draft model** trained against that target.
     ///
@@ -287,7 +292,7 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// Construct a **`DFlash`** draft session (upstream `draft-dflash`).
     ///
     /// `target` must be a
-    /// [`LlamaContextType::Default`](crate::context::params::LlamaContextType::Default)
+    /// [`LlamaContextType::Default`]
     /// context over the main model, and `draft` a `Default` context over a
     /// **separate `DFlash` draft model**. `DFlash2` checkpoints — which additionally
     /// carry the grouped dynamic convolution and candidate-selector tensors —

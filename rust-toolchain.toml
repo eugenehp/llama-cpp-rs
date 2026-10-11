@@ -1,0 +1,18 @@
+# Pin the toolchain so `cargo fmt --check` and `cargo clippy -D warnings` mean
+# the same thing locally and in CI.
+#
+# Both are gates in .github/workflows/llama-cpp-rs-check.yml, and both move with
+# the compiler: rustfmt changes its output between releases, and clippy adds
+# lints. With CI on `stable` and contributors on whatever they have installed,
+# a gate can go red from a toolchain bump nobody made.
+#
+# This is *not* the MSRV. That is `rust-version` in llama-cpp-4/Cargo.toml and
+# llama-cpp-sys-4/Cargo.toml, and it is checked by the `msrv` CI job, which sets
+# RUSTUP_TOOLCHAIN to override this file.
+#
+# Raising it is fine — just run `cargo fmt --all` and `cargo clippy --fix` in the
+# same change, so the reformat lands with the bump instead of surprising someone
+# later.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

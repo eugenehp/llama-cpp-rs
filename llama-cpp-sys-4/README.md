@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.7.0
+**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.8.0
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -75,7 +75,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.7.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.8.0/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 
@@ -195,17 +195,24 @@ cargo build -p llama-cpp-sys-4
 
 ---
 
-## Notable API changes (b4689 → b8249)
+## Notable upstream API changes handled here
 
-These are the upstream llama.cpp breaks handled in this crate:
+Breaks this crate absorbed as the vendored llama.cpp moved forward. The
+`CHANGELOG.md` entry for each release covers that release's window; this is the
+running summary.
 
-| Removed / renamed | Replacement |
-|---|---|
-| `llama_kv_cache_*` functions | `llama_memory_*` via `llama_get_memory(ctx)` |
-| `llama_set_adapter_lora` + `llama_rm_adapter_lora` | `llama_set_adapters_lora` (batch API) |
-| `context_params.flash_attn: bool` | `context_params.flash_attn_type: llama_flash_attn_type` |
-| `llama-sampling.h` | `llama-sampler.h` |
-| C++11 build flag | C++17 required by new `common.h` (`std::string_view`) |
+| Removed / renamed | Replacement | Since |
+|---|---|---|
+| `llama_kv_cache_*` functions | `llama_memory_*` via `llama_get_memory(ctx)` | b4689 → b8249 |
+| `llama_set_adapter_lora` + `llama_rm_adapter_lora` | `llama_set_adapters_lora` (batch API) | b4689 → b8249 |
+| `context_params.flash_attn: bool` | `context_params.flash_attn_type: llama_flash_attn_type` | b4689 → b8249 |
+| `llama-sampling.h` | `llama-sampler.h` | b4689 → b8249 |
+| C++11 build flag | C++17, required by `common.h`'s `std::string_view` | b4689 → b8249 |
+| `common_peg_arena::save` / `load` | the arena stays in C++ behind a handle (`chat_shim_parser`) | b11557 |
+| `common_chat_parse(const std::string &)` | `common_chat_parse(const common_chat_input &)` | b11557 |
+| `common_speculative_process(const llama_batch &)` | `common_speculative_process(const common_batch &)` | b11557 |
+| `common_speculative_draft_params::n_past` | `::pos0` | b11557 |
+| `common_log_set_jsonl(log, bool)` | `common_log_set_jsonl(bool)` — now a global | b11557 |
 
 ---
 
