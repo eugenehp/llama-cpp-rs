@@ -265,7 +265,8 @@
   traits. A `cargo update` resolves `bindgen` onto `prettyplease` 0.3 + `syn` 3
   and builds; the cost is that it moves unrelated crates too.
   `examples/rpc` is its own workspace with its own lock and needed the same
-  treatment.
+  treatment; it still failed to build after the root lock was fixed.
+
 ## [0.7.0] - 2026-09-09
 
 ### Added
