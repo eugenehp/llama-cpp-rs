@@ -1,6 +1,7 @@
 use cmake::Config;
 use glob::glob;
 use patch_apply::{Line, Patch};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
@@ -1383,6 +1384,272 @@ fn resolve_prebuilt_directory(target: &str, use_shared_libs: bool) -> Option<Pat
     }
 }
 
+/// `LLAMA_*` environment variables this build script consumes itself, which
+/// must therefore *not* be forwarded to CMake as options.
+///
+/// Some name a tool or path (`LLAMA_PATCH`), some are this crate's own knobs
+/// with no CMake equivalent (`LLAMA_NO_SCCACHE`), and some are translated into
+/// a differently-named define (`LLAMA_BUILD_SHARED_LIBS` becomes
+/// `BUILD_SHARED_LIBS`, `LLAMA_LIB_PROFILE` becomes `CMAKE_BUILD_TYPE`).
+/// Passing them through as `-DLLAMA_<NAME>` would at best be noise and at worst
+/// set an unrelated upstream option.
+const LLAMA_ENV_NOT_CMAKE_OPTIONS: &[&str] = &[
+    "LLAMA_BUILD_SHARED_LIBS",
+    "LLAMA_LIB_PROFILE",
+    "LLAMA_NO_SCCACHE",
+    "LLAMA_PATCH",
+    "LLAMA_PATCH_ENGINE",
+    "LLAMA_PREBUILT_DIR",
+    "LLAMA_PREBUILT_OFF",
+    "LLAMA_PREBUILT_REPO",
+    "LLAMA_PREBUILT_SHARED",
+    "LLAMA_PREBUILT_TAG",
+    "LLAMA_PREBUILT_URL",
+    "LLAMA_STATIC_CRT",
+    // Read by the test suites and examples, not the build. Developers commonly
+    // have it exported, and `-DLLAMA_TEST_MODEL=...` would be pure noise.
+    "LLAMA_TEST_MODEL",
+];
+
+/// Normalise a configured value into something CMake understands.
+///
+/// A value that looks boolean (`0`/`1`, `off`/`on`, `false`/`true`, `no`/`yes`,
+/// any case) becomes CMake's `OFF`/`ON`. Anything else is passed verbatim, so
+/// string, path and numeric options work too.
+fn normalise_cmake_value(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "0" | "off" | "false" | "no" => "OFF".to_string(),
+        "1" | "on" | "true" | "yes" => "ON".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Read a `[cmake]`-shaped table into `out`, lowest precedence first.
+///
+/// The shape is the same wherever it appears:
+///
+/// ```toml
+/// [cmake]
+/// LLAMA_OPENSSL = "OFF"
+///
+/// [cmake.target."aarch64-apple-darwin"]
+/// LLAMA_METAL_EMBED_LIBRARY = "ON"
+/// ```
+///
+/// Only `LLAMA_*` keys are accepted, for the reason given on
+/// [`llama_cmake_options`]. Anything else warns and is skipped rather than
+/// being passed to CMake, where a typo would be silently ignored.
+fn collect_cmake_table(
+    table: &dyn toml_edit::TableLike,
+    target: &str,
+    origin: &str,
+    out: &mut BTreeMap<String, String>,
+) {
+    let mut take = |table: &dyn toml_edit::TableLike, scope: &str| {
+        for (key, item) in table.iter() {
+            // `target` is the nested per-triple scope, not an option.
+            if key == "target" {
+                continue;
+            }
+            if !key.starts_with("LLAMA_") {
+                println!(
+                    "cargo:warning={origin}{scope}: ignoring `{key}` — only LLAMA_* CMake options \
+                     are configurable here (backends are selected with this crate's features)"
+                );
+                continue;
+            }
+            let value = match item {
+                toml_edit::Item::Value(toml_edit::Value::String(s)) => s.value().clone(),
+                toml_edit::Item::Value(toml_edit::Value::Boolean(b)) => b.value().to_string(),
+                toml_edit::Item::Value(toml_edit::Value::Integer(i)) => i.value().to_string(),
+                _ => {
+                    println!(
+                        "cargo:warning={origin}{scope}: ignoring `{key}` — expected a string, \
+                         boolean or integer"
+                    );
+                    continue;
+                }
+            };
+            out.insert(key.to_string(), normalise_cmake_value(&value));
+        }
+    };
+
+    take(table, "");
+
+    // Per-target overrides land on top of the shared ones.
+    if let Some(targets) = table.get("target").and_then(toml_edit::Item::as_table_like) {
+        if let Some(for_target) = targets.get(target).and_then(toml_edit::Item::as_table_like) {
+            take(for_target, &format!(" [target.\"{target}\"]"));
+        }
+    }
+}
+
+/// Parse a TOML document, warning and yielding `None` if it does not parse.
+///
+/// A malformed config is reported rather than ignored, but it does not fail the
+/// build: the file may well belong to something else entirely.
+fn parse_toml(path: &Path) -> Option<toml_edit::DocumentMut> {
+    let text = fs::read_to_string(path).ok()?;
+    match text.parse::<toml_edit::DocumentMut>() {
+        Ok(doc) => Some(doc),
+        Err(e) => {
+            println!("cargo:warning=ignoring {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Directories to search for a config file, nearest first.
+///
+/// Cargo tells a build script where *its own* manifest is, never where the
+/// consuming project is, so both plausible anchors are walked:
+///
+/// - `CARGO_MANIFEST_DIR`, which finds the project when this crate is a path
+///   dependency (including this repository's own workspace);
+/// - `OUT_DIR`, which lives under the project's `target/` directory, so its
+///   ancestors reach the project root when this crate comes from the registry.
+///
+/// Neither works with a `CARGO_TARGET_DIR` outside the project *and* a registry
+/// dependency; `LLAMA_CONFIG` is the escape hatch for that, and an environment
+/// variable always works regardless.
+fn config_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for anchor in ["CARGO_MANIFEST_DIR", "OUT_DIR"] {
+        let Ok(start) = env::var(anchor) else {
+            continue;
+        };
+        for dir in Path::new(&start).ancestors() {
+            if !dirs.iter().any(|seen| seen == dir) {
+                dirs.push(dir.to_path_buf());
+            }
+        }
+    }
+    dirs
+}
+
+/// The `LLAMA_*` CMake options to pass, gathered from every configuration
+/// source in precedence order.
+///
+/// llama.cpp has dozens of `LLAMA_*` CMake options and gains more every
+/// release. Mirroring each one as a Cargo feature does not scale and would not
+/// help anyway, since a feature cannot carry a value. So they are configured as
+/// data, from three places — lowest precedence first:
+///
+/// 1. **`llama-cpp.toml`**, found by walking up from this crate or from
+///    `OUT_DIR` (see [`config_search_dirs`]), or named outright by
+///    `LLAMA_CONFIG`. Good for a machine-local or gitignored override.
+/// 2. **`[package.metadata.llama-cpp-sys-4.cmake]`** (or
+///    `[workspace.metadata.…]`) in the consuming project's manifest. Good for
+///    a setting that belongs to the project and should be checked in.
+/// 3. **A `LLAMA_*` environment variable**, which always wins, so CI and
+///    one-off builds can override anything.
+///
+/// Only `LLAMA_*` is configurable, never `GGML_*`: the backend options
+/// (`GGML_METAL`, `GGML_CUDA`, …) are driven by this crate's Cargo features,
+/// which also decide what the Rust side links against. Enabling a backend
+/// behind the feature system's back would configure a library that the link
+/// step then does not expect.
+fn llama_cmake_options(target: &str) -> BTreeMap<String, String> {
+    // BTreeMap so the CMake command line is deterministic for a given input and
+    // the configure step stays cacheable.
+    let mut options = BTreeMap::new();
+
+    // ── 1. llama-cpp.toml ───────────────────────────────────────────────────
+    println!("cargo:rerun-if-env-changed=LLAMA_CONFIG");
+    let explicit = env::var_os("LLAMA_CONFIG").map(PathBuf::from);
+    let config_file = explicit.clone().or_else(|| {
+        config_search_dirs()
+            .into_iter()
+            .map(|dir| dir.join("llama-cpp.toml"))
+            .find(|candidate| candidate.is_file())
+    });
+    if let Some(path) = config_file {
+        if path.is_file() {
+            println!("cargo:rerun-if-changed={}", path.display());
+            if let Some(doc) = parse_toml(&path) {
+                if let Some(table) = doc.get("cmake").and_then(toml_edit::Item::as_table_like) {
+                    collect_cmake_table(table, target, &path.display().to_string(), &mut options);
+                }
+            }
+        } else if explicit.is_some() {
+            println!(
+                "cargo:warning=LLAMA_CONFIG points at {}, which is not a file",
+                path.display()
+            );
+        }
+    }
+
+    // ── 2. [package.metadata.llama-cpp-sys-4.cmake] ─────────────────────────
+    // A workspace root is often a virtual manifest with no [package], so accept
+    // the same table under [workspace.metadata] too.
+    for dir in config_search_dirs() {
+        let manifest = dir.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Some(doc) = parse_toml(&manifest) else {
+            continue;
+        };
+        let mut found = false;
+        for root in ["package", "workspace"] {
+            let table = doc
+                .get(root)
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("metadata"))
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("llama-cpp-sys-4"))
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("cmake"))
+                .and_then(toml_edit::Item::as_table_like);
+            if let Some(table) = table {
+                println!("cargo:rerun-if-changed={}", manifest.display());
+                collect_cmake_table(
+                    table,
+                    target,
+                    &format!("{} [{root}.metadata]", manifest.display()),
+                    &mut options,
+                );
+                found = true;
+            }
+        }
+        // Nearest manifest carrying the table wins; stop before reaching an
+        // outer project that happens to configure this crate too.
+        if found {
+            break;
+        }
+    }
+
+    // ── 3. LLAMA_* environment variables ────────────────────────────────────
+    for (key, value) in env::vars() {
+        if !key.starts_with("LLAMA_") || LLAMA_ENV_NOT_CMAKE_OPTIONS.contains(&key.as_str()) {
+            continue;
+        }
+        println!("cargo:rerun-if-env-changed={key}");
+        options.insert(key, normalise_cmake_value(&value));
+    }
+
+    options
+}
+
+/// Apply the configured `LLAMA_*` options to the CMake invocation.
+///
+/// See [`llama_cmake_options`] for where they come from.
+///
+/// Note on rebuilds: a `rerun-if-env-changed` is emitted for each variable that
+/// is *set*, so changing or clearing one triggers a reconfigure, and the config
+/// files are tracked with `rerun-if-changed`. Setting a `LLAMA_*` variable that
+/// was previously absent cannot be detected — Cargo has to be told the name in
+/// advance — so after exporting a new one for the first time, run
+/// `cargo clean -p llama-cpp-sys-4`. Configuring it in a file instead avoids
+/// that entirely.
+fn forward_llama_cmake_options(config: &mut cmake::Config, target: &str) {
+    for (key, value) in llama_cmake_options(target) {
+        debug_log!("Passing {key}={value} to CMake");
+        println!("cargo:warning=Passing {key}={value} to CMake");
+        config.define(&key, &value);
+    }
+}
+
 fn main() {
     let start_time = std::time::Instant::now();
 
@@ -1651,6 +1918,12 @@ fn main() {
         .no_partialeq("llama_opt_params")
         .allowlist_function("ggml_.*")
         .allowlist_type("ggml_.*")
+        // `#define GGML_MROPE_SECTIONS 4` — the number of positions an
+        // embedding entry carries on an M-RoPE model. `llama_batch_ext_set_pos`
+        // reads that many `llama_pos` from the caller's pointer, so the safe
+        // wrapper needs the constant to size the slice correctly rather than
+        // hardcoding 4.
+        .allowlist_item("GGML_MROPE_SECTIONS")
         .allowlist_function("llama_.*")
         .allowlist_function("llama_lora_.*")
         .allowlist_type("llama_.*")
@@ -1786,6 +2059,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH_ENGINE");
     println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
     println!("cargo:rerun-if-env-changed=PATCH");
+    // `LLAMA_*` CMake options are forwarded generically and emit their own
+    // rerun-if-env-changed lines; see `forward_llama_cmake_options`.
     println!("cargo:rerun-if-env-changed=LLAMA_OPENSSL");
 
     // Rerun if prebuilt feature is toggled
@@ -2047,17 +2322,15 @@ fn main() {
     // LLAMA_BUILD_APP defaults ON upstream; we only need the library.
     config.define("LLAMA_BUILD_APP", "OFF");
 
-    // `LLAMA_OPENSSL=0` builds llama.cpp's common HTTP client (cpp-httplib)
-    // without OpenSSL. Upstream defaults it ON, so any OpenSSL that CMake can
-    // find gets linked into common — a second TLS stack that applications
-    // which download models themselves never use, but must ship and patch.
-    // Without it, an https:// request through common/http.h fails with an
-    // explicit "HTTPS is not supported" error rather than falling back to
-    // plain HTTP. Unset (the default) keeps llama.cpp's own default.
-    if let Ok(v) = env::var("LLAMA_OPENSSL") {
-        let on = !matches!(v.to_ascii_lowercase().as_str(), "0" | "off" | "false");
-        config.define("LLAMA_OPENSSL", if on { "ON" } else { "OFF" });
-    }
+    // Pass through any other `LLAMA_*` option the project configured — in
+    // `llama-cpp.toml`, in `[package.metadata.llama-cpp-sys-4.cmake]`, or in the
+    // environment — so upstream's own options are reachable without this crate
+    // growing a feature per option. `LLAMA_OPENSSL=OFF` is the motivating case:
+    // upstream defaults it ON, so any OpenSSL CMake can find gets linked into
+    // common, a second TLS stack that applications downloading models
+    // themselves never use but must still ship and patch. `LLAMA_CURL=OFF` and
+    // friends work the same way. See `llama_cmake_options`.
+    forward_llama_cmake_options(&mut config, &target);
 
     // Disable expensive CMake tests and checks for faster builds
     config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");

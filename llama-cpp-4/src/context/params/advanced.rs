@@ -105,6 +105,56 @@ impl LlamaContextParams {
         self.context_params.n_outputs_max_per_seq
     }
 
+    /// Set the device-side cache for `MoE` experts that live in host memory, in
+    /// bytes. `0` (the default) disables it.
+    ///
+    /// Maps to `llama_context_params.moe_cache_size`
+    /// ([llama.cpp #29887](https://github.com/ggml-org/llama.cpp/pull/29887),
+    /// spread across devices in
+    /// [#30112](https://github.com/ggml-org/llama.cpp/pull/30112)). This is for
+    /// the case where a mixture-of-experts model does not fit in VRAM and some
+    /// expert tensors stay in RAM: instead of streaming every expert across the
+    /// bus on every token, llama.cpp keeps the hottest ones in a GPU cache of
+    /// this size. The budget is split across devices the same way layers are,
+    /// so it is a total and not a per-device figure.
+    ///
+    /// # A non-zero budget is a requirement, not a hint
+    ///
+    /// llama.cpp refuses to build a context it cannot honour the budget on, so
+    /// [`new_context`](crate::model::LlamaModel::new_context) then fails with
+    /// [`LlamaContextLoadError::NullReturn`](crate::LlamaContextLoadError::NullReturn)
+    /// and the reason in the llama.cpp log. All of these must hold:
+    ///
+    /// - a GPU or integrated-GPU backend is present — a CPU-only build, or no
+    ///   offloaded layers, has nowhere to put the cache;
+    /// - the model is a mixture of experts;
+    /// - the split mode is not tensor/row split;
+    /// - the budget is big enough for one token's experts in at least one layer
+    ///   whose experts are all host-resident.
+    ///
+    /// So leave it at `0` unless you know the model and device layout call for
+    /// it; it is not safe to set speculatively.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use llama_cpp_4::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default()
+    ///     .with_moe_cache_size(2 * 1024 * 1024 * 1024);
+    /// assert_eq!(params.moe_cache_size(), 2 * 1024 * 1024 * 1024);
+    /// ```
+    #[must_use]
+    pub fn with_moe_cache_size(mut self, bytes: usize) -> Self {
+        self.context_params.moe_cache_size = bytes;
+        self
+    }
+
+    /// Get the device-side `MoE` expert cache size in bytes. `0` means disabled.
+    #[must_use]
+    pub fn moe_cache_size(&self) -> usize {
+        self.context_params.moe_cache_size
+    }
+
     /// Use a unified KV buffer across input sequences.
     ///
     /// Maps to `llama_context_params.kv_unified`. Disabling can improve

@@ -11,23 +11,31 @@
 //!
 //! # What's included
 //!
-//! | Category | Re-exported types |
+//! The rule is that anything a prelude-exported API takes, returns or fails
+//! with is exported too — including every error type — so `use
+//! llama_cpp_4::prelude::*` is enough to write a complete call, `match` arm
+//! included. Lower-level corners stay out: the `ggml` module (feature `ggml`)
+//! for raw graph building, and [`crate::quantize`] for the imatrix and
+//! quantization-preview types.
+//!
+//! | Category | Re-exported |
 //! |---|---|
-//! | Inference | [`LlamaBackend`], [`LlamaModel`], [`LlamaModelParams`], [`LlamaContext`], [`LlamaContextParams`], [`LlamaBatch`], [`LlamaSampler`], [`LlamaSamplerParams`], [`LlamaToken`], [`LlamaTokenDataArray`] |
-//! | Tokenising | [`AddBos`], [`Special`] |
-//! | Chat | [`LlamaChatMessage`] |
-//! | Model introspection | [`LlamaBackendDevice`], [`LlamaBackendDeviceType`] |
-//! | Context params | [`LlamaFlashAttnType`], [`LlamaContextType`], [`LlamaAttentionType`], [`RopeScalingType`], [`LlamaPoolingType`], [`ParamsCloneError`] |
-//! | KV overrides | [`ParamOverrideValue`] |
-//! | Errors | [`Result`], [`LLamaCppError`], [`DecodeError`], [`EncodeError`], [`EmbeddingsError`], [`BatchAddError`], [`ApplyChatTemplateError`], [`NewLlamaChatMessageError`] |
-//! | Memory / fit | [`get_device_memory_data`], [`fit_params`], [`FitParams`], [`FitParamsResult`], [`FitParamsError`], [`DeviceMemoryReport`], [`MemoryBreakdownEntry`] |
-//! | Tensor capture | [`TensorCapture`], [`CapturedTensor`] |
-//! | Speculative | [`MtpSession`], [`MtpSessionConfig`], [`Eagle3Session`], [`Eagle3SessionConfig`] |
+//! | Backend & model | [`LlamaBackend`], [`LlamaModel`], [`LlamaModelParams`], [`LlamaBackendDevice`], [`LlamaBackendDeviceType`], [`LlamaLoraAdapter`] |
+//! | Context | [`LlamaContext`], [`LlamaContextParams`], [`LlamaContextType`], [`LlamaAttentionType`], [`LlamaFlashAttnType`], [`LlamaPoolingType`], [`RopeScalingType`], [`ParamOverrideValue`] |
+//! | Batching | [`LlamaBatch`] for token batches; [`LlamaBatchExt`] with [`BatchEntry`], [`EmbeddingRows`], [`LlamaProcessType`], [`LlamaDecisionOrder`] and [`MROPE_SECTIONS`] for per-entry embeddings and M-RoPE |
+//! | Tokens | [`LlamaToken`], [`LlamaTokenData`], [`LlamaTokenDataArray`], [`AddBos`], [`Special`], [`StreamDetokenizer`] |
+//! | Sampling | [`LlamaSampler`], [`LlamaSamplerParams`], [`CommonSampler`], [`CommonSamplerParams`], [`CommonSamplerType`], [`GrammarSource`], [`ReasoningBudget`], [`ReasoningBudgetState`] |
+//! | Chat & tools | [`LlamaChatMessage`], [`ChatTemplates`], [`ChatApplyParams`], [`ChatParams`], [`GrammarTrigger`], [`ReasoningFormat`], [`ToolChoice`], [`json_schema_to_grammar`] |
+//! | Speculative decoding | [`MtpSession`], [`MtpSessionConfig`], [`Eagle3Session`], [`Eagle3SessionConfig`], [`DFlashSession`], [`NgramCache`], [`NgramMap`], [`ngram_simple_draft`], [`ngram_cache_draft`], [`SpeculativeType`], [`speculative_types_from_gguf`] |
+//! | Memory & fit | [`fit_params`], [`FitParams`], [`FitParamsResult`], [`get_device_memory_data`], [`DeviceMemoryReport`], [`DeviceMemoryEntry`], [`DeviceMemoryHyperParams`], [`MemoryBreakdownEntry`] |
+//! | Tensor capture | [`TensorCapture`], [`CapturedTensor`], [`TensorTransactions`], [`TensorTransaction`], [`TensorSelector`], [`TensorAccess`], … |
 //! | Quantization | [`QuantizeParams`], [`TensorTypeOverride`], [`GgmlType`], [`LlamaFtype`], [`model_quantize`], [`attn_rot_disabled`], [`set_attn_rot_disabled`] |
+//! | Errors | [`Result`], [`LLamaCppError`], [`ShimError`] (the type behind the shim-backed aliases) and one per area: [`DecodeError`], [`EncodeError`], [`ProcessError`], [`EmbeddingsError`], [`BatchAddError`], [`BatchExtError`], [`ChatError`], [`CommonSamplerError`], [`NgramError`], [`RuntimeError`], [`MtpSessionError`], [`Eagle3SessionError`], [`SpeculativeStateError`], [`DetokenizeError`], [`FitParamsError`], [`DeviceMemoryError`], [`FtypeNameError`], [`QuantPreviewError`], [`LlamaModelLoadError`], [`LlamaContextLoadError`], [`LlamaLoraAdapterInitError`], [`LlamaLoraAdapterSetError`], [`LlamaLoraAdapterRemoveError`], [`ApplyChatTemplateError`], [`NewLlamaChatMessageError`], [`ParamsCloneError`] |
 //! | Utilities | [`ggml_time_us`], [`llama_time_us`], [`print_system_info`], [`supports_gpu_offload`], [`max_devices`] |
 //!
-//! With the `mtmd` feature: [`MtmdContext`], [`MtmdBitmap`], …\
-//! With the `rpc` feature: `RpcBackend`, `RpcServer`, and `RpcError` in `llama_cpp_4::rpc`.
+//! With the `mtmd` feature: [`MtmdContext`], [`MtmdBitmap`], [`MtmdContextParams`],
+//! [`MtmdInputChunks`], [`MtmdInputText`], [`MtmdProgressCallback`].\
+//! With the `rpc` feature: `RpcBackend`, `RpcError`, `add_rpc_server`, `serve`.
 //!
 //! # Text generation
 //!
@@ -162,22 +170,39 @@ pub use crate::context::{
 };
 pub use crate::llama_backend::LlamaBackend;
 pub use crate::llama_batch::{BatchAddError, LlamaBatch};
+pub use crate::llama_batch_ext::{
+    BatchEntry, BatchExtError, EmbeddingRows, LlamaBatchExt, LlamaDecisionOrder, LlamaProcessType,
+    MROPE_SECTIONS,
+};
 pub use crate::model::params::kv_overrides::ParamOverrideValue;
 pub use crate::model::params::LlamaModelParams;
 pub use crate::model::{
-    AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaModel, Special,
+    AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaLoraAdapter,
+    LlamaModel, Special,
 };
 pub use crate::sampling::{LlamaSampler, LlamaSamplerParams};
 pub use crate::speculative::{SpeculativeStateError, MAX_SPECULATIVE_STATE_BYTES};
+pub use crate::token::data::LlamaTokenData;
 pub use crate::token::data_array::LlamaTokenDataArray;
 pub use crate::token::detokenizer::{DetokenizeError, StreamDetokenizer};
 pub use crate::token::LlamaToken;
 
 // ── Errors & results ────────────────────────────────────────────────────────
+//
+// Every error type a prelude-exported API can return is itself re-exported, so
+// a caller never has to reach past the prelude just to write a `match` arm.
 
+pub use crate::common_sampler::CommonSamplerError;
+pub use crate::eagle::Eagle3SessionError;
+pub use crate::mtp::MtpSessionError;
+pub use crate::ngram::NgramError;
+pub use crate::quantize::{FtypeNameError, QuantPreviewError};
+pub use crate::runtime::RuntimeError;
+pub use crate::ShimError;
 pub use crate::{
     ApplyChatTemplateError, DecodeError, EmbeddingsError, EncodeError, LLamaCppError,
-    LlamaContextLoadError, LlamaModelLoadError, NewLlamaChatMessageError, Result,
+    LlamaContextLoadError, LlamaLoraAdapterInitError, LlamaLoraAdapterRemoveError,
+    LlamaLoraAdapterSetError, LlamaModelLoadError, NewLlamaChatMessageError, ProcessError, Result,
 };
 
 // ── Memory / fit helpers ────────────────────────────────────────────────────
@@ -187,26 +212,26 @@ pub use crate::fit::{
     DeviceMemoryHyperParams, DeviceMemoryReport, FitParams, FitParamsError, FitParamsResult,
 };
 
-// ── Speculative decoding ────────────────────────────────────────────────────
+// ── Chat templates, tool calling, structured output ─────────────────────────
 
 pub use crate::chat::{
     json_schema_to_grammar, ChatApplyParams, ChatError, ChatParams, ChatTemplates, GrammarTrigger,
     ReasoningFormat, ToolChoice,
 };
 
+// ── Sampler chains ──────────────────────────────────────────────────────────
+
 pub use crate::common_sampler::{
     CommonSampler, CommonSamplerParams, CommonSamplerType, GrammarSource, ReasoningBudget,
     ReasoningBudgetState,
 };
 
-pub use crate::ngram::{ngram_cache_draft, ngram_simple_draft, NgramCache, NgramMap};
+// ── Speculative decoding ────────────────────────────────────────────────────
 
-pub use crate::runtime::{speculative_types_from_gguf, SpeculativeType};
-
-pub use crate::eagle::{Eagle3Session, Eagle3SessionConfig};
-
-pub use crate::eagle::DFlashSession;
+pub use crate::eagle::{DFlashSession, Eagle3Session, Eagle3SessionConfig};
 pub use crate::mtp::{MtpSession, MtpSessionConfig};
+pub use crate::ngram::{ngram_cache_draft, ngram_simple_draft, NgramCache, NgramMap};
+pub use crate::runtime::{speculative_types_from_gguf, SpeculativeType};
 
 // ── Multimodal (feature `mtmd`) ─────────────────────────────────────────────
 

@@ -2,15 +2,270 @@
 
 ## Unreleased
 
+### Breaking
+
+- **`ChatParams::parse_with` is gone**, and with it the `parse_tool_calls` and
+  `reasoning_in_content` arguments. llama.cpp
+  [#30210](https://github.com/ggml-org/llama.cpp/pull/30210) builds the parser
+  once in `common_chat_templates_apply` and no longer accepts either switch at
+  parse time, so there is nothing left for them to change.
+  - Replace `params.parse_with(text, is_partial, true, false)` with
+    [`ChatParams::parse`].
+  - For the `parse_tool_calls: false` / `reasoning_in_content: true` behaviour,
+    set [`ChatApplyParams::with_force_pure_content`] when rendering — the
+    decision has to be made before the parser is built. See *Added*.
+  - [`ChatApplyParams::with_reasoning_format`] is unaffected; apply is where
+    upstream has always read it.
+- **Saved context state from 0.7.0 will not load.** Upstream bumped
+  `LLAMA_SESSION_VERSION` 10 → 11 and `LLAMA_STATE_SEQ_VERSION` 3 → 4, and the
+  loader requires an exact version match, so files written by `state_save_file`,
+  `state_seq_save_file` or `save_session_file` under 0.7.0 are rejected by this
+  build. Regenerate them. The MTP/EAGLE3 speculative blobs from
+  `MtpSession::speculative_state` carry their own version and are unaffected.
+- **The RPC wire protocol went 6 → 8**, so an `rpc`-feature client built here
+  cannot talk to an `rpc-server` from 0.7.0 or earlier, or vice versa — the
+  handshake rejects a mismatched major version. `-sm tensor` across RPC backends
+  ([#26610](https://github.com/ggml-org/llama.cpp/pull/26610)) and a
+  weights-only hash cache
+  ([#28789](https://github.com/ggml-org/llama.cpp/pull/28789)) each bumped it.
+  Upgrade both ends together.
+- **New names in the prelude.** It now follows the rule that anything a
+  prelude-exported API takes, returns or fails with is exported too, so `use
+  llama_cpp_4::prelude::*` is enough to write a complete call including its
+  `match` arms. That adds `BatchEntry`, `BatchExtError`, `CommonSamplerError`,
+  `Eagle3SessionError`, `EmbeddingRows`, `FtypeNameError`, `LlamaBatchExt`,
+  `LlamaDecisionOrder`, `LlamaLoraAdapter`, `LlamaLoraAdapterInitError`,
+  `LlamaLoraAdapterRemoveError`, `LlamaLoraAdapterSetError`, `LlamaProcessType`,
+  `LlamaTokenData`, `MROPE_SECTIONS`, `MtpSessionError`, `NgramError`,
+  `ProcessError`, `QuantPreviewError`, `RuntimeError` and `ShimError`. A local
+  item with one of those names will need disambiguating.
+  - The gaps closed were real: `LlamaModel::lora_adapter_init` returned a type
+    the prelude could not name, `LlamaContext::candidates_ith` yielded one, and
+    four shim-backed modules' error types were unreachable — so a `match` on a
+    failure meant reaching past the prelude.
+  - Section comments inside the module now describe their contents; chat and
+    sampler-chain exports were previously filed under *Speculative decoding*.
+
 ### Added
 
-- **`LLAMA_OPENSSL` build environment variable.** Set `LLAMA_OPENSSL=0` to
-  configure llama.cpp with `-DLLAMA_OPENSSL=OFF`, so `common`'s HTTP client is
-  built without OpenSSL and nothing links `libssl`/`libcrypto`. Useful for
-  applications that handle model downloads themselves and do not want to ship
-  a second TLS stack. HTTPS through llama.cpp's downloader then fails with an
-  explicit error instead of silently downgrading. Unset keeps upstream's default.
+- **New `llama_batch_ext` module: entry-wise batches.** [`LlamaBatchExt`] wraps
+  upstream's second batch API
+  ([#24669](https://github.com/ggml-org/llama.cpp/pull/24669)), and
+  [`LlamaContext::process`] runs one through the encoder or decoder
+  (`llama_process`). Where [`LlamaBatch`] is six parallel arrays plus one flat
+  embedding block for the whole batch, this is a list of entries that each own
+  their token id, positions, input embedding and state embedding — which is the
+  only way to express three things:
+  - **embeddings on some entries but not others**, e.g. a vision encoder's
+    output interleaved with text tokens;
+  - **M-RoPE positions**, `[t, y, x, z]` per embedding entry instead of one
+    scalar, via [`LlamaBatchExt::set_positions`] and [`MROPE_SECTIONS`];
+  - **a state embedding** — the target model's hidden state that an MTP draft
+    context reads ([`LlamaBatchExt::set_state_embedding`]).
+  - Plus [`LlamaDecisionOrder`] for the joint-decision-head models
+    ([#29831](https://github.com/ggml-org/llama.cpp/pull/29831)).
+  - Four things the C API takes on trust are checked here instead. A
+    [`BatchEntry`] handle is a distinct type, so it cannot be confused with the
+    token ids, sequence ids and positions that are also `i32`, and it is
+    validated against the batch — a handle kept across a
+    [`LlamaBatchExt::clear`] is rejected rather than silently writing to
+    a recycled entry. [`EmbeddingRows`] refuses a `n_rows × n_embd` that does
+    not match the buffer it describes, which llama.cpp would otherwise read
+    past. `llama_batch_ext_set_pos` reads one position for a token entry but
+    `n_pos_per_embd` for an embedding entry, straight off the caller's pointer;
+    [`LlamaBatchExt`] tracks which kind each entry is and rejects a slice of the
+    wrong length instead of letting it read out of bounds. And a token id is
+    range-checked in Rust, because `llama_batch_ext_add_token` appends the entry
+    *before* it validates the id.
+  - That last point is also why an entry can end up carrying no input at all:
+    `llama_batch_ext_add_embd` appends before validating the block too, and
+    upstream has no call to remove an entry. The wrapper mirrors the orphan
+    rather than losing index alignment with upstream, reports it through
+    [`LlamaBatchExt::has_incomplete_entry`], and
+    [`LlamaContext::process`] refuses the batch with
+    [`ProcessError::IncompleteEntry`] instead of submitting one with a hole in
+    it. [`LlamaBatchExt::clear`] is the way out. The same guard covers an
+    [`LlamaBatchExt::add_empty`] entry that was never filled in.
+  - A batch captures its context's batch size, sequence count and memory
+    module, so it is not transferable. [`LlamaContext::process`] rejects a batch
+    built by any other context — including one that has since been dropped,
+    which a raw pointer comparison would miss once the allocator reuses the
+    address.
+  - [`LlamaContext::process`] refuses to run when the context owns tensor
+    transactions. Those are driven by hooks this repo patches into
+    `llama_decode`, which `llama_process` does not pass through, and the hook
+    signature is built around `llama_batch` so it cannot describe an entry-wise
+    batch at all. Failing is better than running the batch with the
+    transactions silently inert.
+  - Note that a plain token batch has nothing to gain here: [`LlamaBatch`] with
+    [`LlamaContext::decode`] is the same work with less ceremony, and it is the
+    path the decode hooks cover.
+- **`LlamaContextParams::with_moe_cache_size` / `moe_cache_size`**, wrapping
+  upstream's new `llama_context_params::moe_cache_size`
+  ([#29887](https://github.com/ggml-org/llama.cpp/pull/29887), spread across
+  devices in [#30112](https://github.com/ggml-org/llama.cpp/pull/30112)). When a
+  mixture-of-experts model does not fit in VRAM and some experts stay in host
+  memory, this gives llama.cpp a device-side cache of that many bytes for the
+  hottest of them instead of streaming every expert across the bus on every
+  token.
+  - A non-zero budget is a requirement, not a hint: llama.cpp refuses to build
+    a context it cannot honour the budget on, so `new_context` fails with
+    [`LlamaContextLoadError::NullReturn`] unless there is a GPU backend, the
+    model is a mixture of experts, the split mode is not tensor/row, and the
+    budget covers one token's experts for at least one host-resident layer.
+    `0` (the default) is always accepted. The docs on the setter spell the
+    conditions out, and a test pins the failure so they stay honest.
+- **`ChatApplyParams::with_force_pure_content`**, wrapping upstream's new
+  `common_chat_templates_inputs::force_pure_content`. It renders a
+  content-only template, so reasoning and tool calls stay inline in `content`
+  instead of being parsed out. This is where the two per-parse flags upstream
+  dropped went — see *Breaking*.
+- **`ProcessError`**, the error type for [`LlamaContext::process`].
+  `llama_process` returns the same codes as `llama_decode`; the extra variants
+  are the context-binding, tensor-transaction and incomplete-entry checks
+  described above.
+- **`LlamaContext::causal_attn`**, wrapping upstream's new
+  `llama_get_causal_attn`
+  ([#28876](https://github.com/ggml-org/llama.cpp/pull/28876)) — the read side
+  of the [`LlamaContext::set_causal_attn`] this crate already
+  had. The initial value comes from the model's default rather than anything
+  the caller set, so reading it back beats tracking it.
+- **Any of llama.cpp's `LLAMA_*` CMake options is now configurable**, not just
+  the `LLAMA_OPENSSL` knob this started as. Upstream has dozens and gains more
+  every release; mirroring each as a Cargo feature does not scale and could not
+  carry a value anyway, so they are configured as data from three places —
+  lowest precedence first:
+  1. **`llama-cpp.toml`** (`[cmake]`, plus `[cmake.target."<triple>"]` for
+     per-target overrides), found by walking up from the sys crate or from
+     `OUT_DIR`, or named outright by `LLAMA_CONFIG`. For a machine-local or
+     gitignored override.
+  2. **`[package.metadata.llama-cpp-sys-4.cmake]`** in the consuming project's
+     manifest — or `[workspace.metadata.…]`, since a workspace root is often a
+     virtual manifest. For a setting that belongs to the project and should be
+     checked in.
+  3. **A `LLAMA_*` environment variable**, which always wins, so CI and one-off
+     builds override anything.
+  - Values are normalised to CMake's `OFF`/`ON` when they look boolean
+    (`0`/`1`, `off`/`on`, `false`/`true`, `no`/`yes`, any case); anything else
+    passes through verbatim, so string and path options work too.
+  - Only `LLAMA_*` is configurable, never `GGML_*`: the backend options
+    (`GGML_METAL`, `GGML_CUDA`, …) are driven by this crate's Cargo features,
+    which also decide what the Rust side links against, and enabling a backend
+    behind the feature system's back would configure a library the link step
+    does not expect. A `GGML_*` key in a config file is reported and skipped,
+    as is any value that is not a string, boolean or integer.
+  - The build script's own knobs (`LLAMA_PATCH`, `LLAMA_PREBUILT_*`,
+    `LLAMA_LIB_PROFILE`, `LLAMA_STATIC_CRT`, `LLAMA_NO_SCCACHE`,
+    `LLAMA_BUILD_SHARED_LIBS`, `LLAMA_TEST_MODEL`) are not forwarded; they name
+    tools and paths, or map to a differently-named define.
+  - `LLAMA_OPENSSL=0`/`"OFF"` remains the motivating case: upstream defaults it
+    `ON`, so any OpenSSL CMake can find gets linked into `common` — a second
+    TLS stack that applications downloading models themselves never use but
+    must still ship and patch. With it off, an `https://` request through
+    `common/http.h` fails with an explicit error rather than falling back to
+    plain HTTP.
+  - Config files are tracked with `rerun-if-changed`, and each `LLAMA_*`
+    variable that is set gets a `rerun-if-env-changed`. Exporting one for the
+    *first* time cannot be detected — Cargo needs the name in advance — so run
+    `cargo clean -p llama-cpp-sys-4` after that, or use a config file. See the
+    `llama-cpp-sys-4` README.
+- **`LlamaModel::lora_adapter_init_at_offset`**, for a `LoRA` adapter GGUF
+  embedded at a byte offset inside a larger file — appended to an executable,
+  packed into an archive, or stored alongside other blobs.
+  [`lora_adapter_init`] opens the path itself and reads from byte zero, so it
+  only works for an adapter that is its own file. Also
+  `LlamaModel::lora_adapter_init_from_file_ptr` (`unsafe`), the thin wrapper
+  over upstream's new `llama_adapter_lora_init_from_file_ptr`
+  ([#28993](https://github.com/ggml-org/llama.cpp/pull/28993)) and the
+  counterpart to the existing [`LlamaModel::load_from_file_ptr`]. Opening goes
+  through ggml's own `ggml_fopen`, which already handles the UTF-8 → UTF-16
+  conversion a bare `fopen` gets wrong for a non-ASCII path on Windows.
+- **`FILE` is re-exported at the crate root**, so the `*_from_file_ptr`
+  constructors can be called without the caller adding a direct dependency on
+  `llama-cpp-sys-4`. They were previously unusable from outside this
+  repository for that reason.
+- **`ShimError` is re-exported at the crate root.** `ChatError`, `NgramError`,
+  `CommonSamplerError` and `RuntimeError` are all aliases of it — the C shims
+  share a status enum and a thread-local error buffer — but the type itself
+  lived in a private module, so its variants had nowhere to be documented and
+  every `[`ChatError::Failed`]`-style doc link resolved to a private item.
 
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `5c8854fd88` (tag `b11557`) from
+  `22397c31a0` (`b10881`), 676 upstream commits spanning releases `v0.4.1`,
+  `v0.5.0` and `v0.6.0`. Notable in this window:
+  - **`llama_batch_ext`, a second batch API**
+    ([#24669](https://github.com/ggml-org/llama.cpp/pull/24669)) — now wrapped,
+    see *Added*. Speculative decoding, mtmd and the server moved onto it
+    ([#29385](https://github.com/ggml-org/llama.cpp/pull/29385)), then the
+    examples ([#29601](https://github.com/ggml-org/llama.cpp/pull/29601)), and
+    it is how a batch can mix raw tokens with embeddings on architectures that
+    allow it ([#29622](https://github.com/ggml-org/llama.cpp/pull/29622)).
+    `llama_batch` and `llama_decode` are untouched, so [`LlamaBatch`] and
+    everything built on it is unaffected.
+  - **The chat API was refactored**
+    ([#30210](https://github.com/ggml-org/llama.cpp/pull/30210)): the PEG
+    parser arena lost its string serialization, `common_chat_parse` now takes a
+    `common_chat_input` (text plus the token each byte came from), and the
+    per-parse reasoning/tool-call switches are gone. See *Breaking* and the
+    shim note below.
+  - **MoE experts cached on device** — now wrapped, see *Added*.
+  - **Probabilistic drafting for draft-simple and MTP**
+    ([#27694](https://github.com/ggml-org/llama.cpp/pull/27694)), via new
+    `common_speculative_draft_params::result_q`/`temp`/`seed` and
+    `common_sampler_sample_and_accept_n_rejection`. Leaving `result_q` null is
+    upstream's switch for the previous greedy verification, which is what the
+    MTP shim does — so [`MtpSession`] and [`Eagle3Session`] draft exactly as
+    before.
+  - **Speculative decoding stops accepting draft tokens at EOG**
+    ([#29638](https://github.com/ggml-org/llama.cpp/pull/29638)), and n-gram
+    drafts are no longer rejected at `temp > 0` after truncation
+    ([#29924](https://github.com/ggml-org/llama.cpp/pull/29924)).
+  - **RPC wire protocol 6 → 8** — see *Breaking*.
+  - Smaller additions to `llama.h`: `llama_get_causal_attn`
+    ([#28876](https://github.com/ggml-org/llama.cpp/pull/28876)) — now wrapped,
+    see *Added* — plus `llama_adapter_lora_init_from_file_ptr`
+    ([#28993](https://github.com/ggml-org/llama.cpp/pull/28993)),
+    `LLAMA_VOCAB_TYPE_PLAMO3`
+    ([#30045](https://github.com/ggml-org/llama.cpp/pull/30045)) and
+    `LLAMA_VOCAB_TYPE_TEST`, which reach the raw bindings only. The bindings
+    only grow.
+  - New architectures — K2 Horizon dense + MoVA, Ling 3.0 VL, Maple 20B-A1B
+    ternary MoE, HrmText (DFM Mimir 1B), Prism Bonsai 2 27B, MiniCPM-V 4.7,
+    embeddinggemma2, glm5-next, plus the `clef`/`nimble`/`pplx-decider`/`d1`
+    decision models.
+  - Patches `0003`–`0005` still apply, at offsets — `common/speculative.cpp`
+    moved by 267 lines and `src/llama-context.cpp` by 491.
+- Three of the four C++ shims needed signature work; none of it is visible from
+  Rust except where *Breaking* says so.
+  - `chat_shim` no longer hands Rust a serialized parser. The arena stays in
+    C++ behind a new opaque `chat_shim_parser` handle, which `apply` allocates
+    only on the call that fills the buffer — the size-query call of the
+    two-call protocol would otherwise leak one. [`ChatParams`] holds it in an
+    `Arc`, so cloning shares the arena rather than copying it, and parsing goes
+    through `common_chat_peg_parse` to pass the arena by reference instead of
+    deep-copying it per call.
+  - `mtp_shim` converts the caller's `llama_batch` into the `common_batch`
+    `common_speculative_process` now takes, and sets the renamed `pos0`
+    ([#28715](https://github.com/ggml-org/llama.cpp/pull/28715)) where it set
+    `n_past`. The conversion refuses an embeddings batch, which [`LlamaBatch`]
+    cannot build, rather than guessing a row width `llama_batch` does not
+    carry.
+  - `common_shim` follows `common_log_set_jsonl` off the per-logger struct onto
+    a global ([#28586](https://github.com/ggml-org/llama.cpp/pull/28586)).
+- `llama-cpp-sys-4` allowlists `GGML_MROPE_SECTIONS` so the safe wrapper can
+  size M-RoPE position slices from the constant rather than hardcoding `4`, and
+  gains one build-dependency, `toml_edit` (no serde), to read the new config
+  files.
+- **`Cargo.lock` re-resolved.** The bump to `bindgen` 0.73.2 did not build: its
+  dependency ranges (`prettyplease >=0.2.7, <0.4` and `syn >=2, <4`) are
+  independent, so the lock was free to pair `prettyplease` 0.2 with `syn` 3 —
+  which fails to compile, because `prettyplease` 0.2 re-exports `syn` 2's
+  traits. A `cargo update` resolves `bindgen` onto `prettyplease` 0.3 + `syn` 3
+  and builds; the cost is that it moves unrelated crates too.
+  `examples/rpc` is its own workspace with its own lock and needed the same
+  treatment.
 ## [0.7.0] - 2026-09-09
 
 ### Added

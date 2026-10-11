@@ -1234,7 +1234,7 @@ pub enum QuantPreviewError {
     #[error("could not initialize quantization state")]
     Init,
     /// A tensor that would not be quantized was passed to
-    /// [`QuantPreview::compute_types`].
+    /// `QuantPreview::compute_types` (which requires the `ggml` feature).
     #[error("tensor {0:?} is not quantizable; filter with allows_quantization first")]
     NotQuantizable(String),
     /// The mock-model descriptor contained an interior NUL byte.

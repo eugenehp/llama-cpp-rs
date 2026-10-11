@@ -86,6 +86,8 @@ use std::os::raw::c_int;
 use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
+mod cfile;
+
 pub mod chat;
 pub mod common;
 pub mod common_sampler;
@@ -96,6 +98,20 @@ pub mod fit;
 pub mod ggml;
 pub mod llama_backend;
 pub mod llama_batch;
+pub mod llama_batch_ext;
+
+/// The C `FILE` type, re-exported so callers can name it without taking a
+/// direct dependency on `llama-cpp-sys-4`.
+///
+/// Needed by the `*_from_file_ptr` constructors —
+/// [`LlamaModel::load_from_file_ptr`](model::LlamaModel::load_from_file_ptr)
+/// and
+/// [`LlamaModel::lora_adapter_init_from_file_ptr`](model::LlamaModel::lora_adapter_init_from_file_ptr)
+/// — which read a GGUF from an already-open handle at its current position.
+/// For the common case of an adapter embedded at a byte offset, prefer the safe
+/// [`LlamaModel::lora_adapter_init_at_offset`](model::LlamaModel::lora_adapter_init_at_offset),
+/// which needs none of this.
+pub use llama_cpp_sys_4::FILE;
 pub mod model;
 pub mod mtp;
 pub mod ngram;
@@ -105,6 +121,15 @@ pub mod runtime;
 pub mod sampling;
 // Plumbing shared by the shim-backed modules; not part of the public surface.
 mod shim;
+
+/// The error type every shim-backed module shares.
+///
+/// [`chat::ChatError`], [`ngram::NgramError`], [`common_sampler::CommonSamplerError`]
+/// and [`runtime::RuntimeError`] are all aliases of this one type: the C shims
+/// share a status enum and a thread-local error buffer, so they share an error.
+/// Re-exported here because those aliases are public API and their variants
+/// should be documented somewhere reachable.
+pub use crate::shim::ShimError;
 pub mod speculative;
 pub mod token;
 pub mod token_type;
@@ -217,6 +242,42 @@ pub enum EncodeError {
     Unknown(c_int),
 }
 
+/// Failed to run a [`LlamaBatchExt`](llama_batch_ext::LlamaBatchExt) through a
+/// context.
+///
+/// `llama_process` returns the same codes as `llama_decode`; the first two
+/// variants are checks this crate makes before calling it.
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ProcessError {
+    /// The batch was built for a different context. A
+    /// [`LlamaBatchExt`](llama_batch_ext::LlamaBatchExt) captures its
+    /// context's batch size, sequence count and memory module, so it cannot be
+    /// handed to another one.
+    #[error("this batch was built for a different llama context")]
+    ContextMismatch,
+    /// The context owns tensor transactions, which are driven by hooks patched
+    /// into `llama_decode`. `llama_process` does not pass through them, so
+    /// running the batch would leave the transactions silently inert — use
+    /// [`LlamaContext::decode`](context::LlamaContext::decode) with a
+    /// [`llama_batch::LlamaBatch`] instead.
+    #[error("llama_process() does not run the decode lifecycle hooks that this context's tensor transactions need; use decode() with a LlamaBatch")]
+    TensorTransactionsUnsupported,
+    /// An entry in the batch carries no input — neither a token id nor an
+    /// input embedding. See
+    /// [`LlamaBatchExt::has_incomplete_entry`](llama_batch_ext::LlamaBatchExt::has_incomplete_entry).
+    #[error("batch entry {0} carries no input; clear the batch and rebuild it")]
+    IncompleteEntry(i32),
+    /// No kv cache slot was available.
+    #[error("Process Error 1: NoKvCacheSlot")]
+    NoKvCacheSlot,
+    /// The batch held no entries.
+    #[error("Process Error -1: n_tokens == 0")]
+    NTokensZero,
+    /// An unknown error occurred.
+    #[error("Process Error {0}: unknown")]
+    Unknown(c_int),
+}
+
 /// When embedding related functions fail
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum EmbeddingsError {
@@ -254,6 +315,17 @@ impl From<NonZeroI32> for EncodeError {
     }
 }
 
+/// Decode an error from `llama_process` into a [`ProcessError`].
+impl From<NonZeroI32> for ProcessError {
+    fn from(value: NonZeroI32) -> Self {
+        match value.get() {
+            1 => ProcessError::NoKvCacheSlot,
+            -1 => ProcessError::NTokensZero,
+            i => ProcessError::Unknown(i),
+        }
+    }
+}
+
 /// An error that can occur when loading a model.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LlamaModelLoadError {
@@ -280,6 +352,24 @@ pub enum LlamaLoraAdapterInitError {
     /// Failed to convert the path to a rust str. This means the path was not valid unicode
     #[error("failed to convert path {0} to str")]
     PathToStrError(PathBuf),
+    /// The adapter file could not be opened.
+    #[error("failed to open {path}: {reason}")]
+    FileOpen {
+        /// Path that could not be opened.
+        path: PathBuf,
+        /// What the OS reported.
+        reason: String,
+    },
+    /// The adapter file could not be positioned at the requested offset.
+    #[error("failed to seek {path} to offset {offset}: {reason}")]
+    FileSeek {
+        /// Path being read.
+        path: PathBuf,
+        /// Offset that was requested.
+        offset: u64,
+        /// What the OS reported.
+        reason: String,
+    },
 }
 
 /// An error that can occur when loading a model.

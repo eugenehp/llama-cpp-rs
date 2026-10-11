@@ -7,7 +7,7 @@
 Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
 
-**llama.cpp version:** `22397c31a0 (b10881, incl. v0.4.0)` · **Crate version:** 0.7.0
+**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.7.0
 
 ---
 
@@ -227,6 +227,37 @@ batch.add(new_token, pos, &[0], true)?;
 ctx.decode(&mut batch)?;
 ```
 
+### Entry-wise batches (embeddings, M-RoPE, MTP state)
+
+`LlamaBatch` is `llama_batch`: parallel arrays plus one flat embedding block for
+the whole batch, so every entry has to be the same shape. `LlamaBatchExt` wraps
+upstream's `llama_batch_ext`, where each entry owns its token id, positions,
+input embedding and state embedding — the only way to mix embeddings with
+tokens, to give an entry M-RoPE's `[t, y, x, z]` positions, or to attach the
+target hidden state an MTP draft context reads.
+
+```rust
+let mut batch = LlamaBatchExt::new(&ctx)?;
+
+// A token entry: one position, set explicitly (upstream leaves it undefined).
+let entry = batch.add_token(tok, 0)?;
+batch.set_pos(entry, 0)?;
+batch.set_output(entry, true)?;
+
+// An embedding entry, e.g. a vision encoder's output.
+let entry = batch.add_embedding(EmbeddingRows::row(&embd), 0)?;
+batch.set_positions(entry, &[t, y, x, z])?;   // or set_pos on a non-M-RoPE model
+
+ctx.process(&mut batch, LlamaProcessType::Decode)?;
+let logits = ctx.get_logits_ith(entry.index());
+```
+
+For a plain token batch there is nothing to gain: `LlamaBatch` with
+`ctx.decode` is the same work with less ceremony, and it is the path this
+crate's decode lifecycle hooks cover. `ctx.process` returns
+`ProcessError::TensorTransactionsUnsupported` on a context that owns tensor
+transactions, because `llama_process` does not run those hooks.
+
 ### Sampling
 
 ```rust
@@ -321,9 +352,17 @@ restored only after every proposal has been resolved.
 ### LoRA adapters
 
 ```rust
-let adapter = model.load_lora_adapter("adapter.gguf", 1.0)?;
-ctx.set_lora_adapter(&adapter, 1.0)?;
-ctx.lora_adapter_remove()?;
+let mut adapter = model.lora_adapter_init("adapter.gguf")?;
+ctx.lora_adapter_set(&mut adapter, 1.0)?;
+ctx.lora_adapter_remove(&mut adapter)?;
+```
+
+For an adapter GGUF embedded at a byte offset inside a larger file — appended
+to an executable, packed into an archive — pass the offset instead; the
+path-based loader always reads from byte zero:
+
+```rust
+let mut adapter = model.lora_adapter_init_at_offset("bundle.bin", 4096)?;
 ```
 
 ### Performance counters

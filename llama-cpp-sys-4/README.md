@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `22397c31a0 (b10881, incl. v0.4.0)` · **Crate version:** 0.7.0
+**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.7.0
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -48,7 +48,7 @@ use llama_cpp_4::prelude::*;
 
 DFlash2 drafting (grouped dynamic depthwise convolution + candidate selector)
 merged upstream in [#27342](https://github.com/ggml-org/llama.cpp/pull/27342)
-(`b10658`) and ships in the vendored `b10881`, so it needs no build feature — the `dflash2`
+(`b10658`) and ships in the vendored `b11557`, so it needs no build feature — the `dflash2`
 feature and `patches/0006-dflash2.patch` that carried the pre-merge code are
 gone. Converting a checkpoint uses upstream's own `convert_hf_to_gguf.py`.
 
@@ -112,6 +112,68 @@ cargo build -p llama-cpp-sys-4 --features cuda
 brew install open-mpi   # or apt install libopenmpi-dev
 cargo build -p llama-cpp-sys-4 --features mpi
 ```
+
+### Configuring llama.cpp's own CMake options
+
+llama.cpp has dozens of `LLAMA_*` CMake options and gains more every release.
+Rather than mirror each one as a Cargo feature — which does not scale, and
+could not carry a value anyway — any `LLAMA_*` option can be set as data, from
+three places. Lowest precedence first:
+
+**1. `llama-cpp.toml`**, found by walking up from this crate or from `OUT_DIR`,
+or named outright by `LLAMA_CONFIG`. Good for a machine-local or gitignored
+override:
+
+```toml
+[cmake]
+LLAMA_OPENSSL = false      # or "OFF"; 0/1, on/off, true/false, yes/no all work
+LLAMA_CURL = "OFF"
+
+[cmake.target."aarch64-apple-darwin"]
+LLAMA_CURL = "ON"          # per-target overrides win over the shared table
+```
+
+**2. `[package.metadata.llama-cpp-sys-4.cmake]`** in the consuming project's
+manifest (or `[workspace.metadata.…]`, since a workspace root is often a
+virtual manifest). Good for a setting that belongs to the project and should be
+checked in:
+
+```toml
+[package.metadata.llama-cpp-sys-4.cmake]
+LLAMA_OPENSSL = "OFF"
+
+[package.metadata.llama-cpp-sys-4.cmake.target."x86_64-unknown-linux-gnu"]
+LLAMA_SANITIZE_ADDRESS = "ON"
+```
+
+**3. A `LLAMA_*` environment variable**, which always wins, so CI and one-off
+builds can override anything:
+
+```bash
+LLAMA_OPENSSL=0 cargo build -p llama-cpp-sys-4
+```
+
+Notes:
+
+- Only `LLAMA_*` is configurable. The backend options (`GGML_METAL`,
+  `GGML_CUDA`, …) are driven by this crate's Cargo features, which also decide
+  what the Rust side links against; enabling a backend behind the feature
+  system's back would configure a library the link step does not expect. A
+  `GGML_*` key in a config file is reported and skipped.
+- The build script's own knobs (`LLAMA_PATCH`, `LLAMA_PREBUILT_*`,
+  `LLAMA_LIB_PROFILE`, `LLAMA_STATIC_CRT`, `LLAMA_NO_SCCACHE`,
+  `LLAMA_BUILD_SHARED_LIBS`, `LLAMA_TEST_MODEL`, …) are not forwarded.
+- `LLAMA_OPENSSL=0` is the motivating case: upstream defaults it `ON`, so any
+  OpenSSL CMake can find gets linked into `common` — a second TLS stack that
+  applications downloading models themselves never use, but must still ship and
+  patch. With it off, an `https://` request through `common/http.h` fails with
+  an explicit "HTTPS is not supported" error rather than falling back to plain
+  HTTP.
+- Config files are tracked with `rerun-if-changed`, and every `LLAMA_*` variable
+  that is *set* gets a `rerun-if-env-changed`. Exporting a `LLAMA_*` variable
+  for the *first* time cannot be detected — Cargo has to be told the name in
+  advance — so run `cargo clean -p llama-cpp-sys-4` after that, or configure it
+  in a file instead.
 
 ### Build dependencies
 

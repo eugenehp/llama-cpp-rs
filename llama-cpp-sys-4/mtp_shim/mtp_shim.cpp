@@ -130,6 +130,45 @@ mtp_state_status build_state(
     return MTP_STATE_STATUS_OK;
 }
 
+// Translate the `llama_batch` the Rust caller already decoded with into the
+// entry-wise `common_batch` that `common_speculative_process()` now takes
+// (llama.cpp #29385 moved speculative decoding onto the llama_batch_ext API).
+//
+// A default-constructed `common_batch` is enough: process() only reads the
+// per-entry fields and builds its own output batch for the draft context, so it
+// never touches the `llama_batch_ext` that `common_batch(ctx)` would allocate —
+// which is what lets this run without a `llama_context` to hand it.
+bool to_common_batch(const llama_batch & src, common_batch & dst) {
+    if (src.n_tokens <= 0) {
+        // process() treats an empty batch as a no-op; keep that.
+        return true;
+    }
+
+    // Embeddings cannot be translated: `llama_batch` carries one flat `embd`
+    // block with no row width, while a `common_batch` entry needs its own
+    // {data, n_rows, n_embd} view. `LlamaBatch` is token-only, so this is
+    // unreachable from the Rust API rather than a dropped feature.
+    if (src.token == nullptr || src.embd != nullptr) {
+        return false;
+    }
+    if (src.pos == nullptr || src.n_seq_id == nullptr || src.seq_id == nullptr) {
+        return false;
+    }
+
+    for (int32_t i = 0; i < src.n_tokens; ++i) {
+        if (src.n_seq_id[i] <= 0 || src.seq_id[i] == nullptr) {
+            return false;
+        }
+        const bool output = src.logits != nullptr && src.logits[i] != 0;
+        const int32_t idx = dst.add(src.token[i], src.pos[i], src.seq_id[i][0], output);
+        for (int32_t k = 1; k < src.n_seq_id[i]; ++k) {
+            dst.add_seq(idx, src.seq_id[i][k]);
+        }
+    }
+
+    return true;
+}
+
 } // namespace
 
 extern "C" mtp_session * mtp_session_new(
@@ -235,7 +274,11 @@ extern "C" bool mtp_session_process(
         return false;
     }
     try {
-        return common_speculative_process(s->spec.get(), *batch);
+        common_batch converted;
+        if (!to_common_batch(*batch, converted)) {
+            return false;
+        }
+        return common_speculative_process(s->spec.get(), converted);
     } catch (...) {
         return false;
     }
@@ -270,7 +313,10 @@ extern "C" bool mtp_session_draft(
 
         dp.drafting = true;
         dp.n_max    = s->n_draft_max;
-        dp.n_past   = n_past;
+        // Upstream renamed this `n_past` -> `pos0` (llama.cpp #28715): it always
+        // meant the position the draft starts at, and for the text-only
+        // sequences this shim supports that is exactly the KV length.
+        dp.pos0     = n_past;
         dp.id_last  = id_last;
         dp.prompt   = &s->prompts[seq_id];
         dp.result   = &result;

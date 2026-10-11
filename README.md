@@ -11,7 +11,7 @@ Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracki
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `22397c31a0 (b10881, incl. v0.4.0)` (Sep 2026) — includes
+**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` (Oct 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
 [DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and

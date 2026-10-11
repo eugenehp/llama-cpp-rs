@@ -142,6 +142,10 @@ flate2 = "1.0"
 glob = "0.3.3"
 patch-apply = "0.8.3"
 tar = "0.4"
+# Reading `[package.metadata.llama-cpp-sys-4]` and `llama-cpp.toml`. `toml_edit`
+# rather than `toml` because the latter gates its document type behind serde,
+# which a sys crate has no reason to pull into its build graph.
+toml_edit = { version = "0.25", default-features = false, features = ["parse"] }
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [target.'cfg(windows)'.build-dependencies]

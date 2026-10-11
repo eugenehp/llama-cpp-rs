@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 // ── error reporting ─────────────────────────────────────────────────────────
@@ -72,6 +73,16 @@ const char * grammar_trigger_type_name(common_grammar_trigger_type type) {
 struct chat_shim_templates {
     common_chat_templates_ptr ptr;
 };
+
+// Owns the PEG parser arena for the lifetime of the Rust handle. See the note
+// in chat_shim.h on why this is no longer a serialized string.
+struct chat_shim_parser {
+    common_peg_arena arena;
+};
+
+void chat_shim_parser_free(struct chat_shim_parser * parser) {
+    delete parser;
+}
 
 // ── JSON Schema → GBNF ──────────────────────────────────────────────────────
 
@@ -226,8 +237,11 @@ int32_t chat_shim_templates_apply(
         inputs.add_eos               = params->add_eos;
         inputs.tool_choice     = static_cast<common_chat_tool_choice>(params->tool_choice);
         inputs.reasoning_format = static_cast<common_reasoning_format>(params->reasoning_format);
+        inputs.force_pure_content = params->force_pure_content;
 
-        const common_chat_params applied = common_chat_templates_apply(tmpls->ptr.get(), inputs);
+        // Non-const so the parser arena can be moved into the handle below
+        // rather than deep-copied.
+        common_chat_params applied = common_chat_templates_apply(tmpls->ptr.get(), inputs);
 
         auto triggers = common_json::array();
         for (const auto & trigger : applied.grammar_triggers) {
@@ -245,7 +259,6 @@ int32_t chat_shim_templates_apply(
         r.grammar_triggers_off   = p.add(triggers.dump());
         r.preserved_tokens_off   = p.add(strings_to_json(applied.preserved_tokens).dump());
         r.additional_stops_off   = p.add(strings_to_json(applied.additional_stops).dump());
-        r.parser_off             = p.add(applied.parser);
         r.generation_prompt_off  = p.add(applied.generation_prompt);
         r.thinking_start_tag_off = p.add(applied.thinking_start_tag);
         r.thinking_end_tags_off  = p.add(strings_to_json(applied.thinking_end_tags).dump());
@@ -255,6 +268,7 @@ int32_t chat_shim_templates_apply(
 
         // Report offsets even on a size query so the caller can size once and
         // fill on the second call without re-running the template.
+        r.parser    = nullptr;
         *out_result = r;
 
         const size_t needed = p.buf.size();
@@ -265,6 +279,13 @@ int32_t chat_shim_templates_apply(
             return LLAMA_SHIM_BUFFER_TOO_SMALL;
         }
         std::memcpy(out_buf, p.buf.data(), needed);
+
+        // Transfer the parser only on the call that succeeds. A size query is
+        // the same template render, so allocating there too would hand the
+        // caller one it has no way to learn about, and leak it.
+        if (!applied.parser.empty()) {
+            out_result->parser = new chat_shim_parser{ std::move(applied.parser) };
+        }
         return LLAMA_SHIM_OK;
     });
 }
@@ -292,16 +313,22 @@ int32_t chat_shim_parse(
     }
     return guard([&]() -> int32_t {
         common_chat_parser_params pp;
-        pp.format               = static_cast<common_chat_format>(params->format);
-        pp.reasoning_format     = static_cast<common_reasoning_format>(params->reasoning_format);
-        pp.reasoning_in_content = params->reasoning_in_content;
-        pp.parse_tool_calls     = params->parse_tool_calls;
-        pp.generation_prompt    = str_or_empty(params->generation_prompt);
-        if (!blank(params->parser)) {
-            pp.parser.load(params->parser);
-        }
+        pp.format            = static_cast<common_chat_format>(params->format);
+        pp.generation_prompt = common_chat_input(std::string(str_or_empty(params->generation_prompt)));
 
-        const common_chat_msg msg = common_chat_parse(params->text, params->is_partial, pp);
+        // Go through `common_chat_peg_parse` rather than `common_chat_parse`:
+        // the latter reads the arena out of `pp.parser`, which is a by-value
+        // member, so filling it would deep-copy the arena on every parse. An
+        // empty arena is upstream's signal to fall back to a content-only
+        // parser, which is what a template without one used to get.
+        static const common_peg_arena no_parser;
+        const common_peg_arena & arena = params->parser ? params->parser->arena : no_parser;
+
+        const common_chat_msg msg = common_chat_peg_parse(
+                arena,
+                common_chat_input(std::string(params->text)),
+                params->is_partial,
+                pp);
         return emit(msg.to_json_oaicompat().dump(), out_buf, out_len, expected_len);
     });
 }

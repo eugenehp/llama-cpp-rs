@@ -42,6 +42,18 @@ int32_t common_json_schema_to_grammar_c(
 // Opaque owner of a `common_chat_templates_ptr`.
 struct chat_shim_templates;
 
+// Opaque owner of the PEG parser `apply` builds alongside the prompt.
+//
+// Upstream used to let the arena round-trip through a string
+// (`common_peg_arena::save`/`load`), which this shim handed to Rust as an
+// opaque blob. llama.cpp #30210 deleted the serialization, so the arena has to
+// stay on this side of the boundary and be referenced by handle instead.
+struct chat_shim_parser;
+
+// Release a parser returned in `chat_shim_apply_result::parser`. NULL is a
+// no-op.
+void chat_shim_parser_free(struct chat_shim_parser * parser);
+
 // Build the template set for a model. `template_override` may be NULL to use
 // whatever the model ships; pass Jinja source to override it.
 // Returns NULL on failure — see `llama_shim_last_error`.
@@ -109,6 +121,11 @@ struct chat_shim_apply_params {
     bool         use_jinja;
     bool         add_bos;
     bool         add_eos;
+    // Render a content-only template: reasoning and tool calls are left inline
+    // in `content` rather than parsed out. This replaces the per-parse
+    // `parse_tool_calls` / `reasoning_in_content` flags upstream dropped, which
+    // could not survive the move to a prebuilt parser.
+    bool         force_pure_content;
 };
 
 // Everything `apply` produces, as offsets into one packed buffer. Each region
@@ -122,9 +139,6 @@ struct chat_shim_apply_result {
     size_t preserved_tokens_off;
     // JSON array of extra stop strings.
     size_t additional_stops_off;
-    // Serialized PEG parser. Opaque — hand it straight back to
-    // `chat_shim_parse`; without it the parser degrades to plain content.
-    size_t parser_off;
     // Prefix the parser must see prepended to generated text.
     size_t generation_prompt_off;
     size_t thinking_start_tag_off;
@@ -132,6 +146,13 @@ struct chat_shim_apply_result {
     size_t thinking_end_tags_off;
     // `common_chat_format`; hand back to `chat_shim_parse`.
     int32_t format;
+    // Owned PEG parser, or NULL when the template produced none (the parser
+    // then degrades to plain content). Hand it to `chat_shim_parse` and
+    // release it with `chat_shim_parser_free`.
+    //
+    // Set only on the call that returns LLAMA_SHIM_OK — a size query leaves it
+    // NULL, so the two-call protocol cannot leak one.
+    struct chat_shim_parser * parser;
     // Grammar should only engage once a trigger fires.
     bool    grammar_lazy;
     bool    supports_thinking;
@@ -157,18 +178,14 @@ int32_t chat_shim_format_name(
 struct chat_shim_parse_params {
     // Model output to parse.
     const char * text;
-    // Serialized parser from `chat_shim_apply_result::parser_off`; NULL or ""
-    // falls back to a pure-content parser.
-    const char * parser;
+    // Parser from `chat_shim_apply_result::parser`; NULL falls back to a
+    // pure-content parser. Borrowed, not consumed.
+    const struct chat_shim_parser * parser;
     // `generation_prompt` from the same result; NULL or "" for none.
     const char * generation_prompt;
     int32_t      format;
-    int32_t      reasoning_format;
     // Buffer is mid-stream: tolerate a truncated tail.
     bool         is_partial;
-    bool         parse_tool_calls;
-    // Keep reasoning inline in `content` rather than splitting it out.
-    bool         reasoning_in_content;
 };
 
 // Parse model output into an OpenAI-shaped JSON object: `{"role", "content",

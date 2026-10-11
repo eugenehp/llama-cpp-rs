@@ -143,8 +143,10 @@ pub mod log {
     ///
     /// # Errors
     ///
-    /// Returns [`RuntimeError::Failed`] if the file cannot be opened, or
-    /// [`RuntimeError::Nul`] for an interior NUL in `path`.
+    /// Returns [`ShimError::Failed`](crate::ShimError::Failed) if the file
+    /// cannot be opened, or [`ShimError::Nul`](crate::ShimError::Nul) for an
+    /// interior NUL in `path`. Both are reachable as
+    /// [`RuntimeError`](super::RuntimeError).
     pub fn set_file(path: Option<&str>) -> Result<()> {
         let c_path = path.map(CString::new).transpose()?;
         let ptr = c_path.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());

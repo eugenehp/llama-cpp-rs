@@ -34,6 +34,7 @@
 
 use std::ffi::{c_char, CString};
 use std::ptr::NonNull;
+use std::sync::Arc;
 
 use llama_cpp_sys_4 as sys;
 
@@ -41,7 +42,7 @@ use crate::model::LlamaModel;
 
 /// Errors from the chat layer.
 ///
-/// An alias for [`ShimError`](crate::shim::ShimError) — every shim-backed
+/// An alias for [`crate::ShimError`] — every shim-backed
 /// module shares one error type, since they share one status enum and one error
 /// buffer.
 pub type ChatError = crate::shim::ShimError;
@@ -273,14 +274,17 @@ impl ChatTemplates {
             use_jinja: params.use_jinja,
             add_bos: params.add_bos,
             add_eos: params.add_eos,
+            force_pure_content: params.force_pure_content,
         };
 
         // Two-call protocol: size, then fill. The shim fills `result` on both
         // calls, so the template is only rendered once per call — but we take
         // the second call's offsets, which describe the buffer we actually got.
         // bindgen derives no `Default` for this struct; zeroing is correct
-        // here because every field is a `usize` offset, an `i32`, or a `bool`,
-        // and the shim overwrites all of them before reporting success.
+        // here because every field is a `usize` offset, an `i32`, a `bool`, or
+        // the parser pointer — for which zero is the NULL the shim also writes
+        // on a size query — and the shim overwrites all of them before
+        // reporting success.
         let mut result: sys::chat_shim_apply_result = unsafe { std::mem::zeroed() };
         let mut needed: usize = 0;
         let status = unsafe {
@@ -310,7 +314,11 @@ impl ChatTemplates {
         };
         check_status(status)?;
 
-        ChatParams::from_packed(&buf, &result)
+        // Take ownership of the parser before anything else fallible runs, or
+        // a later error would leak it. The shim only sets it on success.
+        let parser = NonNull::new(result.parser).map(|raw| Arc::new(ChatParser { raw }));
+
+        ChatParams::from_packed(&buf, &result, parser)
     }
 }
 
@@ -337,6 +345,7 @@ pub struct ChatApplyParams {
     use_jinja: bool,
     add_bos: bool,
     add_eos: bool,
+    force_pure_content: bool,
 }
 
 impl ChatApplyParams {
@@ -357,6 +366,7 @@ impl ChatApplyParams {
             use_jinja: true,
             add_bos: false,
             add_eos: false,
+            force_pure_content: false,
         }
     }
 
@@ -385,6 +395,19 @@ impl ChatApplyParams {
     #[must_use]
     pub fn with_template_kwargs(mut self, kwargs_json: impl Into<String>) -> Self {
         self.template_kwargs_json = Some(kwargs_json.into());
+        self
+    }
+
+    /// Render a content-only template: reasoning and tool calls are left
+    /// inline in `content` instead of being parsed out.
+    ///
+    /// This is the replacement for the per-parse `parse_tool_calls` /
+    /// `reasoning_in_content` flags llama.cpp dropped in #30210. Because the
+    /// parser is now built once by `apply`, the decision has to be made here
+    /// rather than at [`ChatParams::parse`] time.
+    #[must_use]
+    pub fn with_force_pure_content(mut self, force: bool) -> Self {
+        self.force_pure_content = force;
         self
     }
 
@@ -447,6 +470,35 @@ impl ChatApplyParams {
     }
 }
 
+/// The PEG parser a template produces, owned on the llama.cpp side.
+///
+/// `common_chat_templates_apply` builds a parser arena alongside the prompt,
+/// and [`ChatParams::parse`] needs it to read tool calls back out of model
+/// output. It used to round-trip through a string, but llama.cpp #30210 removed
+/// the arena's serialization, so it is held by handle instead and shared
+/// between clones of a [`ChatParams`].
+struct ChatParser {
+    raw: NonNull<sys::chat_shim_parser>,
+}
+
+// SAFETY: the arena is immutable once `apply` has built it, and upstream parses
+// through a `const common_peg_arena &` with all mutable state in a per-call
+// context. Nothing reachable through `&self` mutates it.
+unsafe impl Send for ChatParser {}
+unsafe impl Sync for ChatParser {}
+
+impl std::fmt::Debug for ChatParser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ChatParser(<opaque>)")
+    }
+}
+
+impl Drop for ChatParser {
+    fn drop(&mut self) {
+        unsafe { sys::chat_shim_parser_free(self.raw.as_ptr()) }
+    }
+}
+
 /// A lazy-grammar trigger: what has to appear before the grammar engages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrammarTrigger {
@@ -486,17 +538,18 @@ pub struct ChatParams {
     pub thinking_end_tags_json: String,
     /// `common_chat_format` discriminant, needed to parse output back.
     pub format: i32,
-    /// Serialized PEG parser produced alongside the prompt. Opaque.
-    parser: String,
+    /// PEG parser produced alongside the prompt, or `None` when the template
+    /// produced none — [`Self::parse`] then falls back to plain content.
+    parser: Option<Arc<ChatParser>>,
     /// Prefix the parser expects to see before generated text.
     generation_prompt: String,
-    reasoning_format: ReasoningFormat,
 }
 
 impl ChatParams {
     fn from_packed(
         buf: &[u8],
         result: &sys::chat_shim_apply_result,
+        parser: Option<Arc<ChatParser>>,
     ) -> Result<Self, ChatError> {
         let at = |off: usize| -> Result<String, ChatError> {
             let rest = buf.get(off..).ok_or(ChatError::CorruptResult)?;
@@ -522,9 +575,8 @@ impl ChatParams {
             thinking_start_tag: at(result.thinking_start_tag_off)?,
             thinking_end_tags_json: at(result.thinking_end_tags_off)?,
             format: result.format,
-            parser: at(result.parser_off)?,
+            parser,
             generation_prompt: at(result.generation_prompt_off)?,
-            reasoning_format: ReasoningFormat::Auto,
         })
     }
 
@@ -672,34 +724,17 @@ impl ChatParams {
     ///
     /// Returns [`ChatError::Failed`] if the output cannot be parsed.
     pub fn parse(&self, text: &str, is_partial: bool) -> Result<String, ChatError> {
-        self.parse_with(text, is_partial, true, false)
-    }
-
-    /// [`Self::parse`] with control over tool-call parsing and whether
-    /// reasoning is left inline in `content`.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ChatError::Failed`] if the output cannot be parsed.
-    pub fn parse_with(
-        &self,
-        text: &str,
-        is_partial: bool,
-        parse_tool_calls: bool,
-        reasoning_in_content: bool,
-    ) -> Result<String, ChatError> {
         let c_text = CString::new(text)?;
-        let c_parser = CString::new(self.parser.as_str())?;
         let c_gen_prompt = CString::new(self.generation_prompt.as_str())?;
         let params = sys::chat_shim_parse_params {
             text: c_text.as_ptr(),
-            parser: c_parser.as_ptr(),
+            parser: self
+                .parser
+                .as_ref()
+                .map_or(std::ptr::null(), |p| p.raw.as_ptr().cast_const()),
             generation_prompt: c_gen_prompt.as_ptr(),
             format: self.format,
-            reasoning_format: self.reasoning_format.as_raw(),
             is_partial,
-            parse_tool_calls,
-            reasoning_in_content,
         };
         read_string(|buf, len, expected| unsafe {
             sys::chat_shim_parse(&raw const params, buf, len, expected)
@@ -1065,9 +1100,8 @@ mod tests {
             thinking_start_tag: String::new(),
             thinking_end_tags_json: String::new(),
             format: 0,
-            parser: String::new(),
+            parser: None,
             generation_prompt: String::new(),
-            reasoning_format: ReasoningFormat::Auto,
         }
     }
 

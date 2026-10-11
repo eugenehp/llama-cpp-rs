@@ -12,20 +12,30 @@ use std::num::NonZeroI32;
 use std::pin::Pin;
 use std::ptr::NonNull;
 use std::slice;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use llama_cpp_sys_4::llama_pooling_type;
 use params::{LlamaContextType, LlamaPoolingType};
 use perf::PerfContextData;
 
 use crate::llama_batch::LlamaBatch;
+use crate::llama_batch_ext::{LlamaBatchExt, LlamaProcessType};
 use crate::model::{LlamaLoraAdapter, LlamaModel};
 use crate::token::data::LlamaTokenData;
 use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 use crate::{
     DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
-    LlamaLoraAdapterSetError,
+    LlamaLoraAdapterSetError, ProcessError,
 };
+
+/// Source of [`LlamaContext::id`].
+///
+/// A [`LlamaBatchExt`] is bound to the context that built it, and comparing raw
+/// `llama_context` pointers is not enough to detect a stale binding: the
+/// allocator can hand a new context the address a dropped one had. A counter
+/// that only ever goes up cannot be reused that way.
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(0);
 
 pub mod kv_cache;
 pub mod memory_breakdown;
@@ -73,6 +83,9 @@ pub struct LlamaContext<'a> {
     embeddings_enabled: bool,
     context_type: LlamaContextType,
     tensor_transactions: Option<Pin<Box<TensorTransactions>>>,
+    /// Identity of this context, unique for the life of the process. See
+    /// [`NEXT_CONTEXT_ID`].
+    id: u64,
 }
 
 impl Debug for LlamaContext<'_> {
@@ -132,7 +145,14 @@ impl<'model> LlamaContext<'model> {
             embeddings_enabled,
             context_type,
             tensor_transactions,
+            id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    /// Identity of this context, unique among every context this process has
+    /// created. Used to tie a [`LlamaBatchExt`] to the context that built it.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
 
     /// Returns the context type selected at native allocation.
@@ -187,6 +207,66 @@ impl<'model> LlamaContext<'model> {
                 Ok(())
             }
             Some(error) => Err(DecodeError::from(error)),
+        }
+    }
+
+    /// Run an entry-wise [`LlamaBatchExt`] through this context's encoder or
+    /// decoder.
+    ///
+    /// This is `llama_process`, upstream's entry point for the
+    /// `llama_batch_ext` API. Use it when the batch needs something
+    /// [`LlamaBatch`] cannot express — per-entry embeddings, M-RoPE positions,
+    /// or an MTP state embedding. For a plain token batch,
+    /// [`Self::decode`] and [`Self::encode`] are the same work with less
+    /// ceremony.
+    ///
+    /// # Decode lifecycle hooks do not apply
+    ///
+    /// This crate's tensor transactions
+    /// ([`LlamaContextParams::with_tensor_transactions`](crate::context::params::LlamaContextParams))
+    /// are driven by hooks this repo patches into `llama_decode`.
+    /// `llama_process` reaches the graph without passing through it, and the
+    /// hook signature is built around `llama_batch`, so it cannot describe an
+    /// entry-wise batch at all. Rather than run the batch with the transactions
+    /// silently inert, this returns
+    /// [`ProcessError::TensorTransactionsUnsupported`].
+    ///
+    /// # Errors
+    ///
+    /// - [`ProcessError::ContextMismatch`] if `batch` was built for a
+    ///   different context — it borrows its originating context's batch size,
+    ///   sequence count and memory module, so it is not transferable.
+    /// - [`ProcessError::TensorTransactionsUnsupported`] as described above.
+    /// - [`ProcessError::IncompleteEntry`] if an entry carries no input; see
+    ///   [`LlamaBatchExt::has_incomplete_entry`].
+    /// - Otherwise whatever `llama_decode` would report; the return codes are
+    ///   the same.
+    pub fn process(
+        &mut self,
+        batch: &mut LlamaBatchExt,
+        kind: LlamaProcessType,
+    ) -> Result<(), ProcessError> {
+        if batch.ctx_id != self.id {
+            return Err(ProcessError::ContextMismatch);
+        }
+        if self.tensor_transactions.is_some() {
+            return Err(ProcessError::TensorTransactionsUnsupported);
+        }
+        if let Some(entry) = batch.first_incomplete_entry() {
+            return Err(ProcessError::IncompleteEntry(entry));
+        }
+
+        let result = unsafe {
+            llama_cpp_sys_4::llama_process(self.context.as_ptr(), kind.into(), batch.as_ptr())
+        };
+
+        match NonZeroI32::new(result) {
+            None => {
+                self.initialized_logits
+                    .clone_from(&batch.initialized_logits);
+                Ok(())
+            }
+            Some(error) => Err(ProcessError::from(error)),
         }
     }
 
@@ -446,6 +526,17 @@ impl<'model> LlamaContext<'model> {
         unsafe {
             llama_cpp_sys_4::llama_set_causal_attn(self.context.as_ptr(), causal_attn);
         }
+    }
+
+    /// Whether the context is currently using causal attention.
+    ///
+    /// The counterpart to [`Self::set_causal_attn`]. Worth reading back rather
+    /// than tracking yourself: the initial value comes from
+    /// [`LlamaContextParams::with_attention_type`](crate::context::params::LlamaContextParams::with_attention_type)
+    /// via the model's own default, not from anything the caller set.
+    #[must_use]
+    pub fn causal_attn(&self) -> bool {
+        unsafe { llama_cpp_sys_4::llama_get_causal_attn(self.context.as_ptr()) }
     }
 
     /// Set whether to compute embeddings.

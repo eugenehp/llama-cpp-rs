@@ -887,7 +887,9 @@ void common_shim_log_set_colors(bool colors) {
 }
 
 void common_shim_log_set_jsonl(bool jsonl) {
-    common_log_set_jsonl(common_log_main(), jsonl);
+    // Upstream moved this off the per-logger struct onto a global
+    // (llama.cpp #28586), alongside a new common_log_get_jsonl().
+    common_log_set_jsonl(jsonl);
 }
 
 int32_t common_shim_log_set_file(const char * path) {

@@ -2223,6 +2223,111 @@ impl LlamaModel {
         })
     }
 
+    /// Initialize a `LoRA` adapter from an open `FILE` pointer, reading from its
+    /// current position.
+    ///
+    /// Wraps `llama_adapter_lora_init_from_file_ptr`
+    /// ([llama.cpp #28993](https://github.com/ggml-org/llama.cpp/pull/28993)),
+    /// the counterpart to
+    /// [`LlamaModel::load_from_file_ptr`]. Use it when the adapter GGUF is
+    /// *embedded* in a larger file — appended to an executable, or packed into
+    /// an archive — which is the one thing
+    /// [`Self::lora_adapter_init`] cannot do, since it opens the path itself
+    /// and reads from byte zero. For an adapter that is its own file, use that
+    /// instead.
+    ///
+    /// The adapter does not keep the `FILE`: llama.cpp reads what it needs
+    /// before returning, exactly as `llama_adapter_lora_init` does before it
+    /// `fclose`s its own handle. So the caller still owns the handle and should
+    /// close it, and the returned [`LlamaLoraAdapter`] stays valid afterwards.
+    ///
+    /// # Safety
+    ///
+    /// `file` must be a valid, open `FILE*` positioned at the start of the
+    /// adapter GGUF. Reading advances the position and llama.cpp does not
+    /// restore it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlamaLoraAdapterInitError::NullResult`] if `file` is null or
+    /// llama.cpp could not read an adapter from it; the reason is in the
+    /// llama.cpp log.
+    pub unsafe fn lora_adapter_init_from_file_ptr(
+        &self,
+        file: *mut llama_cpp_sys_4::FILE,
+    ) -> Result<LlamaLoraAdapter, LlamaLoraAdapterInitError> {
+        let adapter =
+            llama_cpp_sys_4::llama_adapter_lora_init_from_file_ptr(self.model.as_ptr(), file);
+        let adapter = NonNull::new(adapter).ok_or(LlamaLoraAdapterInitError::NullResult)?;
+
+        tracing::debug!("Initialized lora adapter from a FILE pointer");
+        Ok(LlamaLoraAdapter {
+            lora_adapter: adapter,
+        })
+    }
+
+    /// Initialize a `LoRA` adapter from an adapter GGUF embedded at `offset`
+    /// inside a larger file.
+    ///
+    /// [`Self::lora_adapter_init`] opens the path itself and reads from byte
+    /// zero, so it only works for an adapter that is its own file. This is the
+    /// safe way to reach llama.cpp's `FILE *`-based loader for the other case:
+    /// an adapter appended to an executable, packed into an archive, or stored
+    /// alongside other blobs. Pass `0` and it behaves like
+    /// [`Self::lora_adapter_init`].
+    ///
+    /// The handle is opened, positioned, read and closed inside this call;
+    /// llama.cpp does not keep it.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use llama_cpp_4::model::LlamaModel;
+    /// # fn f(model: &LlamaModel) -> Result<(), Box<dyn std::error::Error>> {
+    /// // The adapter starts 4 KiB into a bundle of several.
+    /// let adapter = model.lora_adapter_init_at_offset("bundle.bin", 4096)?;
+    /// # drop(adapter);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`LlamaLoraAdapterInitError::FileOpen`] if the file cannot be opened.
+    /// - [`LlamaLoraAdapterInitError::FileSeek`] if it cannot be positioned at
+    ///   `offset` — including an `offset` too large for a 32-bit target's file
+    ///   offsets.
+    /// - [`LlamaLoraAdapterInitError::NullResult`] if llama.cpp could not read
+    ///   an adapter from that position; the reason is in the llama.cpp log.
+    pub fn lora_adapter_init_at_offset(
+        &self,
+        path: impl AsRef<Path>,
+        offset: u64,
+    ) -> Result<LlamaLoraAdapter, LlamaLoraAdapterInitError> {
+        let path = path.as_ref();
+
+        let mut file = crate::cfile::CFile::open_read(path).map_err(|e| {
+            LlamaLoraAdapterInitError::FileOpen {
+                path: path.to_path_buf(),
+                reason: e.to_string(),
+            }
+        })?;
+        file.seek_to(offset)
+            .map_err(|e| LlamaLoraAdapterInitError::FileSeek {
+                path: path.to_path_buf(),
+                offset,
+                reason: e.to_string(),
+            })?;
+
+        // SAFETY: `file` is open for the duration of the call, and llama.cpp
+        // does not retain it — it reads what it needs before returning, just as
+        // `llama_adapter_lora_init` does before closing its own handle.
+        let adapter = unsafe { self.lora_adapter_init_from_file_ptr(file.as_ptr()) }?;
+
+        tracing::debug!(?path, offset, "Initialized lora adapter at offset");
+        Ok(adapter)
+    }
+
     /// Create a new context from this model.
     ///
     /// This function creates a new context for the model, which is used to manage and perform computations for inference,
