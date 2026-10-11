@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **`LLAMA_OPENSSL` build environment variable.** Set `LLAMA_OPENSSL=0` to
+  configure llama.cpp with `-DLLAMA_OPENSSL=OFF`, so `common`'s HTTP client is
+  built without OpenSSL and nothing links `libssl`/`libcrypto`. Useful for
+  applications that handle model downloads themselves and do not want to ship
+  a second TLS stack. HTTPS through llama.cpp's downloader then fails with an
+  explicit error instead of silently downgrading. Unset keeps upstream's default.
+
 ## [0.7.0] - 2026-09-09
 
 ### Added
