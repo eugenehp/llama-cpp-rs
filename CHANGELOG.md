@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The published `llama-cpp-sys-4` failed to configure with `metal` and
+  `mtmd` together** (`mtmd` is a default feature of `llama-cpp-4`, so this hit
+  every Metal build that kept the defaults). llama.cpp's `tools/CMakeLists.txt`
+  adds `tools/tuning` when `GGML_METAL` is on, and the package `include` list
+  did not ship it, so CMake stopped with "not an existing directory". The
+  directory is now packaged, and the macOS CI job verifies the packaged crate
+  with `metal,mtmd`.
+
 ## [0.8.0] - 2026-10-11
 
 ### Breaking

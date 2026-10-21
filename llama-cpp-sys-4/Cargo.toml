@@ -145,6 +145,9 @@ include = [
     "/llama.cpp/tools/server/httplib.h",
     "/llama.cpp/tools/tokenize/**/*",
     "/llama.cpp/tools/tts/**/*",
+    # Added only under `if (GGML_METAL)`, so the Linux `package` CI job never
+    # configures it; without it `--features metal,mtmd` fails to configure.
+    "/llama.cpp/tools/tuning/**/*",
 
     # vendor
     "/llama.cpp/vendor/**/*",

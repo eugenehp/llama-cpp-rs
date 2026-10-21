@@ -341,6 +341,12 @@ jobs:
         run: |
           cargo build -p llama-cpp-4 --no-default-features --features metal
           cargo clippy -p llama-cpp-4 --all-targets --no-default-features --features metal -- -D warnings
+      # The `package` job runs on Linux without `metal`, so a tool that
+      # tools/CMakeLists.txt adds only under `GGML_METAL` (`tuning`) can be
+      # missing from the `include` list while every job stays green. `mtmd`
+      # turns on LLAMA_BUILD_TOOLS; `metal` turns on GGML_METAL.
+      - name: cargo package, metal + mtmd (with verification build)
+        run: cargo package -p llama-cpp-sys-4 --allow-dirty --features metal,mtmd
       - name: sccache stats
         run: sccache --show-stats || true
   windows:
