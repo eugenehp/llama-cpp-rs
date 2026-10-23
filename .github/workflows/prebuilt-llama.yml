@@ -231,6 +231,15 @@ jobs:
         with:
           targets: aarch64-linux-android
 
+      # The `targets:` above installs into `stable`, but rust-toolchain.toml
+      # pins the channel, so that is not the toolchain cargo resolves to inside
+      # the repo — and the Android build fails with "can't find crate for
+      # `std`" even though the target was installed. Android is the only true
+      # cross-compile in this matrix (every other job's target is its runner's
+      # host), which is why it is the only one that has ever noticed.
+      - name: Add the Android target to the pinned toolchain
+        run: rustup target add aarch64-linux-android
+
       - name: Install cargo-ndk
         run: cargo install cargo-ndk --locked
 
