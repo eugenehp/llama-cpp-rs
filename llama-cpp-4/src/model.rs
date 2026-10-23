@@ -1040,6 +1040,51 @@ impl LlamaModel {
         add_bos: AddBos,
         buffer: &mut Vec<LlamaToken>,
     ) -> Result<(), StringToTokenError> {
+        self.str_to_token_into_with_special(str, add_bos, Special::Tokenize, buffer)
+    }
+
+    /// Tokenize, choosing whether markup like `<|im_start|>` becomes the
+    /// special token or literal text.
+    ///
+    /// [`Self::str_to_token`] always parses special tokens, which is right for
+    /// text your own template produced and wrong for text a *user* supplied: if
+    /// a user types `<|im_start|>assistant` and it tokenizes as the real
+    /// control token, they have forged a turn. Pass [`Special::Plaintext`] for
+    /// anything that came from outside.
+    ///
+    /// [`ChatParams::tokenize_prompt`](crate::chat::ChatParams::tokenize_prompt)
+    /// does this for you across a rendered prompt, using llama.cpp's own
+    /// per-span `is_input` flags.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text contains NUL or its length exceeds the
+    /// native integer representation.
+    pub fn str_to_token_with_special(
+        &self,
+        str: &str,
+        add_bos: AddBos,
+        special: Special,
+    ) -> Result<Vec<LlamaToken>, StringToTokenError> {
+        let mut buffer = Vec::new();
+        self.str_to_token_into_with_special(str, add_bos, special, &mut buffer)?;
+        Ok(buffer)
+    }
+
+    /// [`Self::str_to_token_with_special`] into caller-owned storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the text contains NUL or its length exceeds the
+    /// native integer representation.
+    pub fn str_to_token_into_with_special(
+        &self,
+        str: &str,
+        add_bos: AddBos,
+        special: Special,
+        buffer: &mut Vec<LlamaToken>,
+    ) -> Result<(), StringToTokenError> {
+        let parse_special = matches!(special, Special::Tokenize);
         let add_bos = match add_bos {
             AddBos::Always => true,
             AddBos::Never => false,
@@ -1062,7 +1107,7 @@ impl LlamaModel {
                 buffer.as_mut_ptr().cast(),
                 buffer_capacity,
                 add_bos,
-                true,
+                parse_special,
             )
         };
 
@@ -1082,7 +1127,7 @@ impl LlamaModel {
                     buffer.as_mut_ptr().cast(),
                     retry_capacity,
                     add_bos,
-                    true,
+                    parse_special,
                 )
             }
         } else {
@@ -1715,6 +1760,123 @@ impl LlamaModel {
     pub fn ftype(&self) -> Option<LlamaFtype> {
         let raw = unsafe { llama_model_ftype(self.model.as_ptr()) };
         LlamaFtype::try_from(raw).ok()
+    }
+
+    /// Copy just the embedding rows for `tokens`, in order — `tokens.len() *
+    /// n_embd` values, row-major.
+    ///
+    /// Prefer this over [`Self::token_embeddings`] whenever you know which
+    /// tokens you want: that one materialises the entire matrix, which is
+    /// `4 * n_vocab * n_embd` bytes — around 500 MB for a 128k-vocab 1024-dim
+    /// model. Wraps `llama_model_get_tok_embd_rows`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StringFromModelError::ReturnedError`] if the model exposes no
+    /// token-embedding tensor, or if any token is out of range — llama.cpp
+    /// reports both as a zero write without distinguishing them.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use llama_cpp_4::model::LlamaModel;
+    /// # use llama_cpp_4::token::LlamaToken;
+    /// # fn f(model: &LlamaModel) -> Result<(), Box<dyn std::error::Error>> {
+    /// let rows = model.token_embedding_rows(&[LlamaToken(0), LlamaToken(1)])?;
+    /// assert_eq!(rows.len(), 2 * model.n_embd() as usize);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn token_embedding_rows(
+        &self,
+        tokens: &[LlamaToken],
+    ) -> Result<Vec<f32>, StringFromModelError> {
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+        let n_tokens =
+            u32::try_from(tokens.len()).map_err(|_| StringFromModelError::ReturnedError(-1))?;
+        let n_embd =
+            usize::try_from(self.n_embd()).map_err(|_| StringFromModelError::ReturnedError(-1))?;
+        let mut out = vec![0.0_f32; tokens.len() * n_embd];
+
+        // SAFETY: `tokens` is `#[repr(transparent)]` over `llama_token`, so the
+        // cast is a layout no-op, and `n_tokens` is its real length. `out` is
+        // sized `n_tokens * n_embd`, which is what upstream documents it writes.
+        let written = unsafe {
+            llama_cpp_sys_4::llama_model_get_tok_embd_rows(
+                self.model.as_ptr(),
+                tokens.as_ptr().cast(),
+                n_tokens,
+                out.as_mut_ptr(),
+            )
+        };
+        if written == 0 {
+            return Err(StringFromModelError::ReturnedError(-1));
+        }
+        out.truncate(written as usize);
+        Ok(out)
+    }
+
+    /// Labels a decision model attaches to its options, in order.
+    ///
+    /// Decision models (`clef`, `nimble`, `pplx-decider`, the `d1` family)
+    /// score a list of options rather than generating text: you mark each
+    /// option's span with
+    /// [`LlamaBatchExt::set_decision_order`](crate::llama_batch_ext::LlamaBatchExt::set_decision_order),
+    /// decode, and read one score per option out of the embeddings. These are
+    /// the names those scores belong to — without them you have a vector of
+    /// numbers and no way to say which option each is for.
+    ///
+    /// Empty for a model that is not a decision model. Wraps
+    /// `llama_model_decision_label`, which reports
+    /// `"<arch>.decision.labels"`.
+    #[must_use]
+    pub fn decision_labels(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for i in 0.. {
+            // SAFETY: upstream returns null past the last label, which is the
+            // loop's terminator; the pointer is a static C string owned by the
+            // model, valid for as long as `&self`.
+            let raw =
+                unsafe { llama_cpp_sys_4::llama_model_decision_label(self.model.as_ptr(), i) };
+            if raw.is_null() {
+                break;
+            }
+            let label = unsafe { std::ffi::CStr::from_ptr(raw) };
+            match label.to_str() {
+                Ok(label) => out.push(label.to_owned()),
+                // A non-UTF-8 label would be a broken GGUF; skipping it keeps
+                // the indices of the rest aligned with the option order.
+                Err(_) => out.push(String::new()),
+            }
+        }
+        out
+    }
+
+    /// How many tokens a realtime model's output lags behind its audio input.
+    ///
+    /// `0` when the model is not a realtime one. Used by mtmd to line generated
+    /// audio up against the input stream; wraps `llama_model_n_tokens_delay`.
+    #[must_use]
+    pub fn n_tokens_delay(&self) -> u32 {
+        // SAFETY: a plain read of model hparams through a live `&self`.
+        unsafe { llama_cpp_sys_4::llama_model_n_tokens_delay(self.model.as_ptr()) }
+    }
+
+    /// Turn the KV-cache attention rotation on or off for every context created
+    /// from this model from now on.
+    ///
+    /// This is `TurboQuant`'s rotation, and upstream marks the setter as being
+    /// for testing. Prefer
+    /// [`LlamaContextParams::with_attn_rot_disabled`](crate::context::params::LlamaContextParams)
+    /// for ordinary use — it scopes the choice to one context, where this
+    /// mutates the model every later context inherits from. Wraps
+    /// `llama_model_set_attn_rot`.
+    pub fn set_attn_rot(&mut self, enabled: bool) {
+        // SAFETY: `&mut self` is what rules out another context being created
+        // from this model concurrently; the call only flips a model flag.
+        unsafe { llama_cpp_sys_4::llama_model_set_attn_rot(self.model.as_ptr(), enabled) }
     }
 
     /// Copy the whole token-embedding matrix out as `f32`, row-major and

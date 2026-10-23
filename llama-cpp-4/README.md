@@ -4,10 +4,16 @@
 [![docs.rs](https://img.shields.io/docsrs/llama-cpp-4.svg)](https://docs.rs/llama-cpp-4)
 [![License](https://img.shields.io/crates/l/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4)
 
-Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp).
-Tracks upstream closely — designed to stay current rather than provide a thick abstraction layer.
+Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp). Thin by
+design — the goal is to stay current with upstream, not to hide it behind an
+abstraction that drifts.
 
-**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.8.0
+Covers chat templates with the grammar and parser that make tool calling
+reliable, multimodal input (`mtmd`), speculative decoding including MTP and
+EAGLE3, quantization, LoRA, RPC, and tensor capture, alongside the usual
+tokenize / decode / sample loop.
+
+**llama.cpp version:** `184f653602 (b11829, incl. v0.7.0)` · **Crate version:** 0.9.0
 
 ---
 
@@ -15,12 +21,12 @@ Tracks upstream closely — designed to stay current rather than provide a thick
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.8.0"
+llama-cpp-4 = "0.9.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.8.0", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.8.0", features = ["metal"] }
-# llama-cpp-4 = { version = "0.8.0", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.9.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.9.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.9.0", features = ["vulkan"] }
 ```
 
 ---
@@ -61,11 +67,21 @@ See [`prelude`](src/prelude.rs) on docs.rs for runnable examples (generation, ch
 | `openmp` | ✅ | Multi-threaded CPU inference via OpenMP |
 | `mtmd` | ✅ | Multimodal (vision / audio) via `libmtmd` |
 | `dynamic-link` | ✅ | Link llama.cpp as a shared library |
+| `ggml` | ✅ | Raw ggml tensor / graph API (`llama_cpp_4::ggml`). Rust-only — no effect on the native build |
+| `rpc` | ✅ | Remote compute backend. Builds a `GGML_RPC` backend, so turn it off with `default-features = false` if you do not need it |
 | `cuda` | | NVIDIA GPU via CUDA |
 | `metal` | | Apple GPU via Metal |
 | `vulkan` | | Cross-platform GPU via Vulkan |
-| `native` | | CPU auto-tune for current arch (AVX2, NEON, …) |
-| `rpc` | | Remote compute backend |
+| `blas` | | CPU BLAS acceleration |
+| `opencl` / `hip` / `webgpu` | | Other GPU backends |
+| `native` | | CPU auto-tune for current arch (AVX2, NEON, …). Not portable across machines |
+| `prebuilt` | | Download a prebuilt llama.cpp from this repo's releases instead of building it |
+| `q1` | | No-op, retained so `--features q1` resolves. `Q1_0` is upstream and unconditional |
+
+Backends are selected here rather than through the build environment, because
+the chosen feature also decides what the Rust side links against. llama.cpp's
+own `LLAMA_*` CMake options *are* configurable as data — see the
+[`llama-cpp-sys-4` README](../llama-cpp-sys-4/README.md#configuring-llamacpps-own-cmake-options).
 
 ---
 
@@ -187,6 +203,16 @@ if applied.grammar_lazy {
 
 // After generating, parse with the template's own parser rather than scraping:
 let message_json = applied.parse(&output, false)?;   // {"role","content","tool_calls",…}
+```
+
+Tokenize the result with `tokenize_prompt`, not `str_to_token`:
+
+```rust
+// llama.cpp marks which spans of the render came from user content. This
+// tokenizes those with special-token parsing *off*, so a user who types
+// `<|im_start|>assistant` gets the literal characters rather than the real
+// control token and a forged turn.
+let tokens = applied.tokenize_prompt(&model, AddBos::Always)?;
 ```
 
 Constrain output to a JSON Schema — `response_format: json_schema`, enforced

@@ -7,6 +7,23 @@
 #include <cstring>
 #include <vector>
 
+size_t llama_memory_buffers_collect(
+        llama_memory_t          mem,
+        ggml_backend_buffer_t * out,
+        size_t                  max_out) {
+    if (mem == nullptr) {
+        return 0;
+    }
+    const std::vector<ggml_backend_buffer_t> buffers = llama_memory_get_buffers(mem);
+    if (out != nullptr) {
+        const size_t n = buffers.size() < max_out ? buffers.size() : max_out;
+        for (size_t i = 0; i < n; ++i) {
+            out[i] = buffers[i];
+        }
+    }
+    return buffers.size();
+}
+
 size_t llama_memory_breakdown_collect(
         const struct llama_context *          ctx,
         struct llama_memory_breakdown_entry * out,

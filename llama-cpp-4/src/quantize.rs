@@ -105,15 +105,14 @@ pub enum LlamaFtype {
     /// NVFP4
     MostlyNVFP4 = 39,
     /// `Q1_0` – 1.5 bpw binary (block size 32)
-    #[cfg(feature = "q1")]
     MostlyQ1_0 = 40,
-    /// `Q1_0_g128` – 1.125 bpw binary (block size 128)
+    /// `Q2_0` – 2 bpw binary
     //
-    // Named after upstream's `LLAMA_FTYPE_MOSTLY_Q1_0_G128`; renaming to
-    // satisfy the casing lint would break the correspondence.
-    #[allow(non_camel_case_types)]
-    #[cfg(feature = "q1")]
-    MostlyQ1_0_G128 = 41,
+    // 41 was `Q1_0_g128` behind the `q1` feature, from this crate's own
+    // quantization patch. Upstream uses 41 for `Q2_0`, and never had a
+    // `Q1_0_g128`, so the old variant named a type that does not exist while
+    // sitting on a value that means something else.
+    MostlyQ2_0 = 41,
 }
 
 impl LlamaFtype {
@@ -155,10 +154,8 @@ impl LlamaFtype {
             Self::MostlyTQ2_0 => "TQ2_0",
             Self::MostlyMXFP4Moe => "MXFP4_MOE",
             Self::MostlyNVFP4 => "NVFP4",
-            #[cfg(feature = "q1")]
             Self::MostlyQ1_0 => "Q1_0",
-            #[cfg(feature = "q1")]
-            Self::MostlyQ1_0_G128 => "Q1_0_g128",
+            Self::MostlyQ2_0 => "Q2_0",
         }
     }
 
@@ -200,10 +197,8 @@ impl LlamaFtype {
             Self::MostlyTQ2_0 => " 2.06 bpw ternary",
             Self::MostlyMXFP4Moe => "MXFP4 MoE layers",
             Self::MostlyNVFP4 => "NVFP4",
-            #[cfg(feature = "q1")]
             Self::MostlyQ1_0 => " 1.50 bpw — binary Q1_0 (block 32)",
-            #[cfg(feature = "q1")]
-            Self::MostlyQ1_0_G128 => " 1.125 bpw — binary Q1_0_g128 (block 128)",
+            Self::MostlyQ2_0 => " 2.00 bpw — binary Q2_0",
         }
     }
 
@@ -253,10 +248,8 @@ impl LlamaFtype {
             "TQ2_0" => Some(Self::MostlyTQ2_0),
             "MXFP4_MOE" => Some(Self::MostlyMXFP4Moe),
             "NVFP4" => Some(Self::MostlyNVFP4),
-            #[cfg(feature = "q1")]
             "Q1_0" => Some(Self::MostlyQ1_0),
-            #[cfg(feature = "q1")]
-            "Q1_0_G128" | "Q1_0_g128" => Some(Self::MostlyQ1_0_G128),
+            "Q2_0" => Some(Self::MostlyQ2_0),
             _ => None,
         }
     }
@@ -333,10 +326,8 @@ impl LlamaFtype {
             Self::MostlyTQ2_0,
             Self::MostlyMXFP4Moe,
             Self::MostlyNVFP4,
-            #[cfg(feature = "q1")]
             Self::MostlyQ1_0,
-            #[cfg(feature = "q1")]
-            Self::MostlyQ1_0_G128,
+            Self::MostlyQ2_0,
         ]
     }
 }
@@ -425,19 +416,19 @@ pub enum GgmlType {
     TQ1_0 = 34,
     TQ2_0 = 35,
     MXFP4 = 39,
-    /// NVFP4 — renumbered to 42 when the `q1` feature is active (40 and 41
-    /// are taken by `Q1_0` / `Q1_0_g128` for `PrismML` GGUF compatibility).
-    #[cfg(not(feature = "q1"))]
+    /// NVFP4 (4 blocks, E4M3 scale).
     NVFP4 = 40,
-    #[cfg(feature = "q1")]
-    Q1_0 = 40,
-    #[cfg(feature = "q1")]
-    // Mirrors ggml's `GGML_TYPE_Q1_0_G128`; see the note on
-    // `LlamaFtype::MostlyQ1_0_G128`.
-    #[allow(non_camel_case_types)]
-    Q1_0_G128 = 41,
-    #[cfg(feature = "q1")]
-    NVFP4 = 42,
+    /// `Q1_0` — 1.5 bpw binary.
+    //
+    // These values used to be shuffled by the `q1` feature, which encoded the
+    // numbering of this crate's own `0001-q1-quantization.patch`: NVFP4 moved
+    // to 42 so Q1_0 could take 40 and a `Q1_0_G128` take 41. Q1_0 has since
+    // landed upstream at 41 — with Q2_0 at 42 and NVFP4 staying at 40 — and the
+    // patch is gone, so the feature was renumbering three variants away from
+    // what llama.cpp actually uses. Upstream's numbering is the only numbering.
+    Q1_0 = 41,
+    /// `Q2_0` — 2 bpw binary.
+    Q2_0 = 42,
 }
 
 impl From<GgmlType> for llama_cpp_sys_4::ggml_type {
@@ -482,14 +473,9 @@ impl TryFrom<llama_cpp_sys_4::ggml_type> for GgmlType {
             34 => Ok(Self::TQ1_0),
             35 => Ok(Self::TQ2_0),
             39 => Ok(Self::MXFP4),
-            #[cfg(not(feature = "q1"))]
             40 => Ok(Self::NVFP4),
-            #[cfg(feature = "q1")]
-            40 => Ok(Self::Q1_0),
-            #[cfg(feature = "q1")]
-            41 => Ok(Self::Q1_0_G128),
-            #[cfg(feature = "q1")]
-            42 => Ok(Self::NVFP4),
+            41 => Ok(Self::Q1_0),
+            42 => Ok(Self::Q2_0),
             _ => Err(v),
         }
     }

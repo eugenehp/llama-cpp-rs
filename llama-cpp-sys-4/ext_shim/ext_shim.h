@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ggml-backend.h" // ggml_backend_buffer_t
 #include "llama.h"
 
 #ifdef __cplusplus
@@ -15,6 +16,19 @@ struct llama_memory_breakdown_entry {
     size_t  context;
     size_t  compute;
 };
+
+// Count the backend buffers a state write of `mem` would touch.
+//
+// `llama_memory_get_buffers` returns `std::vector<ggml_backend_buffer_t>` by
+// value, which bindgen cannot represent — it degrades the signature to
+// `-> u8`, so calling the raw binding is an ABI mismatch. Hence this.
+//
+// Writes up to `max_out` buffer pointers to `out` (may be NULL to query the
+// count) and returns the total the memory reports, which can exceed `max_out`.
+size_t llama_memory_buffers_collect(
+        llama_memory_t          mem,
+        ggml_backend_buffer_t * out,
+        size_t                  max_out);
 
 // Flatten llama_get_memory_breakdown() into `out` (max `max_out` entries).
 // Returns the number of entries written.

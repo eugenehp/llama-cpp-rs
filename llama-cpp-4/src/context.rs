@@ -54,6 +54,30 @@ pub use tensor_transaction::{
     TensorWriteback, TransactionalTensorCapture,
 };
 
+/// The size of a graph reserved by
+/// [`LlamaContext::reserve_graph`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GraphReservation {
+    /// Compute nodes in the graph.
+    ///
+    /// ggml exposes no public leaf count, so this is the whole measurement —
+    /// enough to compare one batch shape against another, which is what it is
+    /// for.
+    pub n_nodes: i32,
+}
+
+/// [`LlamaContext::reserve_graph`] could not build a graph for that shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("llama.cpp could not reserve a graph for n_tokens={n_tokens}, n_seqs={n_seqs}, n_outputs={n_outputs}")]
+pub struct ReserveGraphError {
+    /// Tokens requested.
+    pub n_tokens: u32,
+    /// Sequences requested.
+    pub n_seqs: u32,
+    /// Outputs requested.
+    pub n_outputs: u32,
+}
+
 /// A safe wrapper around the `llama_context` C++ context.
 ///
 /// This struct provides a safe interface to interact with the `llama_context` used by the `LlamaModel`.
@@ -268,6 +292,59 @@ impl<'model> LlamaContext<'model> {
             }
             Some(error) => Err(ProcessError::from(error)),
         }
+    }
+
+    /// Reserve a compute graph for a batch of the given shape, returning how
+    /// big it is.
+    ///
+    /// Two uses. As **warmup**, it forces the graph build and buffer
+    /// allocation that the first real decode would otherwise pay for, so
+    /// first-token latency stops being an outlier. As **measurement**, the
+    /// returned node count is the graph's size for that shape, which
+    /// is what
+    /// [`PerfContextData::n_reallocs_diff`](crate::context::perf::PerfContextData::n_reallocs_diff)
+    /// counts changes in.
+    ///
+    /// Reserve the shapes you actually decode — typically one for prefill
+    /// (`n_tokens = n_batch`) and one for single-token generation.
+    ///
+    /// # Why this does not hand back the graph
+    ///
+    /// `llama_graph_reserve` returns a `ggml_cgraph *` that upstream documents
+    /// as valid only *until the next call to `llama_graph_reserve`* — it is
+    /// owned by the context and reused. Returning it would be a borrow this
+    /// type cannot enforce, so the counts come back instead; they are the part
+    /// a caller can act on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReserveGraphError`] if llama.cpp could not build a graph for
+    /// that shape, which is what an over-large `n_tokens` or `n_outputs` looks
+    /// like.
+    pub fn reserve_graph(
+        &mut self,
+        n_tokens: u32,
+        n_seqs: u32,
+        n_outputs: u32,
+    ) -> Result<GraphReservation, ReserveGraphError> {
+        // SAFETY: a live `&mut self` gives an exclusive, non-null context, and
+        // the three arguments are scalars llama.cpp range-checks itself. The
+        // returned pointer is only read here and never escapes — see the note
+        // above on its lifetime.
+        let graph = unsafe {
+            llama_cpp_sys_4::llama_graph_reserve(self.context.as_ptr(), n_tokens, n_seqs, n_outputs)
+        };
+        if graph.is_null() {
+            return Err(ReserveGraphError {
+                n_tokens,
+                n_seqs,
+                n_outputs,
+            });
+        }
+        // SAFETY: non-null and valid until the next `llama_graph_reserve`,
+        // which cannot happen between here and this read.
+        let n_nodes = unsafe { llama_cpp_sys_4::ggml_graph_n_nodes(graph) };
+        Ok(GraphReservation { n_nodes })
     }
 
     /// Returns the owned tensor transaction program attached to this context.

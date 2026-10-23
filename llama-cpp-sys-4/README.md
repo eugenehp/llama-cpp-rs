@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` · **Crate version:** 0.8.0
+**llama.cpp version:** `184f653602 (b11829, incl. v0.7.0)` · **Crate version:** 0.9.0
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -48,7 +48,7 @@ use llama_cpp_4::prelude::*;
 
 DFlash2 drafting (grouped dynamic depthwise convolution + candidate selector)
 merged upstream in [#27342](https://github.com/ggml-org/llama.cpp/pull/27342)
-(`b10658`) and ships in the vendored `b11557`, so it needs no build feature — the `dflash2`
+(`b10658`) and ships in the vendored `b11829`, so it needs no build feature — the `dflash2`
 feature and `patches/0006-dflash2.patch` that carried the pre-merge code are
 gone. Converting a checkpoint uses upstream's own `convert_hf_to_gguf.py`.
 
@@ -75,7 +75,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.8.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.9.0/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 

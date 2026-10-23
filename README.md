@@ -4,14 +4,23 @@
 [![docs.rs](https://img.shields.io/docsrs/llama-cpp-4.svg)](https://docs.rs/llama-cpp-4)
 [![License](https://img.shields.io/crates/l/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4)
 
-Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), tracking upstream closely.
+Safe Rust bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp), pinned to
+an exact upstream build rather than a release tag, and bumped often.
+
+`llama-cpp-4` is the safe API; `llama-cpp-sys-4` is the raw bindgen layer beneath
+it. The safe side reaches past plain inference into the parts normally left in
+C++: chat templates with the grammar and parser that make tool calling reliable,
+multimodal input (`mtmd`), speculative decoding including MTP and EAGLE3,
+quantization, LoRA, RPC, and tensor capture. Where upstream calls `GGML_ABORT` on
+a path these bindings drive, a carried patch makes it throw instead — so a
+mismatched draft/target pair is a typed Rust error, not a dead process.
 
 | Crate | Description | crates.io |
 |---|---|---|
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `5c8854fd88 (b11557, incl. v0.6.0)` (Oct 2026) — includes
+**llama.cpp version:** `184f653602 (b11829, incl. v0.7.0)` (Oct 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
 [DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and
@@ -23,7 +32,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.8.0"
+llama-cpp-4 = "0.9.0"
 ```
 
 Import the common types with the prelude:
@@ -173,7 +182,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.8.0`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.9.0`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -683,6 +692,9 @@ use llama_cpp_4::token::LlamaToken;
 // Decode only new tokens (the delta) into the KV cache.
 // Withhold the last 2 tokens — BPE can retroactively change them
 // when the next character is typed.
+// `str_to_token` parses special tokens. For text a user typed, reach for
+// `str_to_token_with_special(.., Special::Plaintext)` — or `tokenize_prompt`
+// when the text came from a chat template render.
 let new_tokens = model.str_to_token(&user_text, AddBos::Always)?;
 let stable_end = new_tokens.len().saturating_sub(2); // BPE margin
 let common = find_common_prefix(&cached_tokens, &new_tokens[..stable_end]);
@@ -766,7 +778,7 @@ running the binary directly fails with `libggml-base.so.0: cannot open shared
 object file`. To sidestep runtime lookup entirely, link statically instead:
 
 ```toml
-llama-cpp-4 = { version = "0.8.0", default-features = false }
+llama-cpp-4 = { version = "0.9.0", default-features = false }
 ```
 
 ---
@@ -900,7 +912,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.8.0},
+  version   = {0.9.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

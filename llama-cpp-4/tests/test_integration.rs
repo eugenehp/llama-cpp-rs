@@ -436,3 +436,174 @@ fn integration_tensor_transactions_readwrite_commits() {
     // Non-retaining selector: the commit path ran, nothing is captured.
     assert!(transactions.captures().is_empty());
 }
+
+/// Warmup via `reserve_graph` must build a real graph: a non-zero node count,
+/// stable across repeated calls for the same shape, and the context must still
+/// decode correctly afterwards.
+#[test]
+fn integration_reserve_graph_warms_up_without_breaking_decode() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+
+    let mut ctx = model
+        .new_context(
+            backend(),
+            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(64)),
+        )
+        .unwrap();
+
+    let prefill = ctx.reserve_graph(32, 1, 1).expect("reserve prefill graph");
+    assert!(
+        prefill.n_nodes > 0,
+        "a reserved graph must contain nodes, got {prefill:?}"
+    );
+
+    let again = ctx.reserve_graph(32, 1, 1).expect("reserve again");
+    assert_eq!(
+        prefill.n_nodes, again.n_nodes,
+        "the same shape must measure the same"
+    );
+
+    // Single-token generation is the other shape worth reserving.
+    let decode_one = ctx.reserve_graph(1, 1, 1).expect("reserve decode graph");
+    assert!(decode_one.n_nodes > 0);
+
+    // The context must remain usable: warmup is not supposed to consume it.
+    let tokens = model.str_to_token("hi", AddBos::Always).unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
+    }
+    ctx.decode(&mut batch).expect("decode after warmup");
+}
+
+/// An `n_tokens` beyond the context's batch size has no graph, which must come
+/// back as an error carrying the shape rather than a panic or a null deref.
+#[test]
+fn integration_reserve_graph_reports_an_impossible_shape() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+
+    let mut ctx = model
+        .new_context(
+            backend(),
+            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(64)),
+        )
+        .unwrap();
+
+    // More outputs than tokens is not a shape any batch can have.
+    match ctx.reserve_graph(1, 1, u32::from(u16::MAX)) {
+        Err(e) => {
+            let rendered = e.to_string();
+            assert!(
+                rendered.contains(&u32::from(u16::MAX).to_string()),
+                "the error should name the shape it failed on: {rendered}"
+            );
+        }
+        // If a future llama.cpp clamps instead of failing, that is fine — but
+        // it must then hand back a real graph.
+        Ok(reservation) => assert!(reservation.n_nodes > 0),
+    }
+}
+
+/// `memory_buffer_count` goes through the `ext_shim` wrapper because bindgen
+/// mistypes the `std::vector`-returning original.
+///
+/// Upstream derives the count by running a state write, so an untouched cache
+/// legitimately reports zero and only a populated one reports buffers. Both
+/// halves are the documented contract, so pin both.
+#[test]
+fn integration_memory_buffer_count_tracks_whether_the_cache_holds_anything() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+
+    let mut ctx = model
+        .new_context(
+            backend(),
+            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(64)),
+        )
+        .unwrap();
+
+    assert_eq!(
+        ctx.memory_buffer_count(),
+        0,
+        "an untouched cache has nothing to write"
+    );
+
+    let tokens = model.str_to_token("hi there", AddBos::Always).unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
+    }
+    ctx.decode(&mut batch).unwrap();
+
+    assert!(
+        ctx.memory_buffer_count() > 0,
+        "a populated cache must report the buffers a save would touch"
+    );
+
+    ctx.clear_kv_cache();
+    assert_eq!(
+        ctx.memory_buffer_count(),
+        0,
+        "clearing the cache must bring the count back down"
+    );
+}
+
+/// The three graph-reuse counters added upstream must be readable and
+/// self-consistent: the two realloc counts cannot exceed the number of graph
+/// computations that happened.
+#[test]
+fn integration_perf_reports_graph_reuse_counters() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+
+    let mut ctx = model
+        .new_context(
+            backend(),
+            LlamaContextParams::default().with_n_ctx(NonZeroU32::new(64)),
+        )
+        .unwrap();
+
+    let tokens = model.str_to_token("hello", AddBos::Always).unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch
+            .add(tok, i as i32, &[0], i == tokens.len() - 1)
+            .unwrap();
+    }
+    ctx.decode(&mut batch).unwrap();
+
+    // A second decode of the same shape is the case graph reuse exists for.
+    batch.clear();
+    batch
+        .add(tokens[0], tokens.len() as i32, &[0], true)
+        .unwrap();
+    ctx.decode(&mut batch).unwrap();
+
+    let perf = ctx.timings();
+    let evals = perf.n_eval() + perf.n_p_eval();
+    assert!(evals > 0, "two decodes must register as evals");
+    assert!(
+        perf.n_reallocs_same() + perf.n_reallocs_diff() <= evals,
+        "reallocs ({} + {}) cannot exceed evals ({evals})",
+        perf.n_reallocs_same(),
+        perf.n_reallocs_diff()
+    );
+}

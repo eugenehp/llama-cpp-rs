@@ -132,6 +132,11 @@ struct chat_shim_apply_params {
 // is NUL-terminated, so a caller can read them without copying the whole thing.
 struct chat_shim_apply_result {
     size_t prompt_off;
+    // JSON array of `{"text", "is_input"}`, in order. `is_input` marks a span
+    // that came from user content, which must be tokenized *without*
+    // special-token parsing — otherwise a user typing `<|im_start|>` forges a
+    // role. Concatenating `text` reproduces the flattened `prompt_off`.
+    size_t prompt_parts_off;
     size_t grammar_off;
     // JSON array of `{"type", "value", "token"}` lazy-grammar triggers.
     size_t grammar_triggers_off;

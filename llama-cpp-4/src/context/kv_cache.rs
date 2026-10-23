@@ -18,6 +18,28 @@ pub enum KvCacheConversionError {
 }
 
 impl LlamaContext<'_> {
+    /// How many backend buffers a state write of this context's memory would
+    /// touch.
+    ///
+    /// `0` for an empty cache. Useful before
+    /// [`state_seq_save_file`](crate::context::LlamaContext::state_seq_save_file)
+    /// and friends: a KV cache spread across several backends is written buffer
+    /// by buffer, so the count is a proxy for how much work a save will be, and
+    /// a cache reporting zero has nothing to save yet.
+    ///
+    /// Wraps `llama_memory_get_buffers` through the `ext_shim`, because
+    /// upstream returns a `std::vector` by value and bindgen cannot express
+    /// that — see the note in `build.rs`.
+    #[must_use]
+    pub fn memory_buffer_count(&self) -> usize {
+        // SAFETY: the memory handle is borrowed from a live context, and a null
+        // `out` asks the shim for the count without writing anything.
+        unsafe {
+            let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
+            llama_cpp_sys_4::llama_memory_buffers_collect(mem, std::ptr::null_mut(), 0)
+        }
+    }
+
     /// Copy the cache from one sequence to another.
     ///
     /// # Parameters

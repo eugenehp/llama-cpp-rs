@@ -1,19 +1,20 @@
-//! Tests for `Q1_0` / `Q1_0_g128` quantization support (feature = "q1").
+//! Tests for `Q1_0` / `Q2_0` quantization support.
 //!
-//! Requires:
-//!   - the `q1` Cargo feature
-//!   - the Bonsai-1.7B GGUF model, pointed at by the `BONSAI_MODEL` env var
-//!     (defaults to `/Users/Shared/models/Bonsai-1.7B-gguf/Bonsai-1.7B.gguf`)
+//! The enum tests need nothing and run everywhere — they pin discriminants
+//! against `llama.h` and `ggml.h`, which is the only thing that catches a
+//! variant silently naming a different quantization. The model tests need the
+//! Bonsai-1.7B GGUF, pointed at by the `BONSAI_MODEL` env var (defaults to
+//! `/Users/Shared/models/Bonsai-1.7B-gguf/Bonsai-1.7B.gguf`), and skip
+//! without it.
 //!
-//! Run with:
-//!   cargo test -p llama-cpp-4 --features q1 --test `test_q1` -- --nocapture
+//! This file used to be `#![cfg(feature = "q1")]` in its entirety, so none of
+//! it ran under the default features — which is why the stale discriminants it
+//! asserted went unnoticed.
 
 // llama.cpp indexes batch positions and vocab entries with `i32` while Rust
 // collections use `usize`; the checkpoints under test are tiny, so these
 // casts cannot overflow.
 #![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
-
-#![cfg(feature = "q1")]
 
 use llama_cpp_4::{
     context::params::LlamaContextParams,
@@ -59,31 +60,31 @@ fn load() -> Option<LlamaModel> {
 static DECODE_LOCK: Mutex<()> = Mutex::new(());
 
 // ── enum / type tests (no model needed) ───────────────────────────────────────
+//
+// These used to pin `MostlyQ1_0_G128 = 41` and a `GgmlType` numbering in which
+// NVFP4 moved to 42 — the layout of this crate's own quantization patch. The
+// patch is gone and Q1_0 landed upstream with different values, so the tests
+// were asserting that the crate disagreed with llama.cpp. They now pin
+// upstream's numbering, which is what makes them worth having.
 
 #[test]
 fn ftype_q1_0_name() {
     assert_eq!(LlamaFtype::MostlyQ1_0.name(), "Q1_0");
-    assert_eq!(LlamaFtype::MostlyQ1_0_G128.name(), "Q1_0_g128");
+    assert_eq!(LlamaFtype::MostlyQ2_0.name(), "Q2_0");
 }
 
 #[test]
 fn ftype_q1_0_description() {
     let d0 = LlamaFtype::MostlyQ1_0.description();
-    let d128 = LlamaFtype::MostlyQ1_0_G128.description();
+    let d2 = LlamaFtype::MostlyQ2_0.description();
     assert!(d0.contains("1.5") || d0.contains("bpw"), "unexpected: {d0}");
-    assert!(
-        d128.contains("1.125") || d128.contains("bpw"),
-        "unexpected: {d128}"
-    );
+    assert!(d2.contains("2.0") || d2.contains("bpw"), "unexpected: {d2}");
 }
 
 #[test]
 fn ftype_q1_0_from_name_roundtrip() {
     assert_eq!(LlamaFtype::from_name("Q1_0"), Some(LlamaFtype::MostlyQ1_0));
-    assert_eq!(
-        LlamaFtype::from_name("Q1_0_g128"),
-        Some(LlamaFtype::MostlyQ1_0_G128)
-    );
+    assert_eq!(LlamaFtype::from_name("Q2_0"), Some(LlamaFtype::MostlyQ2_0));
     assert_eq!(LlamaFtype::from_name("q1_0"), Some(LlamaFtype::MostlyQ1_0));
 }
 
@@ -91,33 +92,41 @@ fn ftype_q1_0_from_name_roundtrip() {
 fn ftype_q1_0_in_all() {
     let all = LlamaFtype::all();
     assert!(all.contains(&LlamaFtype::MostlyQ1_0), "MostlyQ1_0 missing");
-    assert!(
-        all.contains(&LlamaFtype::MostlyQ1_0_G128),
-        "MostlyQ1_0_G128 missing"
-    );
+    assert!(all.contains(&LlamaFtype::MostlyQ2_0), "MostlyQ2_0 missing");
 }
 
+/// Pinned against `llama.h` and `ggml.h`: a wrong discriminant here silently
+/// quantizes to a different type, which no other test would catch.
 #[test]
 fn ftype_q1_0_numeric_values() {
+    // llama_ftype
+    assert_eq!(LlamaFtype::MostlyNVFP4 as u32, 39);
     assert_eq!(LlamaFtype::MostlyQ1_0 as u32, 40);
-    assert_eq!(LlamaFtype::MostlyQ1_0_G128 as u32, 41);
+    assert_eq!(LlamaFtype::MostlyQ2_0 as u32, 41);
 }
 
+/// `GgmlType` mirrors `ggml_type`, which numbers these differently from
+/// `llama_ftype` — NVFP4 is 39 as an ftype but 40 as a ggml type.
 #[test]
-fn ggml_type_q1_0_numeric_values() {
-    // Matches PrismML's GGUF format. NVFP4 is displaced to 42 in q1 builds.
-    assert_eq!(GgmlType::Q1_0 as u32, 40);
-    assert_eq!(GgmlType::Q1_0_G128 as u32, 41);
-    assert_eq!(GgmlType::NVFP4 as u32, 42);
+fn ggml_type_numeric_values_match_upstream() {
+    use llama_cpp_4::quantize::GgmlType;
+    assert_eq!(GgmlType::MXFP4 as u32, 39);
+    assert_eq!(GgmlType::NVFP4 as u32, 40);
+    assert_eq!(GgmlType::Q1_0 as u32, 41);
+    assert_eq!(GgmlType::Q2_0 as u32, 42);
 }
 
 #[test]
 fn ggml_type_q1_0_roundtrip() {
     use llama_cpp_sys_4::ggml_type;
-    let raw_q1_0: ggml_type = GgmlType::Q1_0.into();
-    let raw_q1_0_g128: ggml_type = GgmlType::Q1_0_G128.into();
-    assert_eq!(GgmlType::try_from(raw_q1_0), Ok(GgmlType::Q1_0));
-    assert_eq!(GgmlType::try_from(raw_q1_0_g128), Ok(GgmlType::Q1_0_G128));
+    for ty in [GgmlType::NVFP4, GgmlType::Q1_0, GgmlType::Q2_0] {
+        let raw: ggml_type = ty.into();
+        assert_eq!(
+            GgmlType::try_from(raw),
+            Ok(ty),
+            "round trip failed for {ty:?}"
+        );
+    }
 }
 
 // ── model loading ──────────────────────────────────────────────────────────────
@@ -140,7 +149,7 @@ fn model_architecture_is_qwen() {
 }
 
 #[test]
-fn model_ftype_is_q1_0_g128() {
+fn model_reports_its_file_type() {
     let Some(model) = load() else { return };
     let ftype = model
         .meta_val_str("general.file_type", 256)

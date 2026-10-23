@@ -483,14 +483,11 @@ fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
             .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
     }
 
-    if cfg!(feature = "q1") {
-        let name = "0001-q1-quantization.patch";
-        let source = patches_dir.join(name);
-        if source.exists() {
-            std::fs::copy(&source, staged_dir.join(name))
-                .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
-        }
-    }
+    // The `q1` feature used to stage `0001-q1-quantization.patch` here. Q1_0
+    // landed upstream (ftype 40, ggml type 41), the patch was deleted, and the
+    // `if source.exists()` guard quietly turned this into a no-op — so the
+    // feature looked alive while doing nothing. `q1` is now documented as a
+    // no-op in llama-cpp-4's manifest; there is nothing to stage.
 
     true
 }
@@ -1409,6 +1406,15 @@ const LLAMA_ENV_NOT_CMAKE_OPTIONS: &[&str] = &[
     // Read by the test suites and examples, not the build. Developers commonly
     // have it exported, and `-DLLAMA_TEST_MODEL=...` would be pure noise.
     "LLAMA_TEST_MODEL",
+    // `LLAMA_CONNECT=ON` makes cmake download a prebuilt `llama-connect`
+    // binary from a GitHub release *during the build*
+    // (llama.cpp tools/connect/CMakeLists.txt -> scripts/connect-download.cmake).
+    // Forwarding it would mean an environment variable could introduce a
+    // network fetch of a third-party executable into someone's build, which is
+    // not a decision an env var should make. `scripts/` is not packaged either,
+    // so it could not work from a published crate regardless. Enable it by
+    // editing the build script if you really want it.
+    "LLAMA_CONNECT",
 ];
 
 /// Normalise a configured value into something CMake understands.
@@ -1931,6 +1937,13 @@ fn main() {
         .allowlist_type("mtp_session")
         .allowlist_type("mtp_session_config")
         .allowlist_type("mtp_state_status")
+        .allowlist_function("llama_memory_buffers_collect")
+        // `llama_memory_get_buffers` returns `std::vector<ggml_backend_buffer_t>`
+        // by value. bindgen cannot represent that and silently emits
+        // `-> u8`, so the generated binding has the wrong ABI and calling it is
+        // undefined behaviour. Block it and use the `llama_memory_buffers_collect`
+        // shim above instead.
+        .blocklist_function("llama_memory_get_buffers")
         .allowlist_function("llama_memory_breakdown_collect")
         .allowlist_type("llama_memory_breakdown_entry")
         .allowlist_function("llama_quant_.*_guarded")

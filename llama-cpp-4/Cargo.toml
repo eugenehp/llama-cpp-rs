@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-4"
 description = "llama.cpp bindings for Rust"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 # The floor is set by the dependency graph, not by this crate's own syntax.
 # `llama-cpp-sys-4`'s `ureq` build-dependency pulls url -> idna -> icu_*, which
@@ -17,7 +17,7 @@ categories = ["api-bindings", "science"]
 
 [dependencies]
 enumflags2 = "0.7.12"
-llama-cpp-sys-4 = { path = "../llama-cpp-sys-4", version = "0.8.0" }
+llama-cpp-sys-4 = { path = "../llama-cpp-sys-4", version = "0.9.0" }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -26,7 +26,10 @@ encoding_rs = { workspace = true }
 criterion = { workspace = true }
 
 [features]
-default = ["openmp", "mtmd", "dynamic-link"]
+# `ggml` is free to enable: it gates Rust API only and appears nowhere in the
+# sys build script. `rpc` costs a GGML_RPC backend build on every downstream
+# build, and is on by request.
+default = ["openmp", "mtmd", "dynamic-link", "ggml", "rpc"]
 cuda = ["llama-cpp-sys-4/cuda"]
 metal = ["llama-cpp-sys-4/metal"]
 dynamic-link = ["llama-cpp-sys-4/dynamic-link"]
@@ -40,6 +43,9 @@ openmp = ["llama-cpp-sys-4/openmp"]
 rpc = ["llama-cpp-sys-4/rpc"]
 mtmd = ["llama-cpp-sys-4/mtmd"]
 ggml = []
+# Retained as a no-op so `--features q1` keeps resolving. Q1_0 quantization is
+# upstream now (ftype 40, ggml type 41) and unconditional, and the patch this
+# used to stage is gone — see the note on `GgmlType::Q1_0`.
 q1 = ["llama-cpp-sys-4/q1"]
 prebuilt = ["llama-cpp-sys-4/prebuilt"]
 

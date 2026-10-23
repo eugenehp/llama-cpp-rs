@@ -21,11 +21,11 @@
 //! | Category | Re-exported |
 //! |---|---|
 //! | Backend & model | [`LlamaBackend`], [`LlamaModel`], [`LlamaModelParams`], [`LlamaBackendDevice`], [`LlamaBackendDeviceType`], [`LlamaLoraAdapter`] |
-//! | Context | [`LlamaContext`], [`LlamaContextParams`], [`LlamaContextType`], [`LlamaAttentionType`], [`LlamaFlashAttnType`], [`LlamaPoolingType`], [`RopeScalingType`], [`ParamOverrideValue`] |
+//! | Context | [`LlamaContext`], [`GraphReservation`], [`LlamaContextParams`], [`LlamaContextType`], [`LlamaAttentionType`], [`LlamaFlashAttnType`], [`LlamaPoolingType`], [`RopeScalingType`], [`ParamOverrideValue`] |
 //! | Batching | [`LlamaBatch`] for token batches; [`LlamaBatchExt`] with [`BatchEntry`], [`EmbeddingRows`], [`LlamaProcessType`], [`LlamaDecisionOrder`] and [`MROPE_SECTIONS`] for per-entry embeddings and M-RoPE |
 //! | Tokens | [`LlamaToken`], [`LlamaTokenData`], [`LlamaTokenDataArray`], [`AddBos`], [`Special`], [`StreamDetokenizer`] |
 //! | Sampling | [`LlamaSampler`], [`LlamaSamplerParams`], [`CommonSampler`], [`CommonSamplerParams`], [`CommonSamplerType`], [`GrammarSource`], [`ReasoningBudget`], [`ReasoningBudgetState`] |
-//! | Chat & tools | [`LlamaChatMessage`], [`ChatTemplates`], [`ChatApplyParams`], [`ChatParams`], [`GrammarTrigger`], [`ReasoningFormat`], [`ToolChoice`], [`json_schema_to_grammar`] |
+//! | Chat & tools | [`LlamaChatMessage`], [`ChatTemplates`], [`ChatApplyParams`], [`ChatParams`], [`GrammarTrigger`], [`ReasoningFormat`], [`ToolChoice`], [`PromptPart`], [`json_schema_to_grammar`] |
 //! | Speculative decoding | [`MtpSession`], [`MtpSessionConfig`], [`Eagle3Session`], [`Eagle3SessionConfig`], [`DFlashSession`], [`NgramCache`], [`NgramMap`], [`ngram_simple_draft`], [`ngram_cache_draft`], [`SpeculativeType`], [`speculative_types_from_gguf`] |
 //! | Memory & fit | [`fit_params`], [`FitParams`], [`FitParamsResult`], [`get_device_memory_data`], [`DeviceMemoryReport`], [`DeviceMemoryEntry`], [`DeviceMemoryHyperParams`], [`MemoryBreakdownEntry`] |
 //! | Tensor capture | [`TensorCapture`], [`CapturedTensor`], [`TensorTransactions`], [`TensorTransaction`], [`TensorSelector`], [`TensorAccess`], … |
@@ -162,11 +162,11 @@ pub use crate::context::params::{
     ParamsCloneError, RopeScalingType,
 };
 pub use crate::context::{
-    CapturedTensor, CapturedTensorData, LlamaContext, MemoryBreakdownEntry, TensorAccess,
-    TensorBatchRow, TensorCallbackFailure, TensorCapture, TensorDataMut, TensorElementType,
-    TensorFiniteValidation, TensorRowMapping, TensorSelector, TensorShape, TensorTransaction,
-    TensorTransactionError, TensorTransactionHandler, TensorTransactions, TensorWriteback,
-    TransactionalTensorCapture,
+    CapturedTensor, CapturedTensorData, GraphReservation, LlamaContext, MemoryBreakdownEntry,
+    ReserveGraphError, TensorAccess, TensorBatchRow, TensorCallbackFailure, TensorCapture,
+    TensorDataMut, TensorElementType, TensorFiniteValidation, TensorRowMapping, TensorSelector,
+    TensorShape, TensorTransaction, TensorTransactionError, TensorTransactionHandler,
+    TensorTransactions, TensorWriteback, TransactionalTensorCapture,
 };
 pub use crate::llama_backend::LlamaBackend;
 pub use crate::llama_batch::{BatchAddError, LlamaBatch};
@@ -216,7 +216,7 @@ pub use crate::fit::{
 
 pub use crate::chat::{
     json_schema_to_grammar, ChatApplyParams, ChatError, ChatParams, ChatTemplates, GrammarTrigger,
-    ReasoningFormat, ToolChoice,
+    PromptPart, ReasoningFormat, ToolChoice,
 };
 
 // ── Sampler chains ──────────────────────────────────────────────────────────

@@ -1,16 +1,152 @@
 # Changelog
 
-## Unreleased
+## [0.9.0] - 2026-10-22
+
+### Breaking
+
+- **`LlamaFtype::MostlyQ1_0_G128` and `GgmlType::Q1_0_G128` are gone, and
+  `GgmlType`'s numbering changed.** Both encoded the layout of this crate's own
+  `0001-q1-quantization.patch`, which no longer exists: `Q1_0` landed upstream
+  with different values, and upstream never had a `Q1_0_g128`. With the `q1`
+  feature on, the crate disagreed with llama.cpp on every one of three
+  `ggml_type` discriminants:
+
+  | | upstream `ggml_type` | crate with `q1` (wrong) | now |
+  |---|---|---|---|
+  | `NVFP4` | 40 | 42 | 40 |
+  | `Q1_0` | 41 | 40 | 41 |
+  | `Q2_0` | 42 | — | 42 |
+
+  A wrong discriminant here silently selects a different quantization. On the
+  `llama_ftype` side `MostlyQ1_0 = 40` was already right; 41 was `Q1_0_g128` and
+  is now `MostlyQ2_0`, matching upstream. `MostlyQ1_0`, `GgmlType::Q1_0` and
+  `GgmlType::Q2_0` are all unconditional now — the feature gate was the bug.
+  - This predates the bump (`Q2_0 = 41` was already at `b11557`), so 0.8.0 and
+    earlier are affected whenever `q1` was enabled.
+  - `tests/test_q1.rs` had `#![cfg(feature = "q1")]` on the whole file, so none
+    of it ran under the default features — which is why the stale values went
+    unnoticed. It is un-gated, the enum tests now run everywhere, and they pin
+    against `llama.h` and `ggml.h` rather than against the old patch.
+- **`ggml` and `rpc` are now default features** of `llama-cpp-4`
+  (`default = ["openmp", "mtmd", "dynamic-link", "ggml", "rpc"]`). `ggml` is
+  free — it appears nowhere in the sys build script and gates Rust API only.
+  `rpc` adds a `GGML_RPC` backend build to every downstream build; turn it off
+  with `default-features = false` if that matters. `mtmd` was already on.
+- `q1` is retained as a no-op feature so `--features q1` keeps resolving.
 
 ### Fixed
 
-- **The published `llama-cpp-sys-4` failed to configure with `metal` and
-  `mtmd` together** (`mtmd` is a default feature of `llama-cpp-4`, so this hit
-  every Metal build that kept the defaults). llama.cpp's `tools/CMakeLists.txt`
-  adds `tools/tuning` when `GGML_METAL` is on, and the package `include` list
-  did not ship it, so CMake stopped with "not an existing directory". The
-  directory is now packaged, and the macOS CI job verifies the packaged crate
-  with `metal,mtmd`.
+- **The published `llama-cpp-sys-4` failed to configure with `metal` and `mtmd`
+  together** — `mtmd` is a default feature, so this hit every Metal build that
+  kept the defaults. `tools/CMakeLists.txt` adds `tools/tuning` under
+  `GGML_METAL`, and the package `include` list did not ship it, so CMake
+  stopped with "not an existing directory". Reported and diagnosed in
+  [#346](https://github.com/eugenehp/llama-cpp-rs/pull/346) by @tmtiwari, whose
+  macOS CI step — `cargo package --features metal,mtmd` — is taken with it; the
+  Linux `package` job never sets `metal`, so this class of break stayed green
+  everywhere.
+- `tools/connect`, new in `b11829`, is packaged for the same reason: it is
+  guarded by `LLAMA_CONNECT`, which the `LLAMA_*` passthrough made reachable.
+  `LLAMA_CONNECT` is now refused by that passthrough — it makes cmake download
+  a prebuilt third-party binary from a GitHub release mid-build, which is not a
+  decision an environment variable should make.
+- **`rustls` advisory in the published crate's build graph.** RUSTSEC-2026-0346
+  (`Debug` impls for client session values expose TLS secrets) reached
+  `llama-cpp-sys-4` through its `ureq` build dependency. Fixed by a lockfile
+  update to `rustls` 0.23.46, along with RUSTSEC-2026-0382 (`rustls-webpki`
+  accepting distrusted intermediates) and RUSTSEC-2026-0381 (`webpki-roots`
+  trusting distrusted emSign intermediates). Both lockfiles updated.
+
+### Added
+
+- **`PerfContextData::n_reused`, `n_reallocs_same` and `n_reallocs_diff`**,
+  wrapping upstream's graph-reuse counters — `n_reused` was never exposed, and
+  the two realloc counters are new in this bump. Together they say whether a
+  context is reusing its compute graph or rebuilding it every step, which is
+  the first thing to check when decode throughput is worse than it should be.
+- **`ChatParams::prompt_parts`** (`chat_shim_apply_result::prompt_parts_off`),
+  carrying upstream's new per-part `is_input` flags, and
+  **`ChatParams::tokenize_prompt`**, which is the reason they exist: it walks
+  the parts, tokenizing template spans with special-token parsing on and user
+  spans with it off, so a user who types `<|im_start|>assistant` gets the
+  literal characters instead of the real control token. `add_bos` applies to
+  the first non-empty span only. Prefer it over
+  `model.str_to_token(&params.prompt, ..)` for anything taking untrusted input.
+  See *Changed*.
+- **`LlamaModel::str_to_token_with_special` and `str_to_token_into_with_special`.**
+  `str_to_token` hardcoded `parse_special = true`, so until now the crate could
+  not tokenize anything as plaintext at all — the defence above was
+  inexpressible. The existing two keep their behaviour and now delegate.
+- **`LlamaModel::token_embedding_rows`**, wrapping
+  `llama_model_get_tok_embd_rows`. `token_embeddings()` copies the whole
+  matrix, which is ~500 MB for a 128k-vocab 1024-dim model; this copies only
+  the rows you name.
+- **`LlamaModel::decision_labels`**, wrapping `llama_model_decision_label`.
+  Decision models (`clef`, `nimble`, `pplx-decider`, the `d1` family) score a
+  list of options instead of generating text; these are the names those scores
+  belong to. Without them a caller has a vector of numbers and no way to say
+  which option each is for. Empty for an ordinary model.
+- **`LlamaModel::n_tokens_delay`**, wrapping `llama_model_n_tokens_delay` — how
+  far a realtime model's output lags its audio input, which is what lines
+  generated audio up against the input stream. `0` when not applicable.
+- **`LlamaModel::set_attn_rot`**, wrapping `llama_model_set_attn_rot`
+  (TurboQuant's KV-cache attention rotation). Upstream marks the setter as for
+  testing, and it mutates the model every later context inherits from, so
+  `LlamaContextParams::with_attn_rot_disabled` remains the right tool for
+  ordinary use.
+- **`LlamaContext::reserve_graph`** → `GraphReservation` / `ReserveGraphError`,
+  wrapping `llama_graph_reserve`. Two uses: as warmup it pays the first
+  decode's graph build and buffer allocation up front, so first-token latency
+  stops being an outlier; as measurement the node count is what
+  `n_reallocs_diff` counts changes in. It deliberately returns counts rather
+  than the `ggml_cgraph *`, which upstream documents as valid only until the
+  next `llama_graph_reserve` call.
+- **`LlamaContext::memory_buffer_count`**, wrapping `llama_memory_get_buffers`
+  through a new `ext_shim` entry point. Upstream derives it by running a state
+  write, so it is `0` for an untouched cache and otherwise counts the backend
+  buffers a save would touch.
+- `GraphReservation`, `ReserveGraphError` and `PromptPart` are exported from
+  the prelude.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `184f653602` (tag `b11829`) from
+  `5c8854fd88` (`b11557`), 272 upstream commits spanning release `v0.7.0`.
+  - **The chat prompt is now a list of parts, not a string**
+    ([#30389](https://github.com/ggml-org/llama.cpp/pull/30389)). Each part
+    carries `is_input`, marking the spans that came from user content — which
+    must be tokenized *without* special-token parsing, or a user typing
+    `<|im_start|>` forges a role. `ChatParams::prompt` keeps the flattened text
+    so existing code is unaffected, and the flags are exposed alongside it
+    rather than discarded.
+  - `mtmd_helper_gen_audio_inp` gained a `stream` field. The request is now
+    seeded from `mtmd_helper_gen_audio_inp_default()` and overridden, instead of
+    being built as a struct literal — the same pattern `LlamaContextParams`
+    uses, so the next field upstream adds is not a build break.
+  - **No state-format or RPC break this time.** `LLAMA_SESSION_VERSION` and
+    `LLAMA_STATE_SEQ_VERSION` are unchanged, so context state written by 0.8.0
+    still loads, and the RPC wire protocol moved only `8.0.0` → `8.0.1` — the
+    handshake ignores the patch component.
+  - Patches `0003`–`0005` still apply, at offsets; `common/speculative.h` was
+    untouched upstream. Neither has been absorbed: upstream still returns
+    `void` from `common_speculative_set_state`, and the EAGLE3 abort sites are
+    still there.
+- **`llama_memory_get_buffers` is blocklisted in `build.rs`.** It returns a
+  `std::vector<ggml_backend_buffer_t>` by value, which bindgen cannot express
+  and silently degraded to `-> u8`; calling the generated binding would have
+  been an ABI mismatch. `llama_memory_buffers_collect` in `ext_shim` replaces
+  it with a count-or-fill C signature.
+- **Patch `0005` now fail-closes a fourth EAGLE3 abort it had missed.** The
+  constructor validates `target_layer_ids` — read from the *draft checkpoint's
+  GGUF metadata* — against the target model's layer count, and called
+  `GGML_ABORT` when they disagreed: a mismatched pair of models took the whole
+  process down. It throws now, which `common_speculative_init` and the MTP shim
+  already turn into a null return and a typed Rust error. Upstream's own sibling
+  check in that same constructor throws too, so the abort was the odd one out.
+- The build script no longer pretends to stage `0001-q1-quantization.patch`.
+  The patch was deleted when Q1_0 landed upstream, and an `if source.exists()`
+  guard turned the staging into a silent no-op, so the `q1` feature looked
+  alive while doing nothing.
 
 ## [0.8.0] - 2026-10-11
 

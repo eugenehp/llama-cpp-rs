@@ -847,3 +847,147 @@ fn test_suppress_tokens_is_empty_or_in_range() {
         );
     }
 }
+
+// ============================================================
+// Newer upstream accessors
+// ============================================================
+
+/// The whole point of `token_embedding_rows` is avoiding
+/// `token_embeddings()`'s `n_vocab * n_embd` allocation, so it must return
+/// exactly the requested rows — and they must match what the full matrix has
+/// at those offsets.
+#[test]
+fn test_token_embedding_rows_match_the_full_matrix() {
+    let Some((_backend, model, vocab_only)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    if vocab_only {
+        eprintln!("SKIP: vocab-only model has no embedding tensor");
+        return;
+    }
+
+    let n_embd = model.n_embd() as usize;
+    let wanted = [LlamaToken(0), LlamaToken(7), LlamaToken(3)];
+    let rows = model
+        .token_embedding_rows(&wanted)
+        .expect("token embedding rows");
+    assert_eq!(rows.len(), wanted.len() * n_embd);
+
+    let full = model.token_embeddings().expect("token embedding matrix");
+    for (i, tok) in wanted.iter().enumerate() {
+        let from_row = &rows[i * n_embd..(i + 1) * n_embd];
+        let offset = tok.0 as usize * n_embd;
+        let from_full = &full[offset..offset + n_embd];
+        assert_eq!(
+            from_row, from_full,
+            "row {i} (token {tok:?}) disagrees with the full matrix"
+        );
+    }
+}
+
+#[test]
+fn test_token_embedding_rows_of_nothing_is_empty() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    assert!(model.token_embedding_rows(&[]).expect("empty").is_empty());
+}
+
+/// Upstream reports an out-of-range token by writing nothing, which must
+/// surface as an error rather than a buffer of zeros.
+#[test]
+fn test_token_embedding_rows_rejects_out_of_range_tokens() {
+    let Some((_backend, model, vocab_only)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    if vocab_only {
+        eprintln!("SKIP: vocab-only model has no embedding tensor");
+        return;
+    }
+    let past_end = LlamaToken(model.n_vocab());
+    assert!(
+        model.token_embedding_rows(&[past_end]).is_err(),
+        "a token past the end of the vocab must not succeed"
+    );
+}
+
+/// Not a decision model, so the contract is an empty list rather than a
+/// null-pointer walk.
+#[test]
+fn test_decision_labels_is_empty_for_an_ordinary_model() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    assert!(
+        model.decision_labels().is_empty(),
+        "a plain LM must report no decision labels"
+    );
+}
+
+/// Likewise `0` for a model that is not realtime.
+#[test]
+fn test_n_tokens_delay_is_zero_for_an_ordinary_model() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    assert_eq!(model.n_tokens_delay(), 0);
+}
+
+/// `set_attn_rot` mutates the model, so the only thing a test can assert
+/// without a `TurboQuant` checkpoint is that toggling it does not disturb
+/// tokenization or model metadata.
+#[test]
+fn test_set_attn_rot_toggles_without_disturbing_the_model() {
+    let Some((_backend, mut model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let before = model
+        .str_to_token("hello world", AddBos::Never)
+        .expect("tokenize");
+    model.set_attn_rot(false);
+    model.set_attn_rot(true);
+    let after = model
+        .str_to_token("hello world", AddBos::Never)
+        .expect("tokenize");
+    assert_eq!(before, after);
+}
+
+/// `str_to_token` must keep its historic behaviour — special tokens parsed —
+/// now that the parameter is threaded through rather than hardcoded.
+#[test]
+fn test_str_to_token_still_parses_special_tokens_by_default() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let default = model.str_to_token("<s>hi", AddBos::Never).expect("default");
+    let explicit = model
+        .str_to_token_with_special("<s>hi", AddBos::Never, Special::Tokenize)
+        .expect("explicit");
+    assert_eq!(default, explicit);
+}
+
+/// The `_into_` variant must fill the buffer with the same tokens as the
+/// allocating one, and must not append to whatever was already there.
+#[test]
+fn test_str_to_token_into_with_special_replaces_the_buffer() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let expected = model
+        .str_to_token_with_special("hello", AddBos::Never, Special::Plaintext)
+        .expect("allocating");
+
+    let mut buffer = vec![LlamaToken(123), LlamaToken(456)];
+    model
+        .str_to_token_into_with_special("hello", AddBos::Never, Special::Plaintext, &mut buffer)
+        .expect("into");
+    assert_eq!(buffer, expected, "stale contents must not survive");
+}

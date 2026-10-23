@@ -57,6 +57,19 @@ common_json strings_to_json(const std::vector<std::string> & v) {
     return arr;
 }
 
+// The prompt's parts as a JSON array of `{"text", "is_input"}`, in order.
+// Concatenating `text` reproduces `common_chat_prompt::str()`.
+common_json prompt_parts_to_json(const common_chat_prompt & prompt) {
+    auto arr = common_json::array();
+    for (const auto & part : prompt.parts) {
+        auto entry = common_json::object();
+        entry["text"]     = part.text;
+        entry["is_input"] = part.is_input;
+        arr.push_back(entry);
+    }
+    return arr;
+}
+
 const char * grammar_trigger_type_name(common_grammar_trigger_type type) {
     switch (type) {
         case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:        return "token";
@@ -252,9 +265,16 @@ int32_t chat_shim_templates_apply(
             triggers.push_back(entry);
         }
 
+        // Upstream turned `prompt` from a string into a list of parts, each
+        // flagged `is_input` for the spans that came from user content
+        // (llama.cpp #30389). `prompt_off` keeps the flattened text so the
+        // existing API is unchanged; `prompt_parts_off` below carries the flags,
+        // because tokenizing a user-supplied span with special-token parsing on
+        // is how a prompt injection forges a role.
         packer p;
         struct chat_shim_apply_result r {};
-        r.prompt_off             = p.add(applied.prompt);
+        r.prompt_off             = p.add(applied.prompt.str());
+        r.prompt_parts_off       = p.add(prompt_parts_to_json(applied.prompt).dump());
         r.grammar_off            = p.add(applied.grammar);
         r.grammar_triggers_off   = p.add(triggers.dump());
         r.preserved_tokens_off   = p.add(strings_to_json(applied.preserved_tokens).dump());

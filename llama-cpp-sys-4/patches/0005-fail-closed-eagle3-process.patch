@@ -1,5 +1,21 @@
 --- a/common/speculative.cpp
 +++ b/common/speculative.cpp
+@@ -604,7 +604,14 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
+             } else if (target_layer_ids[k] == n_layer_tgt) {
+                 llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+             } else {
+-                GGML_ABORT("EAGLE3: target layer id %d exceeds target n_layer %d", target_layer_ids[k], n_layer_tgt);
++                // `target_layer_ids` comes from the draft checkpoint's GGUF
++                // metadata, so a mismatch against the target model is bad
++                // input, not a broken invariant — and the sibling validation
++                // in this same constructor already throws. Aborting takes the
++                // whole process down for a recoverable "wrong pair of models".
++                throw std::runtime_error("EAGLE3: target layer id " +
++                        std::to_string(target_layer_ids[k]) + " exceeds target n_layer " +
++                        std::to_string(n_layer_tgt));
+             }
+         }
+ 
 @@ -613,7 +613,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                  ? llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k])
                  : llama_get_embeddings_nextn(ctx_tgt);

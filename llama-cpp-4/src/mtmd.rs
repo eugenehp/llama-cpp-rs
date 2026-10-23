@@ -2217,17 +2217,27 @@ impl<'ctx> MtmdAudioGen<'ctx> {
     ) -> Result<()> {
         let prompt = CString::new(request.prompt.as_str())?;
         let lang = request.lang.as_deref().map(CString::new).transpose()?;
-        let inp = sys::mtmd_helper_gen_audio_inp {
-            seq_id: request.seq_id,
-            prompt: prompt.as_ptr(),
-            prompt_len: request.prompt.len(),
-            speaker_ref: speaker_ref.map_or(std::ptr::null_mut(), |b| b.ptr.as_ptr()),
-            lang: lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
-            top_k: request.top_k,
-            top_p: request.top_p,
-            seed: request.seed,
-            out_type: request.out_type.as_raw(),
-        };
+        // Start from upstream's defaults and override, rather than naming every
+        // field: a struct literal here breaks on every field llama.cpp adds,
+        // which is how `stream` broke the b11829 bump. The same reason
+        // `LlamaContextParams` is seeded from `llama_context_default_params`.
+        //
+        // SAFETY: `mtmd_helper_gen_audio_inp_default` takes no arguments and
+        // returns a by-value POD struct.
+        let mut inp = unsafe { sys::mtmd_helper_gen_audio_inp_default() };
+        inp.seq_id = request.seq_id;
+        inp.prompt = prompt.as_ptr();
+        inp.prompt_len = request.prompt.len();
+        inp.speaker_ref = speaker_ref.map_or(std::ptr::null_mut(), |b| b.ptr.as_ptr());
+        inp.lang = lang.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        inp.top_k = request.top_k;
+        inp.top_p = request.top_p;
+        inp.seed = request.seed;
+        inp.out_type = request.out_type.as_raw();
+        // `stream` (new in b11829) requires `output()` after every `step_gen`.
+        // [`MtmdAudioGen`] collects the whole clip and reads it once, so leave
+        // it off regardless of what upstream defaults it to.
+        inp.stream = false;
         let rc = unsafe { sys::mtmd_helper_gen_audio_set_input(self.ptr.as_ptr(), &raw const inp) };
         if rc == 0 {
             Ok(())

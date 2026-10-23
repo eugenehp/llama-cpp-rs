@@ -408,7 +408,7 @@ checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "batched-bench"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "chat"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "cvector-generator"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1113,7 +1113,7 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "eagle"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1128,7 +1128,7 @@ checksum = "0e9c71c2167ca323c882b99918929403426e2373ea17242ff5653e0d5e1058be"
 
 [[package]]
 name = "embeddings"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1188,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "export-lora"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1220,7 +1220,7 @@ checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
 
 [[package]]
 name = "fit-params"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "imatrix"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1830,7 +1830,7 @@ checksum = "2d3a73c82a0b0747dba739b380c046a140b5ae747234bf701df3460282da7193"
 
 [[package]]
 name = "incremental-chat"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2044,7 +2044,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 
 [[package]]
 name = "llama-cpp-4"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "criterion",
  "encoding_rs",
@@ -2056,7 +2056,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-4"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bindgen",
  "cc",
@@ -2072,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "llama-jni"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "jni",
@@ -2193,7 +2193,7 @@ checksum = "1fafa6961cabd9c63bcd77a45d7e3b7f3b552b70417831fb0f56db717e72407e"
 
 [[package]]
 name = "mtmd"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "mtp"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2219,7 +2219,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "ngram"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2372,7 +2372,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "openai-server"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "actix-multipart",
  "actix-web",
@@ -2470,7 +2470,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "perplexity"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2573,7 +2573,7 @@ dependencies = [
 
 [[package]]
 name = "quantize"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2865,9 +2865,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -2930,9 +2930,9 @@ checksum = "eec689c0bc40ff2458a5977b6619cb718087084a18e02a131c599b62d05e1a5f"
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.15"
+version = "0.103.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c3cf1d8b1e7d4927e2d154c3fcb02979afb9939629c62cd9048d4f07b60ac2"
+checksum = "4443b1b6d39d7c663139942cc4558262562d2c84123bb6282ef177009ca8b281"
 dependencies = [
  "aws-lc-rs",
  "ring",
@@ -3189,7 +3189,7 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "simple"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3222,7 +3222,7 @@ dependencies = [
 
 [[package]]
 name = "split-model-example"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3260,7 +3260,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "structured"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3470,7 +3470,7 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokenize"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3735,7 +3735,7 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tts"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3745,7 +3745,7 @@ dependencies = [
 
 [[package]]
 name = "turbo-quant"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4011,9 +4011,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -4024,14 +4024,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

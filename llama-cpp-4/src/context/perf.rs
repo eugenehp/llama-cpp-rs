@@ -47,6 +47,12 @@ impl PerfContextData {
                 n_p_eval,
                 n_eval,
                 n_reused: 0,
+                // Upstream counters, added after this constructor's signature
+                // was fixed (llama.cpp b11829). They are only meaningful on a
+                // value read back from a context, so a hand-built one reports
+                // zero; see the accessors below.
+                n_reallocs_same: 0,
+                n_reallocs_diff: 0,
             },
         }
     }
@@ -119,6 +125,36 @@ impl PerfContextData {
     #[must_use]
     pub fn n_eval(&self) -> i32 {
         self.perf_context_data.n_eval
+    }
+
+    /// How many times llama.cpp reused a cached compute graph instead of
+    /// rebuilding it.
+    ///
+    /// Graph reuse is the fast path. A low count against a high
+    /// [`Self::n_eval`] means something is invalidating the graph every step —
+    /// a changing batch shape, or toggling a context flag mid-generation.
+    #[must_use]
+    pub fn n_reused(&self) -> i32 {
+        self.perf_context_data.n_reused
+    }
+
+    /// Graph reallocations where the graph size was unchanged.
+    ///
+    /// These should be rare: the shape did not change, so the buffers should
+    /// have been reusable. A climbing count points at allocator churn rather
+    /// than at your batching.
+    #[must_use]
+    pub fn n_reallocs_same(&self) -> i32 {
+        self.perf_context_data.n_reallocs_same
+    }
+
+    /// Graph reallocations where the graph size changed.
+    ///
+    /// Expected whenever the batch shape moves — a prefill of a different
+    /// length, or switching between prompt and single-token decode.
+    #[must_use]
+    pub fn n_reallocs_diff(&self) -> i32 {
+        self.perf_context_data.n_reallocs_diff
     }
 
     /// Set the start time in milliseconds.
