@@ -994,6 +994,8 @@ fn macos_link_search_path(clang_binary: &str) -> Option<String> {
 fn cmake_system_name(target: &str) -> &'static str {
     if target.contains("-android") || target.contains("android-") {
         "Android"
+    } else if is_emscripten_target(target) {
+        "Emscripten"
     } else if target.contains("-apple-ios") {
         "iOS"
     } else if target.contains("-apple-") {
@@ -1065,12 +1067,29 @@ fn command_exists(cmd: &str) -> bool {
 /// thread-local error buffer — that all of them share. Separate libraries would
 /// each get their own copy, and `llama_shim_last_error()` would report whatever
 /// the *linker* happened to pick.
-fn compile_shims(manifest_dir: &Path, llama_dst: &Path) {
+fn compile_shims(manifest_dir: &Path, llama_dst: &Path, target: &str) {
     // `shim_support` must come first: it defines the storage the others
     // reference.
-    const SHIM_DIRS: &[&str] = &["shim_support", "ext_shim", "mtp_shim", "chat_shim", "common_shim"];
+    const SHIM_DIRS: &[&str] = &[
+        "shim_support",
+        "ext_shim",
+        "mtp_shim",
+        "chat_shim",
+        "common_shim",
+    ];
 
     let mut build = cc::Build::new();
+    if is_emscripten_target(target) {
+        // The `cc` crate would otherwise pick the host compiler; the shims have
+        // to be built by the same toolchain that built the archives they call
+        // into, or the objects are not even the same architecture.
+        build.compiler(emsdk_tool("em++"));
+        build.archiver(emsdk_tool("emar"));
+        // `cc` emits `-l stdc++` for an unrecognised C++ target. Emscripten
+        // supplies libc++ through the toolchain and has no libstdc++ at all, so
+        // the flag only makes the final link fail on a missing library.
+        build.cpp_link_stdlib(None);
+    }
     build
         .cpp(true)
         .std("c++17")
@@ -1101,7 +1120,6 @@ fn compile_shims(manifest_dir: &Path, llama_dst: &Path) {
     }
 }
 
-
 fn apple_vulkan_available() -> bool {
     let has_glslc = command_exists("glslc");
 
@@ -1120,6 +1138,287 @@ fn apple_vulkan_available() -> bool {
         || lib_dir.join("libMoltenVK.dylib").exists();
 
     has_glslc && header_ok && lib_ok
+}
+
+/// True for the Emscripten targets, the only way to reach a browser from this
+/// crate.
+///
+/// `wasm32-unknown-unknown` is deliberately *not* included: it has no libc,
+/// libc++, pthreads or filesystem, all four of which llama.cpp requires. A
+/// build for it would fail deep inside cmake with no useful message, so
+/// [`reject_unsupported_wasm_target`] refuses it up front instead.
+fn is_emscripten_target(target: &str) -> bool {
+    target.contains("emscripten")
+}
+
+/// Root of the Emscripten SDK, from `EMSDK`.
+///
+/// `emsdk_env.sh` exports this; it is the one variable every emsdk layout
+/// agrees on, which is why it is preferred over probing for `emcc` on `PATH`.
+fn emsdk_root() -> PathBuf {
+    let root = env::var("EMSDK").unwrap_or_else(|_| {
+        panic!(
+            "building for a wasm target needs the Emscripten SDK, but EMSDK is not set.\n\
+             Install it and source the environment:\n\
+            \x20   git clone https://github.com/emscripten-core/emsdk.git\n\
+            \x20   cd emsdk && ./emsdk install latest && ./emsdk activate latest\n\
+            \x20   source ./emsdk_env.sh"
+        )
+    });
+    let root = PathBuf::from(root);
+    if !root.join("upstream/emscripten").is_dir() {
+        panic!(
+            "EMSDK points at {}, which does not look like an emsdk checkout \
+             (no upstream/emscripten). Re-run `source ./emsdk_env.sh`.",
+            root.display()
+        );
+    }
+    root
+}
+
+/// Path to a tool inside the active Emscripten toolchain, e.g. `em++`.
+fn emsdk_tool(name: &str) -> PathBuf {
+    emsdk_root().join("upstream/emscripten").join(name)
+}
+
+/// Reject the wasm targets and feature combinations that cannot work, with a
+/// message that says what to do instead.
+///
+/// Every one of these otherwise fails somewhere inside cmake, bindgen or the
+/// linker, where the real cause is unrecoverable from the output.
+fn reject_unsupported_wasm_target(target: &str) {
+    if !target.starts_with("wasm") {
+        return;
+    }
+
+    if !is_emscripten_target(target) {
+        panic!(
+            "{target} is not supported. llama.cpp needs libc, libc++, pthreads \
+             and a filesystem, none of which this target provides.\n\
+             Use --target wasm32-unknown-emscripten instead."
+        );
+    }
+
+    // Each of these needs something a browser tab does not have. Driving them
+    // off one table keeps `cfg!` out of a bare `assert!`, which clippy reads as
+    // a constant assertion.
+    const fn na(
+        enabled: bool,
+        feature: &'static str,
+        why: &'static str,
+    ) -> Option<(&'static str, &'static str)> {
+        if enabled {
+            Some((feature, why))
+        } else {
+            None
+        }
+    }
+
+    let unsupported = [
+        na(
+            cfg!(feature = "metal"),
+            "metal",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "cuda"),
+            "cuda",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "hip"),
+            "hip",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "vulkan"),
+            "vulkan",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "opencl"),
+            "opencl",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "blas"),
+            "blas",
+            "no BLAS library is available; the CPU backend uses wasm SIMD instead",
+        ),
+        na(
+            cfg!(feature = "openmp"),
+            "openmp",
+            "Emscripten has no OpenMP runtime; llama.cpp uses pthreads there",
+        ),
+        na(
+            cfg!(feature = "dynamic-link"),
+            "dynamic-link",
+            "Emscripten builds static archives only, and there is no dynamic loader",
+        ),
+        na(
+            cfg!(feature = "rpc"),
+            "rpc",
+            "it needs raw sockets, which a browser tab cannot open",
+        ),
+        na(
+            cfg!(feature = "prebuilt"),
+            "prebuilt",
+            "no wasm artifacts are published; build from source",
+        ),
+    ];
+
+    let offenders: Vec<String> = unsupported
+        .iter()
+        .flatten()
+        .map(|(feature, why)| format!("  - `{feature}`: {why}"))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "these features cannot target {target}:\n{}\n\
+         Build with --no-default-features and add back only what applies.",
+        offenders.join("\n")
+    );
+}
+
+/// The triple to hand libclang for bindgen, which is not always the Rust one.
+///
+/// bindgen drops almost every function declaration when libclang is pointed at
+/// a wasm triple — it still emits the constants, typedefs and structs, with
+/// correct wasm32 layout, so the failure is silent and the crate only breaks
+/// later with hundreds of unresolved imports. Reproducible with a four-line C
+/// header and `-xc`, on both Apple and LLVM 22 libclang, so it is neither this
+/// crate's headers nor a missing sysroot.
+///
+/// `armv7-unknown-linux-gnueabihf` is used to parse instead. It is the one
+/// common triple that agrees with wasm32 on the whole ABI that matters here:
+/// 32-bit pointers, 32-bit `long`, and — unlike `i686`, which gets this wrong
+/// — 8-byte alignment for `double`. Diffing every layout assertion bindgen
+/// produces for the two triples over this crate's `wrapper.h` leaves 12
+/// differences out of 1709, all of them libc++ internals and `__int128`
+/// (`max_align_t`, `std::__locale_guard`, `std::chrono` specializations) that
+/// llama.cpp's C API never exposes.
+fn bindgen_clang_target(target: &str) -> String {
+    if is_emscripten_target(target) {
+        return "armv7-unknown-linux-gnueabihf".to_owned();
+    }
+    target.to_owned()
+}
+
+/// The include directories `em++` itself searches, in order.
+///
+/// bindgen drives libclang directly, so none of emcc's implicit flags apply and
+/// the headers have to be passed explicitly. Hardcoding them is not an option:
+/// the list contains the clang resource directory (`upstream/lib/clang/<ver>/
+/// include`), whose version changes with every emsdk release, and the `compat`
+/// and `fakesdl` shim directories that libc++ relies on — `<xlocale.h>` is only
+/// reachable through `compat`. So ask the compiler.
+fn emscripten_include_dirs() -> Vec<PathBuf> {
+    let emxx = emsdk_tool("em++");
+    let output = std::process::Command::new(&emxx)
+        .args(["-v", "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"])
+        .output();
+
+    let mut dirs = Vec::new();
+    if let Ok(output) = output {
+        // The list arrives on stderr between two marker lines.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut in_list = false;
+        for line in stderr.lines() {
+            if line.starts_with("#include <...> search starts here") {
+                in_list = true;
+                continue;
+            }
+            if line.starts_with("End of search list") {
+                break;
+            }
+            if in_list {
+                let path = PathBuf::from(line.trim());
+                if path.is_dir() {
+                    dirs.push(path);
+                }
+            }
+        }
+    }
+
+    if dirs.is_empty() {
+        // Fall back to the documented layout, minus the versioned clang dir we
+        // cannot guess. Enough for the llama.cpp headers in practice.
+        println!(
+            "cargo:warning=could not read the include path from {}; \
+             falling back to the default emsdk layout",
+            emxx.display()
+        );
+        let sysroot = emsdk_root().join("upstream/emscripten/cache/sysroot");
+        for sub in [
+            "include/fakesdl",
+            "include/compat",
+            "include/c++/v1",
+            "include",
+        ] {
+            let path = sysroot.join(sub);
+            if path.is_dir() {
+                dirs.push(path);
+            }
+        }
+    }
+
+    debug_log!("Emscripten include dirs: {dirs:?}");
+    dirs
+}
+
+/// Configure cmake to cross-compile to wasm through the Emscripten SDK.
+fn configure_emscripten(config: &mut cmake::Config, target: &str) {
+    let emsdk = emsdk_root();
+    let toolchain = emsdk.join("upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake");
+    assert!(
+        toolchain.is_file(),
+        "Emscripten toolchain file missing at {}",
+        toolchain.display()
+    );
+    debug_log!("Emscripten toolchain: {}", toolchain.display());
+    config.define("CMAKE_TOOLCHAIN_FILE", &toolchain);
+
+    // Emscripten.cmake sets CMAKE_SYSTEM_PROCESSOR from this, *after* the cache
+    // is initialised — so a plain -DCMAKE_SYSTEM_PROCESSOR is overwritten and
+    // ends up as "x86". ggml's CPU backend then tests
+    // `CMAKE_SYSTEM_PROCESSOR MATCHES "wasm"`, which never matches, and falls
+    // back to GGML_CPU_GENERIC — silently dropping its own hand-written wasm
+    // SIMD kernels (ggml-cpu/arch/wasm/quants.c). Setting the variable the
+    // toolchain file actually reads is what keeps them in the build.
+    config.define(
+        "EMSCRIPTEN_SYSTEM_PROCESSOR",
+        if target.starts_with("wasm64") {
+            "wasm64"
+        } else {
+            "wasm32"
+        },
+    );
+
+    // llama.cpp defaults LLAMA_WASM_MEM64=ON, which compiles the C++ side as
+    // wasm64. Rust has no stable wasm64 target, so the two would disagree on
+    // pointer width and could not be linked. This caps weights + KV cache +
+    // runtime at the wasm32 address space.
+    if !target.starts_with("wasm64") {
+        config.define("LLAMA_WASM_MEM64", "OFF");
+    }
+
+    // Emscripten forces static libraries, and these three need an OS that a
+    // browser does not provide: an OpenMP runtime, a TLS stack, and process
+    // spawning. Upstream already defaults LLAMA_SUBPROCESS off here; set it
+    // explicitly so a stale cache cannot reintroduce it.
+    config.define("BUILD_SHARED_LIBS", "OFF");
+    config.define("GGML_OPENMP", "OFF");
+    config.define("LLAMA_OPENSSL", "OFF");
+    config.define("LLAMA_SUBPROCESS", "OFF");
+
+    // `-march=native` is meaningless for wasm and makes clang error out.
+    config.define("GGML_NATIVE", "OFF");
+
+    // Grow the heap on demand rather than reserving a fixed block up front: a
+    // model load is the single largest allocation and its size is not known
+    // until the GGUF header is read.
+    config.define("CMAKE_EXE_LINKER_FLAGS", "-sALLOW_MEMORY_GROWTH=1");
 }
 
 /// Map a Rust target triple to the CMake `CMAKE_SYSTEM_PROCESSOR` value.
@@ -1662,6 +1961,10 @@ fn main() {
     let target = env::var("TARGET").unwrap();
     let host = env::var("HOST").unwrap();
     let is_cross = host != target;
+
+    // Fail fast and explain, rather than deep inside cmake or the linker.
+    reject_unsupported_wasm_target(&target);
+    let is_emscripten = is_emscripten_target(&target);
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let target_dir = get_cargo_target_dir().unwrap();
@@ -1879,7 +2182,7 @@ fn main() {
         // When cross-compiling, tell libclang/bindgen the target triple so
         // that layout, pointer sizes, and type widths are computed for the
         // *target* architecture rather than the host.
-        .clang_arg(format!("--target={}", target))
+        .clang_arg(format!("--target={}", bindgen_clang_target(&target)))
         // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
         .clang_arg(format!("-I{}", llama_dst.join("include").display()))
         .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
@@ -2010,6 +2313,26 @@ fn main() {
         "cargo:rerun-if-changed={}",
         Path::new(&manifest_dir).join("shim_support").display()
     );
+
+    // libclang does not know where Emscripten keeps its headers, so without
+    // these it cannot find <string> / <stdint.h> and every parse fails.
+    // `-nostdinc`/`-nostdinc++` stop it from also reaching for the *host*
+    // headers, which would otherwise mix two libc++ versions.
+    if is_emscripten {
+        let sysroot = emsdk_root().join("upstream/emscripten/cache/sysroot");
+        builder = builder.clang_arg(format!("--sysroot={}", sysroot.display()));
+        for dir in emscripten_include_dirs() {
+            // Skip the clang resource directory: those are builtin headers
+            // (stdbool.h, stddef.h, …) tied to emsdk's clang version, and
+            // bindgen runs a *different* libclang. Mixing the two produces
+            // declarations libclang quietly discards. Its own builtins are
+            // already on the path.
+            if dir.components().any(|c| c.as_os_str() == "clang") {
+                continue;
+            }
+            builder = builder.clang_arg(format!("-I{}", dir.display()));
+        }
+    }
 
     // Add RPC support if feature is enabled
     if cfg!(feature = "rpc") {
@@ -2170,6 +2493,10 @@ fn main() {
             if target.contains("linux") {
                 println!("cargo:rustc-link-lib=dylib=stdc++");
             }
+            if is_emscripten_target(&target) {
+                println!("cargo:rustc-link-lib=c++");
+                println!("cargo:rustc-link-lib=c++abi");
+            }
             if target.contains("windows") && !target.contains("msvc") {
                 println!("cargo:rustc-link-lib=static=stdc++");
                 println!("cargo:rustc-link-lib=static=winpthread");
@@ -2227,7 +2554,7 @@ fn main() {
                 }
             }
 
-            compile_shims(Path::new(&manifest_dir), &llama_dst);
+            compile_shims(Path::new(&manifest_dir), &llama_dst, &target);
             return;
         }
 
@@ -2384,7 +2711,7 @@ fn main() {
     // When building for a different target than the host, tell CMake the
     // target system so that it does not auto-detect the host as the target.
     // Android is handled separately below via its NDK toolchain file.
-    if is_cross && !target.contains("android") {
+    if is_cross && !target.contains("android") && !is_emscripten {
         let system_name = cmake_system_name(&target);
         let system_processor = cmake_system_processor(&target);
         debug_log!("Cross-compiling: CMAKE_SYSTEM_NAME={system_name} CMAKE_SYSTEM_PROCESSOR={system_processor}");
@@ -2621,6 +2948,10 @@ fn main() {
         config.define("CMAKE_CXX_FLAGS", "-march=armv8.7a");
         config.define("GGML_OPENMP", "OFF");
         config.define("GGML_LLAMAFILE", "OFF");
+    }
+
+    if is_emscripten {
+        configure_emscripten(&mut config, &target);
     }
 
     let mut enable_metal = cfg!(feature = "metal");
@@ -2945,7 +3276,7 @@ fn main() {
         }
     }
 
-    compile_shims(Path::new(&manifest_dir), &llama_dst);
+    compile_shims(Path::new(&manifest_dir), &llama_dst, &target);
 
     // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
     // This can happen even without the "openmp" feature because cmake's FindOpenMP
@@ -2994,6 +3325,15 @@ fn main() {
         } else {
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
+    }
+
+    // rustc links Emscripten targets through `emcc`, the C driver. `em++` would
+    // add the C++ runtime on its own; `emcc` does not, so without these every
+    // `operator new` / `std::__2::*` reference in ggml and llama comes out
+    // undefined at `wasm-ld` time.
+    if is_emscripten_target(&target) {
+        println!("cargo:rustc-link-lib=c++");
+        println!("cargo:rustc-link-lib=c++abi");
     }
 
     // Windows MinGW (GCC-based, not MSVC): link the C++ and threading runtimes.

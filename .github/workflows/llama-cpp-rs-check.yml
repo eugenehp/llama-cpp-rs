@@ -417,3 +417,112 @@ jobs:
         run: cargo test -p llama-cpp-4 --test test_integration -- --test-threads=1
       - name: sccache stats
         run: sccache --show-stats || true
+
+  wasm:
+    name: Check that it builds and runs as WebAssembly
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev bc
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins the channel, so the target has to be added to
+      # the toolchain cargo actually resolves to — the action's `targets:` input
+      # installs into `stable`, which is not it.
+      - name: Add the wasm target to the pinned toolchain
+        run: rustup target add wasm32-unknown-emscripten
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+      - name: Fetch test model
+        run: ./scripts/fetch-test-model.sh
+
+      # Catches the mistakes that are invisible from a host build: a feature
+      # that cannot work in a browser, a cmake flag the Emscripten toolchain
+      # overrides, and bindgen silently emitting no functions.
+      - name: Build llama-cpp-sys-4 for wasm
+        run: cargo build --target wasm32-unknown-emscripten -p llama-cpp-sys-4 --no-default-features
+      - name: Build llama-cpp-4 for wasm
+        run: cargo build --target wasm32-unknown-emscripten -p llama-cpp-4 --no-default-features
+
+      # bindgen generates constants and types for wasm but drops every function
+      # declaration, and does so without an error — the crate then fails much
+      # later with hundreds of unresolved imports. `build.rs` works around it by
+      # parsing with a layout-compatible triple; this is the regression test for
+      # that workaround still producing a usable binding set.
+      - name: Assert the bindings contain functions
+        run: |
+          set -euo pipefail
+          BINDINGS=$(find target/wasm32-unknown-emscripten -name bindings.rs | head -1)
+          COUNT=$(grep -c 'pub fn ' "$BINDINGS")
+          echo "generated $COUNT function bindings"
+          if [[ "$COUNT" -lt 500 ]]; then
+            echo "::error::only $COUNT function bindings for wasm (expected >500);" \
+                 "bindgen is likely dropping them again"
+            exit 1
+          fi
+
+      - name: Build the static wasm demo
+        run: ./examples/wasm/build.sh
+
+      # The decisive check: the wasm actually loads a GGUF out of MEMFS and
+      # decodes, through the same factory/FS/callMain path index.html uses.
+      - name: Run inference in wasm
+        run: |
+          set -euo pipefail
+          OUT=$(node target/wasm-dist/harness.cjs \
+            target/test-models/stories260K.gguf "Once upon a time" 16)
+          echo "$OUT"
+          grep -q "Once upon a time" <<<"$OUT"
+
+
+      # The harness above exercises the wasm module but never the page. This
+      # drives a real Chrome over CDP: file:// with the file picker (the
+      # no-server claim) and http:// with the bundled-sample button (the hosted
+      # demo). Chrome is preinstalled on the GitHub runners.
+      - name: Start headless Chrome
+        run: |
+          google-chrome --headless=new --remote-debugging-port=9222 \
+            --user-data-dir=$(mktemp -d) --no-first-run --no-default-browser-check \
+            --disable-gpu --no-sandbox about:blank &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9222/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -s http://127.0.0.1:9222/json/version | head -2
+
+      - name: Test in a browser (file://, file picker)
+        run: |
+          cp target/test-models/stories260K.gguf target/wasm-dist/
+          node examples/wasm/browser-test.cjs \
+            "file://$PWD/target/wasm-dist/index.html" \
+            "$PWD/target/wasm-dist/stories260K.gguf" picker
+
+      - name: Test in a browser (http://, bundled sample)
+        run: |
+          (cd target/wasm-dist && python3 -m http.server 8731 &) 
+          for i in $(seq 1 20); do curl -sf http://127.0.0.1:8731/index.html >/dev/null && break; sleep 1; done
+          node examples/wasm/browser-test.cjs "http://127.0.0.1:8731/index.html" "" sample
+
+      - name: Upload the demo
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-demo
+          path: target/wasm-dist/
+          if-no-files-found: error
+
+      - name: sccache stats
+        run: sccache --show-stats || true

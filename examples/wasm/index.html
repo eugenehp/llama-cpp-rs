@@ -1,0 +1,137 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>llama-cpp-4 in WebAssembly</title>
+<style>
+  body { font: 14px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+         max-width: 46rem; margin: 2rem auto; padding: 0 1rem; color: #18181b; }
+  h1 { font-size: 1.25rem; }
+  #out { white-space: pre-wrap; background: #f4f4f5; padding: 1rem;
+         border-radius: .375rem; min-height: 7rem; }
+  label { display: block; margin: .9rem 0 .25rem; font-weight: 600; }
+  input, button { font: inherit; padding: .4rem .6rem; }
+  input[type=text], input[type=number] { width: 100%; box-sizing: border-box; }
+  button { cursor: pointer; }
+  button:disabled { cursor: default; opacity: .5; }
+  .note { color: #52525b; font-size: .85rem; }
+  .warn { color: #92400e; background: #fef3c7; padding: .5rem .75rem; border-radius: .25rem; }
+</style>
+
+<h1>llama-cpp-4 &rarr; WebAssembly</h1>
+<p class="note">
+  Everything runs in this tab. No server, no upload &mdash; the model you pick
+  never leaves your machine.
+</p>
+
+<label for="model">GGUF model</label>
+<input id="model" type="file" accept=".gguf">
+<p><button id="sample" disabled>or load the bundled sample (stories260K, 1.1&nbsp;MB)</button></p>
+<p class="note" id="modelnote">
+  Small models only: this is a 32-bit WebAssembly build, so weights, KV cache
+  and runtime share one ~2&nbsp;GB address space. A 260K&ndash;1B parameter
+  GGUF is the right ballpark.
+</p>
+
+<label for="prompt">Prompt</label>
+<input id="prompt" type="text" value="Once upon a time">
+
+<label for="n">Tokens to generate</label>
+<input id="n" type="number" value="24" min="1" max="512">
+
+<p><button id="run" disabled>Generate</button></p>
+<div id="out">loading WebAssembly…</div>
+
+<script src="llama-wasm.js"></script>
+<script>
+  const out    = document.getElementById('out');
+  const run    = document.getElementById('run');
+  const picker = document.getElementById('model');
+
+  const sample = document.getElementById('sample');
+
+  let mod = null;        // the instantiated wasm module
+  let modelPath = null;
+  let lines = [];
+
+  const render = () => { out.textContent = lines.join('\n'); };
+  const setRunnable = () => { run.disabled = !(mod && modelPath); };
+
+  // `createLlama` comes from -sMODULARIZE/-sEXPORT_NAME and resolves once the
+  // runtime is ready, so there is no onRuntimeInitialized callback to race.
+  createLlama({
+    noInitialRun: true,
+    print:    (t) => { lines.push(t); render(); },
+    printErr: (t) => console.log('[llama]', t),
+  }).then((m) => {
+    mod = m;
+    out.textContent = 'ready \u2014 choose a .gguf file.';
+    sample.disabled = false;
+    setRunnable();
+  }).catch((e) => {
+    out.textContent = 'failed to start WebAssembly: ' + e;
+  });
+
+  // Mount a GGUF already in memory.
+  const mount = (name, bytes) => {
+    modelPath = '/' + name;
+    try {
+      mod.FS.writeFile(modelPath, bytes);
+      out.textContent = `${name} mounted at ${modelPath} (${(bytes.length / 1048576).toFixed(1)} MB).`;
+    } catch (e) {
+      modelPath = null;
+      out.textContent = 'could not mount the model: ' + e
+        + '\n(most likely out of memory \u2014 try a smaller GGUF)';
+    }
+    setRunnable();
+  };
+
+  // Convenience for the hosted demo. This is the one thing on the page that
+  // needs a network request, so it is a separate button rather than something
+  // that runs on load: opened from file://, the fetch is blocked and the file
+  // picker is the only route.
+  sample.onclick = async () => {
+    sample.disabled = true;
+    out.textContent = 'fetching stories260K.gguf\u2026';
+    try {
+      const res = await fetch('stories260K.gguf');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      mount('stories260K.gguf', new Uint8Array(await res.arrayBuffer()));
+    } catch (e) {
+      out.textContent = 'could not fetch the sample model: ' + e
+        + '\n\nThis works on the hosted demo. Opened from a file:// URL the '
+        + 'browser blocks the request \u2014 use the file picker above instead.';
+    }
+    sample.disabled = false;
+  };
+
+  picker.onchange = async () => {
+    const file = picker.files[0];
+    if (!file || !mod) return;
+    out.textContent = `reading ${file.name} (${(file.size / 1048576).toFixed(1)} MB)\u2026`;
+    // MEMFS keeps this copy in the same linear memory the weights load into, so
+    // a model costs roughly twice its size here. Fine for small GGUFs; for
+    // anything large, mount the File through WORKERFS from a Worker instead,
+    // which reads it in place rather than copying.
+    mount(file.name, new Uint8Array(await file.arrayBuffer()));
+  };
+
+  run.onclick = () => {
+    lines = [];
+    out.textContent = 'generating\u2026';
+    run.disabled = true;
+    // callMain is synchronous and this build has no threads, so the tab is
+    // blocked while it decodes. Yield once so the message above paints.
+    setTimeout(() => {
+      try {
+        mod.callMain([
+          modelPath,
+          document.getElementById('prompt').value,
+          String(document.getElementById('n').value),
+        ]);
+      } catch (e) {
+        lines.push('failed: ' + e);
+        render();
+      }
+      setRunnable();
+    }, 0);
+  };
+</script>

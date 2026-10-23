@@ -1,0 +1,195 @@
+name: Publish the WebAssembly demo
+
+# Three ways in:
+#   - a `v*` tag        → attach the demo to that release
+#   - a push to main    → refresh the hosted demo
+#   - manual dispatch   → rebuild either, on demand
+#
+# The build is one job; publishing is split so a tag gets a release asset and
+# main gets the live page, without building twice.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths:
+      - 'examples/wasm/**'
+      - 'llama-cpp-4/**'
+      - 'llama-cpp-sys-4/**'
+      - '.github/workflows/wasm-demo.yml'
+  workflow_dispatch:
+    inputs:
+      deploy_pages:
+        description: Publish to GitHub Pages
+        type: boolean
+        default: true
+      tag:
+        description: Existing tag to attach the demo to (optional)
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # release assets
+  pages: write      # deploy
+  id-token: write   # Pages uses OIDC
+
+# A later push should win rather than queue behind an older one, but never
+# cancel a tag build that is producing a release asset.
+concurrency:
+  group: wasm-demo-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    name: Build the static demo
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+
+      - name: Install Compile Deps
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev bc
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: dtolnay/rust-toolchain@stable
+      # rust-toolchain.toml pins the channel, so the target must be added to the
+      # toolchain cargo resolves to rather than to `stable`.
+      - name: Add the wasm target to the pinned toolchain
+        run: rustup target add wasm32-unknown-emscripten
+      - name: Install Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+          actions-cache-folder: emsdk-cache
+
+      - name: Build
+        run: ./examples/wasm/build.sh
+
+      # Never publish a demo that cannot run. The harness drives the same
+      # factory → MEMFS → callMain path the page uses.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          ./scripts/fetch-test-model.sh
+          OUT=$(node target/wasm-dist/harness.cjs \
+            target/test-models/stories260K.gguf "Once upon a time" 16)
+          echo "$OUT"
+          grep -q "Once upon a time" <<<"$OUT"
+
+      # The page asks for a model, so ship a tiny one people can try
+      # immediately instead of making them find a GGUF first.
+      - name: Include the sample model
+        run: cp target/test-models/stories260K.gguf target/wasm-dist/
+
+
+      # The harness above exercises the wasm module but never the page. This
+      # drives a real Chrome over CDP: file:// with the file picker (the
+      # no-server claim) and http:// with the bundled-sample button (the hosted
+      # demo). Chrome is preinstalled on the GitHub runners.
+      - name: Start headless Chrome
+        run: |
+          google-chrome --headless=new --remote-debugging-port=9222 \
+            --user-data-dir=$(mktemp -d) --no-first-run --no-default-browser-check \
+            --disable-gpu --no-sandbox about:blank &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:9222/json/version >/dev/null && break
+            sleep 1
+          done
+          curl -s http://127.0.0.1:9222/json/version | head -2
+
+      - name: Test in a browser (file://, file picker)
+        run: |
+          cp target/test-models/stories260K.gguf target/wasm-dist/
+          node examples/wasm/browser-test.cjs \
+            "file://$PWD/target/wasm-dist/index.html" \
+            "$PWD/target/wasm-dist/stories260K.gguf" picker
+
+      - name: Test in a browser (http://, bundled sample)
+        run: |
+          (cd target/wasm-dist && python3 -m http.server 8731 &) 
+          for i in $(seq 1 20); do curl -sf http://127.0.0.1:8731/index.html >/dev/null && break; sleep 1; done
+          node examples/wasm/browser-test.cjs "http://127.0.0.1:8731/index.html" "" sample
+
+      - name: Record what this build is
+        run: |
+          set -euo pipefail
+          cd target/wasm-dist
+          {
+            echo "ref:          ${{ github.ref_name }}"
+            echo "commit:       ${{ github.sha }}"
+            echo "built:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "llama.cpp:    $(git -C "$GITHUB_WORKSPACE/llama-cpp-sys-4/llama.cpp" rev-parse --short HEAD)"
+            echo "emscripten:   $(emcc --version | head -1)"
+          } > BUILD-INFO.txt
+          cat BUILD-INFO.txt
+
+      - name: Package for release
+        run: tar -czf llama-wasm-demo.tar.gz -C target/wasm-dist .
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-demo
+          path: target/wasm-dist/
+          if-no-files-found: error
+
+      - name: Upload tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-demo-tarball
+          path: llama-wasm-demo.tar.gz
+          if-no-files-found: error
+
+      - name: Prepare the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/wasm-dist/
+
+      - name: sccache stats
+        run: sccache --show-stats || true
+
+  release:
+    name: Attach the demo to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-demo-tarball
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.tag }}"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                 --title "$TAG" --notes "WebAssembly demo for $TAG"
+          gh release upload "$TAG" llama-wasm-demo.tar.gz \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+  pages:
+    name: Deploy the hosted demo
+    needs: build
+    # Tags refresh the page too, so the hosted demo tracks the latest release
+    # rather than whatever last landed on main.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_pages)
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deploy
+        uses: actions/deploy-pages@v4

@@ -24,6 +24,7 @@ members = [
     "examples/mtp",
     "examples/ngram",
     "examples/eagle",
+    "examples/wasm",
     "android/llama-jni",
 ]
 

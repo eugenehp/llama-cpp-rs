@@ -1,0 +1,24 @@
+[package]
+name = "wasm-example"
+version = "0.9.0"
+edition = "2021"
+description = "Example: running llama-cpp-4 in a browser via WebAssembly"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[[bin]]
+name = "llama-wasm"
+path = "src/main.rs"
+
+[dependencies]
+# No `default-features`: the defaults pull in openmp, dynamic-link and rpc,
+# none of which exist under Emscripten. `build.rs` rejects them explicitly.
+llama-cpp-4 = { path = "../../llama-cpp-4", default-features = false }
+anyhow = { workspace = true }
+
+[features]
+# GPU through WebGPU. Needs the emdawnwebgpu port, so it is opt-in.
+webgpu = ["llama-cpp-4/webgpu"]
+
+[lints]
+workspace = true
