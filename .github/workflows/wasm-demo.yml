@@ -135,14 +135,14 @@ jobs:
         run: tar -czf llama-wasm-demo.tar.gz -C target/wasm-dist .
 
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-demo
           path: target/wasm-dist/
           if-no-files-found: error
 
       - name: Upload tarball
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-demo-tarball
           path: llama-wasm-demo.tar.gz
