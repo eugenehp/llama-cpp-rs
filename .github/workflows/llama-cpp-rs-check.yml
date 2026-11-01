@@ -438,7 +438,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run:
-          sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev bc
+          sudo apt-get update && sudo apt-get install -y build-essential pkg-config cmake ninja-build git libclang-dev
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.11
       - uses: dtolnay/rust-toolchain@stable

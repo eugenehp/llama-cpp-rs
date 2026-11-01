@@ -75,10 +75,18 @@ cp "$OUT/llama-wasm.js" "$DIST/"
 [[ -f "$OUT/llama_wasm.wasm" && "$MODE" == node ]] && cp "$OUT/llama_wasm.wasm" "$DIST/"
 [[ "$MODE" == static ]] && cp "$HERE/index.html" "$HERE/harness.cjs" "$DIST/"
 
+# `stat` is not portable: BSD/macOS wants `-f%z`, GNU wants `-c%s`, and the
+# uutils build on the CI runners rejects the BSD form outright. `wc -c` is
+# POSIX and needs no dialect check; awk does the division so `bc` is not
+# needed either.
+file_size_mb() {
+  awk -v bytes="$(wc -c < "$1")" 'BEGIN { printf "%.2f", bytes / 1048576 }'
+}
+
 echo
 echo "dist: $DIST"
 for f in "$DIST"/*; do
-  printf '  %8.2f MB  %s\n' "$(echo "scale=2; $(stat -f%z "$f")/1048576" | bc)" "$(basename "$f")"
+  printf '  %8s MB  %s\n' "$(file_size_mb "$f")" "$(basename "$f")"
 done
 
 echo
