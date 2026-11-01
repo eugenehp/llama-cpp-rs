@@ -448,7 +448,7 @@ jobs:
       - name: Add the wasm target to the pinned toolchain
         run: rustup target add wasm32-unknown-emscripten
       - name: Install Emscripten
-        uses: mymindstorm/setup-emsdk@v14
+        uses: mymindstorm/setup-emsdk@v16
         with:
           version: latest
           actions-cache-folder: emsdk-cache
