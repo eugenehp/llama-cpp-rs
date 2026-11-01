@@ -523,7 +523,7 @@ jobs:
           node examples/wasm/browser-test.cjs "http://127.0.0.1:8731/index.html" "" sample
 
       - name: Upload the demo
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-demo
           path: target/wasm-dist/
