@@ -842,7 +842,9 @@ fn explicit_max_tokens_is_honoured_with_tools() {
         }),
         200,
     );
-    let used = body["usage"]["completion_tokens"].as_u64().unwrap_or(u64::MAX);
+    let used = body["usage"]["completion_tokens"]
+        .as_u64()
+        .unwrap_or(u64::MAX);
     assert!(used <= 16, "asked for 16 tokens, got {used}");
 }
 

@@ -1,5 +1,106 @@
 # Changelog
 
+## [0.10.0] - 2026-11-01
+
+### Breaking
+
+- **`SamplerInitError` gained a variant**, `TooManyDrySequenceBreakers`. The
+  enum is not `#[non_exhaustive]` — matching the convention of this crate's
+  other error types — so an exhaustive `match` on it needs a new arm.
+- **`ChatParams::caps_json` values are no longer all booleans.** Upstream
+  changed `common_chat_templates_get_caps` from
+  `std::map<std::string, bool>` to a `common_json`, so the object can now
+  carry richer types. It is still a JSON object; code that deserialized it as
+  a map of bools needs widening.
+
+### Added
+
+- **`MtmdContext::capabilities`** → `MtmdCapabilities`, wrapping
+  `mtmd_helper_get_capabilities`. Replaces the two single-purpose predicates
+  upstream deprecated in `b12032` and reports six more besides — notably
+  whether the model *generates* audio and whether it accepts a speaker
+  reference for voice cloning, neither of which was previously expressible.
+  It is keyed on the model rather than a context, matching upstream.
+- **`LlamaSampler::try_dry`**, with `DRY_MAX_SEQ_BREAKERS` and
+  `DRY_MAX_BREAKER_LEN`. llama.cpp keeps only the first 64 *distinct*
+  sequence breakers, logs a warning and drops the rest — so a caller passing
+  more gets a valid sampler that is quietly not the one they configured.
+  `try_dry` refuses instead, counting breakers the way llama.cpp does
+  (truncate to 40 bytes, drop empties, de-duplicate — in that order, so two
+  breakers differing only past byte 40 are one). `dry` is unchanged.
+- **`MtmdAudioGen::next_is_text` and `::logit_bias`** (`b12032`). Interleaved
+  pipelines alternate between text and audio steps; `next_is_text` says which
+  comes next, and `logit_bias` is what stops a text-only response switching to
+  audio mid-sentence. Sampling without the bias can produce a token the
+  pipeline cannot act on.
+- **`MtmdBitmap::set_is_video`**, split out upstream in `b12032`. A
+  video-capable model needs this *and* `set_mergeable` on every frame;
+  `MtmdVideo::read_next` already sets both, so this is for frames you build
+  yourself.
+- **`GgmlType::F8E4M3` and `LlamaFtype::MostlyF8E4M3`** (`ggml_type` 43,
+  `llama_ftype` 42), new upstream 8-bit float quantization.
+
+### Fixed
+
+- **`LlamaFtype::try_from` could not resolve the newest file types.** It
+  resolves through `all()`, and a variant missing from that list is simply
+  unconvertible — the raw ftype comes back as an error and a model quantized
+  that way looks unreadable. `MostlyF8E4M3` is listed, and a new test walks
+  every variant through the round trip so the next addition cannot repeat it.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `dde879bc4f` (tag `b12032`) from
+  `184f653602` (`b11829`), 203 upstream commits spanning release `v0.8.0`.
+  - **No state-format or RPC break.** `LLAMA_SESSION_VERSION`,
+    `LLAMA_STATE_SEQ_VERSION` and the RPC wire protocol (`8.0.1`) are all
+    unchanged, so context state written by 0.9.0 still loads and existing
+    `rpc-server` peers still work.
+  - `common_chat_templates_get_caps` now returns a `common_json` instead of a
+    `std::map<std::string, bool>`. The shim no longer rebuilds the map into an
+    object — the values are no longer all bools, which is why upstream changed
+    it. `ChatParams::caps_json` is unaffected; it still yields a JSON object.
+  - `mtmd_helper_gen_audio_inp` gained a `no_soundtrack` field. No build break:
+    the request has been seeded from `mtmd_helper_gen_audio_inp_default()`
+    since 0.9.0 precisely so that added fields are not breaking changes.
+  - Patches `0003`–`0005` still apply in sequence; `common/speculative.h` saw
+    only a comment change. None has been absorbed upstream.
+- **Three more C++-by-value functions are blocklisted in `build.rs`.**
+  `b12032` added architecture queries to `llama-ext.h` that traffic in C++
+  types: `llama_arch_all` returns `std::vector<llm_arch>` (bindgen degraded it
+  to `-> u8`), `llama_arch_kv_name` returns `std::string` by value, and
+  `llama_arch_from_string` takes a `const std::string &`. All three are ABI
+  mismatches, the same class as `llama_memory_get_buffers`. `llama_arch_name`
+  and `llama_arch_supports_sm_tensor` take and return plain C types and are
+  left alone.
+
+- **The `openai-server` example no longer pulls in `zstd`.** `actix-web`'s
+  default features include `compress-zstd`, which carried four unfixed
+  advisories (RUSTSEC-2026-0391/0398/0403/0410) whose fixes need semver-major
+  bumps that `actix-http`'s `zstd ^0.13` pin blocks. The server negotiates
+  gzip and brotli and never used zstd, so the dependency is dropped rather
+  than the advisory suppressed. Neither published crate was ever affected —
+  `zstd` reached the workspace only through this example.
+
+- **`main` would not build: `Cargo.lock` paired bindgen with a `syn` that
+  `prettyplease` disagreed with.** bindgen 0.73 declares
+  `prettyplease = ">=0.2.7, <0.4"` and `syn = ">=2, <4"` and lets cargo resolve
+  them independently — prettyplease 0.2 is built on syn 2 and 0.3 on syn 3, so
+  cargo is free to hand bindgen syn 2 alongside prettyplease 0.3, which cannot
+  compile. Ordinary lockfile churn flips it, and it has flipped more than once.
+  The failure surfaces inside bindgen's own source
+  (`the trait bound syn::file::File: ParseQuote is not satisfied`) with nothing
+  pointing at the lockfile, after roughly twenty minutes of CI.
+  `scripts/check-bindgen-syn.sh` now compares the two majors straight out of
+  `Cargo.lock` and says what to run; the `check` job calls it before anything
+  compiles, so the same breakage costs seconds and names its own cause.
+
+### Deprecated
+
+- **`MtmdContext::supports_video` and `::model_can_chat`**, following upstream's
+  deprecation of `mtmd_helper_support_video` and `mtmd_helper_model_can_chat`.
+  Both still work; use `capabilities(model).video` and `.chat`.
+
 ## [0.9.0] - 2026-10-22
 
 ### Breaking

@@ -96,9 +96,8 @@ impl ToolChoice {
     pub fn parse_oaicompat(value: &str) -> Result<Self, ChatError> {
         let c_value = CString::new(value)?;
         let mut raw: i32 = 0;
-        let status = unsafe {
-            sys::chat_shim_tool_choice_parse_oaicompat(c_value.as_ptr(), &raw mut raw)
-        };
+        let status =
+            unsafe { sys::chat_shim_tool_choice_parse_oaicompat(c_value.as_ptr(), &raw mut raw) };
         check_status(status)?;
         Self::from_raw(raw).ok_or_else(|| ChatError::Failed(format!("unknown tool_choice {raw}")))
     }
@@ -253,7 +252,11 @@ impl ChatTemplates {
         let messages = CString::new(params.messages_json.as_str())?;
         let tools = params.tools_json.as_deref().map(CString::new).transpose()?;
         let grammar = params.grammar.as_deref().map(CString::new).transpose()?;
-        let schema = params.json_schema.as_deref().map(CString::new).transpose()?;
+        let schema = params
+            .json_schema
+            .as_deref()
+            .map(CString::new)
+            .transpose()?;
         let kwargs = params
             .template_kwargs_json
             .as_deref()
@@ -795,9 +798,7 @@ impl ChatParams {
         else {
             return Vec::new();
         };
-        let starts_with_space = self
-            .generation_prompt
-            .starts_with(char::is_whitespace);
+        let starts_with_space = self.generation_prompt.starts_with(char::is_whitespace);
         let mut out = Vec::with_capacity(tokens.len());
         for (i, token) in tokens.into_iter().enumerate() {
             if i == 0 && !starts_with_space {
@@ -1167,12 +1168,18 @@ mod tests {
 
     #[test]
     fn tool_choice_parses_openai_values() {
-        assert_eq!(ToolChoice::parse_oaicompat("auto").unwrap(), ToolChoice::Auto);
+        assert_eq!(
+            ToolChoice::parse_oaicompat("auto").unwrap(),
+            ToolChoice::Auto
+        );
         assert_eq!(
             ToolChoice::parse_oaicompat("required").unwrap(),
             ToolChoice::Required
         );
-        assert_eq!(ToolChoice::parse_oaicompat("none").unwrap(), ToolChoice::None);
+        assert_eq!(
+            ToolChoice::parse_oaicompat("none").unwrap(),
+            ToolChoice::None
+        );
     }
 
     #[test]
@@ -1197,8 +1204,7 @@ mod tests {
 
     #[test]
     fn messages_parse_oaicompat_roundtrips_a_simple_turn() {
-        let normalised =
-            parse_messages_oaicompat(r#"[{"role":"user","content":"hi"}]"#).unwrap();
+        let normalised = parse_messages_oaicompat(r#"[{"role":"user","content":"hi"}]"#).unwrap();
         assert!(normalised.contains("user"), "got {normalised}");
         assert!(normalised.contains("hi"), "got {normalised}");
     }

@@ -361,7 +361,9 @@ mod tests {
         };
         let types = speculative_types_from_gguf(&path.to_string_lossy()).unwrap();
         assert!(
-            types.iter().all(|t| t.name().unwrap_or_default() != "draft-eagle3"),
+            types
+                .iter()
+                .all(|t| t.name().unwrap_or_default() != "draft-eagle3"),
             "a plain model should not advertise EAGLE-3: {types:?}"
         );
     }

@@ -195,12 +195,11 @@ int32_t chat_shim_templates_get_caps(
         return LLAMA_SHIM_INVALID_ARG;
     }
     return guard([&]() -> int32_t {
-        const auto caps = common_chat_templates_get_caps(tmpls->ptr.get());
-        auto obj = common_json::object();
-        for (const auto & [name, value] : caps) {
-            obj[name] = value;
-        }
-        return emit(obj.dump(), out_buf, out_len, expected_len);
+        // Upstream returns a `common_json` object directly now; it used to be a
+        // `std::map<std::string, bool>` this had to rebuild into one. The
+        // values are no longer all bools, which is why the map is gone.
+        const common_json caps = common_chat_templates_get_caps(tmpls->ptr.get());
+        return emit(caps.dump(), out_buf, out_len, expected_len);
     });
 }
 

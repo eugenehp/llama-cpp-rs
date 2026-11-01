@@ -14,7 +14,11 @@
 // llama.cpp indexes batch positions and vocab entries with `i32` while Rust
 // collections use `usize`; the checkpoints under test are tiny, so these
 // casts cannot overflow.
-#![allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss
+)]
 
 use llama_cpp_4::{
     context::params::LlamaContextParams,
@@ -103,6 +107,12 @@ fn ftype_q1_0_numeric_values() {
     assert_eq!(LlamaFtype::MostlyNVFP4 as u32, 39);
     assert_eq!(LlamaFtype::MostlyQ1_0 as u32, 40);
     assert_eq!(LlamaFtype::MostlyQ2_0 as u32, 41);
+    assert_eq!(LlamaFtype::MostlyF8E4M3 as u32, 42);
+
+    assert_eq!(
+        LlamaFtype::MostlyF8E4M3 as u32,
+        llama_cpp_sys_4::LLAMA_FTYPE_MOSTLY_F8_E4M3
+    );
 }
 
 /// `GgmlType` mirrors `ggml_type`, which numbers these differently from
@@ -114,12 +124,24 @@ fn ggml_type_numeric_values_match_upstream() {
     assert_eq!(GgmlType::NVFP4 as u32, 40);
     assert_eq!(GgmlType::Q1_0 as u32, 41);
     assert_eq!(GgmlType::Q2_0 as u32, 42);
+    assert_eq!(GgmlType::F8E4M3 as u32, 43);
+
+    // The whole point of pinning: these mirror `ggml.h`, and a wrong value here
+    // silently selects a different quantization rather than failing. Assert
+    // against the generated bindings so upstream renumbering cannot slip past.
+    assert_eq!(GgmlType::F8E4M3 as u32, llama_cpp_sys_4::GGML_TYPE_F8_E4M3);
+    assert_eq!(GgmlType::Q2_0 as u32, llama_cpp_sys_4::GGML_TYPE_Q2_0);
 }
 
 #[test]
 fn ggml_type_q1_0_roundtrip() {
     use llama_cpp_sys_4::ggml_type;
-    for ty in [GgmlType::NVFP4, GgmlType::Q1_0, GgmlType::Q2_0] {
+    for ty in [
+        GgmlType::NVFP4,
+        GgmlType::Q1_0,
+        GgmlType::Q2_0,
+        GgmlType::F8E4M3,
+    ] {
         let raw: ggml_type = ty.into();
         assert_eq!(
             GgmlType::try_from(raw),
@@ -335,4 +357,29 @@ fn autoregressive_generation() {
         output.chars().any(char::is_alphanumeric),
         "output has no alphanum: {output:?}"
     );
+}
+
+/// `LlamaFtype::try_from` resolves through `all()`, so a variant missing from
+/// that list is simply unconvertible — the raw ftype comes back as an error and
+/// a model quantized that way looks unreadable. Nothing else catches it, since
+/// the variant itself compiles fine.
+#[test]
+fn every_ftype_variant_is_listed_in_all() {
+    use llama_cpp_4::quantize::LlamaFtype;
+    for ftype in LlamaFtype::all() {
+        let raw: llama_cpp_sys_4::llama_ftype = (*ftype).into();
+        assert_eq!(
+            LlamaFtype::try_from(raw),
+            Ok(*ftype),
+            "{ftype:?} does not round-trip through all()"
+        );
+    }
+    // The newest additions are the ones most likely to have been forgotten.
+    for (raw, want) in [(41, LlamaFtype::MostlyQ2_0), (42, LlamaFtype::MostlyF8E4M3)] {
+        assert_eq!(
+            LlamaFtype::try_from(raw as llama_cpp_sys_4::llama_ftype),
+            Ok(want),
+            "ftype {raw} must resolve"
+        );
+    }
 }

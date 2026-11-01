@@ -3,7 +3,6 @@
 // the whole crate body, and a doc comment placed after it goes with it —
 // leaving an undocumented crate that trips `missing_docs`.
 #![cfg(feature = "ggml")]
-
 // Results are exactly-representable values (integers and halves) produced by
 // exact f32 operations — add, scale by 2.5, and a view. An epsilon comparison
 // here would weaken the tests without making them more correct.

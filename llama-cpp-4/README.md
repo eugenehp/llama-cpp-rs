@@ -13,7 +13,7 @@ reliable, multimodal input (`mtmd`), speculative decoding including MTP and
 EAGLE3, quantization, LoRA, RPC, and tensor capture, alongside the usual
 tokenize / decode / sample loop.
 
-**llama.cpp version:** `184f653602 (b11829, incl. v0.7.0)` · **Crate version:** 0.9.0
+**llama.cpp version:** `dde879bc4f (b12032, incl. v0.8.0)` · **Crate version:** 0.10.0
 
 ---
 
@@ -21,12 +21,12 @@ tokenize / decode / sample loop.
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.9.0"
+llama-cpp-4 = "0.10.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.9.0", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.9.0", features = ["metal"] }
-# llama-cpp-4 = { version = "0.9.0", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.10.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.10.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.10.0", features = ["vulkan"] }
 ```
 
 ---

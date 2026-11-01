@@ -87,7 +87,11 @@ where
     }
 
     let mut buf = vec![0u8; needed];
-    let status = call(buf.as_mut_ptr().cast::<c_char>(), buf.len(), &raw mut needed);
+    let status = call(
+        buf.as_mut_ptr().cast::<c_char>(),
+        buf.len(),
+        &raw mut needed,
+    );
     check_status(status)?;
 
     // Trim at the NUL the shim wrote rather than trusting `needed`, which the
@@ -153,7 +157,8 @@ mod tests {
         // so a renumbering upstream would map one failure onto another.
         assert_eq!(sys::LLAMA_SHIM_OK, 0);
         assert_eq!(
-            sys::LLAMA_SHIM_BUFFER_TOO_SMALL, 1,
+            sys::LLAMA_SHIM_BUFFER_TOO_SMALL,
+            1,
             "a size query is not a failure, so it must be positive"
         );
         assert_eq!(sys::LLAMA_SHIM_INVALID_ARG, -1);

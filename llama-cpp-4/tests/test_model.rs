@@ -759,7 +759,6 @@ fn test_dry_sampler() {
     assert_eq!(sampler.name(), "dry");
 }
 
-
 // ============================================================
 // Named chat templates, ftype, embeddings, suppress tokens
 // ============================================================
@@ -792,7 +791,9 @@ fn test_chat_template_unknown_name_is_error() {
         eprintln!("SKIP: no test model available");
         return;
     };
-    assert!(model.chat_template(Some("definitely_not_a_template")).is_err());
+    assert!(model
+        .chat_template(Some("definitely_not_a_template"))
+        .is_err());
 }
 
 #[test]

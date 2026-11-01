@@ -1,7 +1,7 @@
 [package]
 name = "llama-cpp-sys-4"
 description = "Low Level Bindings to llama.cpp"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 # The floor is set by the dependency graph, not by this crate's own syntax.
 # `llama-cpp-sys-4`'s `ureq` build-dependency pulls url -> idna -> icu_*, which

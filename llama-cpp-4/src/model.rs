@@ -11,8 +11,8 @@ use std::slice;
 use llama_cpp_sys_4::{
     llama_adapter_lora, llama_adapter_lora_init, llama_chat_apply_template,
     llama_chat_builtin_templates, llama_chat_message, llama_detokenize, llama_init_from_model,
-    llama_model, llama_model_cls_label, llama_model_decoder_start_token, llama_model_desc,
-    llama_model_chat_template, llama_model_free, llama_model_ftype, llama_model_get_device,
+    llama_model, llama_model_chat_template, llama_model_cls_label, llama_model_decoder_start_token,
+    llama_model_desc, llama_model_free, llama_model_ftype, llama_model_get_device,
     llama_model_get_tok_embd, llama_model_get_vocab, llama_model_has_decoder,
     llama_model_has_encoder, llama_model_is_diffusion, llama_model_is_hybrid,
     llama_model_is_recurrent, llama_model_load_from_file, llama_model_load_from_splits,

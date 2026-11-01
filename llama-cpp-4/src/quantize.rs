@@ -113,6 +113,8 @@ pub enum LlamaFtype {
     // `Q1_0_g128`, so the old variant named a type that does not exist while
     // sitting on a value that means something else.
     MostlyQ2_0 = 41,
+    /// `F8_E4M3` – 8-bit float (except 1d tensors)
+    MostlyF8E4M3 = 42,
 }
 
 impl LlamaFtype {
@@ -156,6 +158,7 @@ impl LlamaFtype {
             Self::MostlyNVFP4 => "NVFP4",
             Self::MostlyQ1_0 => "Q1_0",
             Self::MostlyQ2_0 => "Q2_0",
+            Self::MostlyF8E4M3 => "F8_E4M3",
         }
     }
 
@@ -199,6 +202,7 @@ impl LlamaFtype {
             Self::MostlyNVFP4 => "NVFP4",
             Self::MostlyQ1_0 => " 1.50 bpw — binary Q1_0 (block 32)",
             Self::MostlyQ2_0 => " 2.00 bpw — binary Q2_0",
+            Self::MostlyF8E4M3 => " 8.00 bpw — float8 e4m3",
         }
     }
 
@@ -250,6 +254,7 @@ impl LlamaFtype {
             "NVFP4" => Some(Self::MostlyNVFP4),
             "Q1_0" => Some(Self::MostlyQ1_0),
             "Q2_0" => Some(Self::MostlyQ2_0),
+            "F8_E4M3" => Some(Self::MostlyF8E4M3),
             _ => None,
         }
     }
@@ -328,6 +333,7 @@ impl LlamaFtype {
             Self::MostlyNVFP4,
             Self::MostlyQ1_0,
             Self::MostlyQ2_0,
+            Self::MostlyF8E4M3,
         ]
     }
 }
@@ -429,6 +435,8 @@ pub enum GgmlType {
     Q1_0 = 41,
     /// `Q2_0` — 2 bpw binary.
     Q2_0 = 42,
+    /// `F8_E4M3` — 8-bit float, 4-bit exponent, 3-bit mantissa.
+    F8E4M3 = 43,
 }
 
 impl From<GgmlType> for llama_cpp_sys_4::ggml_type {
@@ -476,6 +484,7 @@ impl TryFrom<llama_cpp_sys_4::ggml_type> for GgmlType {
             40 => Ok(Self::NVFP4),
             41 => Ok(Self::Q1_0),
             42 => Ok(Self::Q2_0),
+            43 => Ok(Self::F8E4M3),
             _ => Err(v),
         }
     }
@@ -1209,7 +1218,10 @@ impl<'model> QuantPreview<'model> {
         if rc != 0 {
             return Err(QuantPreviewError::Init);
         }
-        Ok(out.into_iter().map(|t| GgmlType::try_from(t).ok()).collect())
+        Ok(out
+            .into_iter()
+            .map(|t| GgmlType::try_from(t).ok())
+            .collect())
     }
 }
 

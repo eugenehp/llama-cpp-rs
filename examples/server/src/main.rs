@@ -633,7 +633,6 @@ fn parse_stop_sequences(req: &Value) -> Result<Vec<String>, HttpError> {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Core inference engine
 // ---------------------------------------------------------------------------
@@ -1420,9 +1419,7 @@ async fn chat_completions(
     let request_templates = match parsed.get("chat_template") {
         Some(Value::String(src)) => match ChatTemplates::from_model(&state.model, Some(src)) {
             Ok(t) => Some(t),
-            Err(e) => {
-                return error_response(bad_request(format!("invalid 'chat_template': {e}")))
-            }
+            Err(e) => return error_response(bad_request(format!("invalid 'chat_template': {e}"))),
         },
         Some(Value::Null) | None => None,
         _ => return error_response(bad_request("'chat_template' must be a string")),

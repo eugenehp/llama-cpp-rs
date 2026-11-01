@@ -4,7 +4,11 @@
 // so bit-exact float comparison is the property under test.
 #![allow(clippy::float_cmp)]
 
-use llama_cpp_4::sampling::LlamaSampler;
+mod support;
+
+use llama_cpp_4::sampling::{
+    LlamaSampler, SamplerInitError, DRY_MAX_BREAKER_LEN, DRY_MAX_SEQ_BREAKERS,
+};
 use llama_cpp_4::token::data::LlamaTokenData;
 use llama_cpp_4::token::data_array::LlamaTokenDataArray;
 use llama_cpp_4::token::LlamaToken;
@@ -330,4 +334,98 @@ fn test_with_tokens() {
     let sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()])
         .with_tokens([LlamaToken(0), LlamaToken(1)]);
     assert_eq!(sampler.name(), "chain");
+}
+
+// ── DRY sequence breaker limits (new in b12032) ────────────────────────────
+
+/// llama.cpp keeps only the first 64 *distinct* breakers and logs a warning for
+/// the rest, so a caller passing more gets a sampler that silently is not the
+/// one they configured. `try_dry` must refuse instead.
+#[test]
+fn try_dry_rejects_too_many_distinct_breakers() {
+    let _guard = support::model::llama_guard();
+    let Some((model, _)) = support::model::load_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let sampler = LlamaSampler::chain_simple([]);
+
+    let breakers: Vec<String> = (0..=DRY_MAX_SEQ_BREAKERS)
+        .map(|i| format!("brk{i}"))
+        .collect();
+    let err = sampler
+        .try_dry(&model, 1.0, 1.75, 2, 64, &breakers)
+        .expect_err("more than the limit must be refused");
+    assert!(
+        matches!(
+            err,
+            SamplerInitError::TooManyDrySequenceBreakers { distinct, max }
+                if distinct == DRY_MAX_SEQ_BREAKERS + 1 && max == DRY_MAX_SEQ_BREAKERS
+        ),
+        "got {err:?}"
+    );
+}
+
+/// Exactly the limit is fine — an off-by-one here would reject valid configs.
+#[test]
+fn try_dry_accepts_exactly_the_limit() {
+    let _guard = support::model::llama_guard();
+    let Some((model, _)) = support::model::load_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let sampler = LlamaSampler::chain_simple([]);
+    let breakers: Vec<String> = (0..DRY_MAX_SEQ_BREAKERS)
+        .map(|i| format!("brk{i}"))
+        .collect();
+    assert!(sampler.try_dry(&model, 1.0, 1.75, 2, 64, &breakers).is_ok());
+}
+
+/// Counting must match llama.cpp's: duplicates collapse, and truncation to 40
+/// bytes happens *before* de-duplication — so breakers differing only past
+/// byte 40 are one breaker, not two.
+#[test]
+fn try_dry_counts_breakers_the_way_llama_cpp_does() {
+    let _guard = support::model::llama_guard();
+    let Some((model, _)) = support::model::load_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let sampler = LlamaSampler::chain_simple([]);
+
+    // 200 copies of one breaker is still one distinct breaker.
+    let dupes = vec!["\n".to_owned(); 200];
+    assert!(
+        sampler.try_dry(&model, 1.0, 1.75, 2, 64, &dupes).is_ok(),
+        "duplicates must collapse"
+    );
+
+    // Two strings identical through byte 40 collapse after truncation, so
+    // 65 of them are 1 distinct breaker rather than 65.
+    let prefix = "x".repeat(DRY_MAX_BREAKER_LEN);
+    let long: Vec<String> = (0..=DRY_MAX_SEQ_BREAKERS)
+        .map(|i| format!("{prefix}suffix{i}"))
+        .collect();
+    assert!(
+        sampler.try_dry(&model, 1.0, 1.75, 2, 64, &long).is_ok(),
+        "breakers differing only past {DRY_MAX_BREAKER_LEN} bytes are one breaker"
+    );
+}
+
+/// An interior NUL is an error here rather than the panic `dry` takes.
+#[test]
+fn try_dry_reports_interior_nul() {
+    let _guard = support::model::llama_guard();
+    let Some((model, _)) = support::model::load_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    let sampler = LlamaSampler::chain_simple([]);
+    let err = sampler
+        .try_dry(&model, 1.0, 1.75, 2, 64, [b"a\0b".as_slice()])
+        .expect_err("interior NUL must be reported");
+    assert!(
+        matches!(err, SamplerInitError::InteriorNul { .. }),
+        "got {err:?}"
+    );
 }

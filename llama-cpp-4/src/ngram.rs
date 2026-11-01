@@ -97,7 +97,9 @@ pub struct NgramCache {
 
 impl std::fmt::Debug for NgramCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NgramCache").field("len", &self.len()).finish()
+        f.debug_struct("NgramCache")
+            .field("len", &self.len())
+            .finish()
     }
 }
 
@@ -316,9 +318,8 @@ impl NgramMap {
     /// Returns [`NgramError::Failed`] if llama.cpp throws.
     pub fn begin(&mut self, tokens: &[LlamaToken]) -> Result<()> {
         let raw: Vec<i32> = tokens.iter().map(|t| t.0).collect();
-        let status = unsafe {
-            sys::common_shim_ngram_map_begin(self.raw.as_ptr(), raw.as_ptr(), raw.len())
-        };
+        let status =
+            unsafe { sys::common_shim_ngram_map_begin(self.raw.as_ptr(), raw.as_ptr(), raw.len()) };
         check_status(status)
     }
 
@@ -409,7 +410,9 @@ mod tests {
 
     #[test]
     fn simple_draft_handles_empty_history() {
-        assert!(ngram_simple_draft(2, 2, &[], LlamaToken(1)).unwrap().is_empty());
+        assert!(ngram_simple_draft(2, 2, &[], LlamaToken(1))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -464,11 +467,13 @@ mod tests {
     fn cache_merge_is_additive() {
         let tokens = toks(&[4, 5, 6, 4, 5, 6, 4, 5, 6]);
         let mut a = NgramCache::new();
-        a.update(1, 4, &tokens, i32::try_from(tokens.len()).unwrap(), false).unwrap();
+        a.update(1, 4, &tokens, i32::try_from(tokens.len()).unwrap(), false)
+            .unwrap();
         let before = a.len();
 
         let mut b = NgramCache::new();
-        b.update(1, 4, &tokens, i32::try_from(tokens.len()).unwrap(), false).unwrap();
+        b.update(1, 4, &tokens, i32::try_from(tokens.len()).unwrap(), false)
+            .unwrap();
 
         a.merge(&mut b).unwrap();
         assert!(a.len() >= before, "merge lost entries");

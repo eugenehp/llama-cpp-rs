@@ -443,8 +443,41 @@ impl MtmdContext {
     /// Video support additionally requires `ffmpeg`/`ffprobe` to be available
     /// at runtime (see [`MtmdVideo`]). Wraps `mtmd_helper_support_video`.
     #[must_use]
+    #[deprecated(
+        since = "0.10.0",
+        note = "upstream deprecated `mtmd_helper_support_video`; use `capabilities(model).video`"
+    )]
     pub fn supports_video(&self) -> bool {
         unsafe { sys::mtmd_helper_support_video(self.ptr.as_ptr()) }
+    }
+
+    /// Everything this model and projector can take in and produce.
+    ///
+    /// Replaces the two single-purpose predicates upstream deprecated in
+    /// `b12032` ([`supports_video`](Self::supports_video) and
+    /// [`model_can_chat`](Self::model_can_chat)), and reports six more
+    /// capabilities besides — notably whether the model can *generate* audio,
+    /// and whether it accepts a speaker reference for voice cloning.
+    ///
+    /// Wraps `mtmd_helper_get_capabilities`. Note it is keyed on the **model**,
+    /// not a context, because that is what the capabilities are a property of.
+    #[must_use]
+    pub fn capabilities(&self, model: &crate::model::LlamaModel) -> MtmdCapabilities {
+        // SAFETY: both pointers are borrowed from live values for the duration
+        // of the call, and upstream documents a null `mctx` as valid (meaning a
+        // text-only model) — ours is never null, which is the stronger case.
+        let raw =
+            unsafe { sys::mtmd_helper_get_capabilities(model.model.as_ptr(), self.ptr.as_ptr()) };
+        MtmdCapabilities {
+            chat: raw.chat,
+            vision: raw.vision,
+            audio: raw.audio,
+            video: raw.video,
+            audio_stream: raw.audio_stream,
+            text_gen: raw.text_gen,
+            audio_gen: raw.audio_gen,
+            audio_gen_spk_ref: raw.audio_gen_spk_ref,
+        }
     }
 
     /// Returns the media marker string configured for *this* context.
@@ -640,6 +673,10 @@ impl MtmdContext {
     ///
     /// Wraps `mtmd_helper_model_can_chat`.
     #[must_use]
+    #[deprecated(
+        since = "0.10.0",
+        note = "upstream deprecated `mtmd_helper_model_can_chat`; use `capabilities(model).chat`"
+    )]
     pub fn model_can_chat(&self, ctx: &crate::context::LlamaContext<'_>) -> bool {
         unsafe { sys::mtmd_helper_model_can_chat(ctx.context.as_ptr(), self.ptr.as_ptr()) }
     }
@@ -1074,6 +1111,24 @@ impl MtmdBitmap {
     /// Wraps `mtmd_bitmap_set_mergeable`.
     pub fn set_mergeable(&mut self, mergeable: bool) {
         unsafe { sys::mtmd_bitmap_set_mergeable(self.ptr.as_ptr(), mergeable) }
+    }
+
+    /// Mark this bitmap as a video frame rather than a still image.
+    ///
+    /// A video-capable model needs **both** this and
+    /// [`set_mergeable`](Self::set_mergeable) on *every* frame; one without the
+    /// other does not get you a merged video chunk. As with `set_mergeable`,
+    /// [`MtmdVideo::read_next`] already sets both on the frames it produces —
+    /// this is for frames you build yourself with [`Self::from_rgb`].
+    ///
+    /// New in `b12032`, which split the flag out so a caller can mark frames
+    /// that did not come from the video reader.
+    ///
+    /// Wraps `mtmd_bitmap_set_is_video`.
+    pub fn set_is_video(&mut self, is_video: bool) {
+        // SAFETY: a live `&mut self` gives an exclusive, non-null bitmap; the
+        // call only flips a flag on it.
+        unsafe { sys::mtmd_bitmap_set_is_video(self.ptr.as_ptr(), is_video) }
     }
 
     // ── Getters ───────────────────────────────────────────────────────────
@@ -1960,12 +2015,7 @@ impl OwnedMtmdInputChunk {
     pub fn save(&self) -> Result<Vec<u8>> {
         let mut needed: usize = 0;
         let rc = unsafe {
-            sys::mtmd_input_chunk_save(
-                self.ptr.as_ptr(),
-                std::ptr::null_mut(),
-                0,
-                &raw mut needed,
-            )
+            sys::mtmd_input_chunk_save(self.ptr.as_ptr(), std::ptr::null_mut(), 0, &raw mut needed)
         };
         if rc != 0 && needed == 0 {
             return Err(MtmdError::ChunkSaveFailed(rc));
@@ -2187,9 +2237,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         lctx: &mut crate::context::LlamaContext<'_>,
         mctx: &'ctx MtmdContext,
     ) -> Result<Self> {
-        let ptr = unsafe {
-            sys::mtmd_helper_gen_audio_init(lctx.context.as_ptr(), mctx.ptr.as_ptr())
-        };
+        let ptr =
+            unsafe { sys::mtmd_helper_gen_audio_init(lctx.context.as_ptr(), mctx.ptr.as_ptr()) };
         NonNull::new(ptr)
             .map(|ptr| Self {
                 ptr,
@@ -2260,6 +2309,46 @@ impl<'ctx> MtmdAudioGen<'ctx> {
             return Err(MtmdError::EvalError(rc));
         }
         Ok(rc)
+    }
+
+    /// Whether the next [`step_gen`](Self::step_gen) wants a *text* token.
+    ///
+    /// Interleaved pipelines alternate: when this is `true` the caller samples
+    /// a token from the logits and passes it as `sampled`; when `false` the
+    /// next step produces an audio frame from `h_state_in` instead. Getting
+    /// this backwards feeds a stale token into a frame step, so check it each
+    /// iteration rather than assuming the pattern.
+    ///
+    /// Wraps `mtmd_helper_gen_audio_next_is_text`, new in `b12032`.
+    #[must_use]
+    pub fn next_is_text(&mut self) -> bool {
+        // SAFETY: a live `&mut self` gives an exclusive, non-null generator.
+        unsafe { sys::mtmd_helper_gen_audio_next_is_text(self.ptr.as_ptr()) }
+    }
+
+    /// Logit bias to apply before sampling the next text token.
+    ///
+    /// This is how the model keeps a text-only response from switching to
+    /// audio mid-sentence, so sampling without it can produce a token the
+    /// pipeline cannot act on. Feed it to
+    /// [`LlamaSampler::logit_bias`](crate::sampling::LlamaSampler::logit_bias).
+    ///
+    /// Empty when the pipeline has no bias for this step. Wraps
+    /// `mtmd_helper_gen_audio_get_logit_bias`, new in `b12032`.
+    #[must_use]
+    pub fn logit_bias(&mut self) -> Vec<llama_cpp_sys_4::llama_logit_bias> {
+        let mut n_bias: usize = 0;
+        // SAFETY: exclusive non-null generator; upstream writes the count
+        // through `n_bias` and returns a pointer owned by the generator that
+        // stays valid until the next step. Copying out here means the returned
+        // Vec does not alias it.
+        unsafe {
+            let ptr = sys::mtmd_helper_gen_audio_get_logit_bias(self.ptr.as_ptr(), &raw mut n_bias);
+            if ptr.is_null() || n_bias == 0 {
+                return Vec::new();
+            }
+            std::slice::from_raw_parts(ptr, n_bias).to_vec()
+        }
     }
 
     /// Generate one audio frame.
@@ -2385,6 +2474,44 @@ impl MtmdGenAudioType {
             _ => Self::Unknown,
         }
     }
+}
+
+/// What a model and projector pair can take in and produce.
+///
+/// From `mtmd_helper_get_capabilities`. The three input flags answer "what can
+/// I feed this?"; the three output flags answer "what will it give me back?" —
+/// a text-to-speech model, for example, reports `text_gen: false` and
+/// `audio_gen: true`, which no earlier predicate could express.
+// A faithful 1:1 mirror of upstream's `mtmd_helper_cap`, which is eight bools.
+// The lint's usual remedy — collapse them into an enum or bitflags — would put
+// a translation layer between this and the C struct, making it harder to check
+// that the fields still line up after a bump. Upstream's shape is the contract.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MtmdCapabilities {
+    /// Usable for chat. `false` for tts-only models (no chat template) and for
+    /// realtime transcription models.
+    pub chat: bool,
+
+    /// Accepts image input.
+    pub vision: bool,
+    /// Accepts audio input.
+    pub audio: bool,
+    /// Accepts video input. Also depends on the `MTMD_VIDEO` build option, and
+    /// on `ffmpeg`/`ffprobe` at runtime — see [`MtmdVideo`].
+    pub video: bool,
+
+    /// Supports realtime transcription through llama.cpp's
+    /// `mtmd_audio_stream_*` API, which this crate does not wrap yet — reach
+    /// for `llama-cpp-sys-4` directly if you need it.
+    pub audio_stream: bool,
+
+    /// Generates text. `false` for an audio-only model.
+    pub text_gen: bool,
+    /// Generates audio.
+    pub audio_gen: bool,
+    /// Accepts a speaker reference clip for voice cloning.
+    pub audio_gen_spk_ref: bool,
 }
 
 /// What [`MtmdContext::gen_audio_info`] reports about a speech pipeline.

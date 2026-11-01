@@ -28,6 +28,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           submodules: recursive
+      # Seconds, and before anything compiles. A bad bindgen/prettyplease
+      # pairing otherwise fails ~20 minutes in, inside bindgen's own source,
+      # with nothing pointing at the lockfile as the cause.
+      - name: Check the bindgen/syn pairing
+        run: ./scripts/check-bindgen-syn.sh
       - name: Install Compile Deps
         env:
           DEBIAN_FRONTEND: noninteractive

@@ -330,7 +330,11 @@ fn run(
 
     let mut text = String::new();
     for token in &generated {
-        text.push_str(&model.token_to_str(*token, Special::Tokenize).unwrap_or_default());
+        text.push_str(
+            &model
+                .token_to_str(*token, Special::Tokenize)
+                .unwrap_or_default(),
+        );
     }
 
     Ok(Run {

@@ -232,7 +232,12 @@ impl CommonSamplerParams {
     ///
     /// Returns [`CommonSamplerError::InvalidArg`] for an unknown `kind`, or
     /// [`CommonSamplerError::Nul`] for an interior NUL.
-    pub fn add_grammar_trigger(&mut self, kind: &str, value: &str, token: LlamaToken) -> Result<()> {
+    pub fn add_grammar_trigger(
+        &mut self,
+        kind: &str,
+        value: &str,
+        token: LlamaToken,
+    ) -> Result<()> {
         let raw_kind = match kind {
             "token" => 0,
             "word" => 1,
@@ -288,11 +293,7 @@ impl CommonSamplerParams {
     pub fn set_samplers(&mut self, samplers: &[CommonSamplerType]) -> Result<()> {
         let raw: Vec<i32> = samplers.iter().map(|s| *s as i32).collect();
         let status = unsafe {
-            sys::common_shim_sampler_params_set_samplers(
-                self.raw.as_ptr(),
-                raw.as_ptr(),
-                raw.len(),
-            )
+            sys::common_shim_sampler_params_set_samplers(self.raw.as_ptr(), raw.as_ptr(), raw.len())
         };
         check_status(status)
     }
@@ -636,7 +637,14 @@ impl ReasoningBudget {
         forced: &[LlamaToken],
         budget: i32,
     ) -> Result<Self> {
-        Self::with_initial_state(model, starts, ends, forced, budget, ReasoningBudgetState::Idle)
+        Self::with_initial_state(
+            model,
+            starts,
+            ends,
+            forced,
+            budget,
+            ReasoningBudgetState::Idle,
+        )
     }
 
     /// [`Self::new`] with an explicit starting state — use
@@ -685,8 +693,9 @@ impl ReasoningBudget {
     /// Where the state machine currently is.
     #[must_use]
     pub fn state(&self) -> Option<ReasoningBudgetState> {
-        let raw =
-            unsafe { sys::common_shim_reasoning_budget_get_state(self.sampler.as_ptr().cast_const()) };
+        let raw = unsafe {
+            sys::common_shim_reasoning_budget_get_state(self.sampler.as_ptr().cast_const())
+        };
         ReasoningBudgetState::from_raw(raw)
     }
 

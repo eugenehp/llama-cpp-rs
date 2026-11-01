@@ -1,6 +1,6 @@
 [package]
 name = "llama-jni"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 description = "Android JNI bridge + arm64 smoke test for llama-cpp-4"
@@ -16,7 +16,7 @@ crate-type = ["cdylib", "lib"]
 # Static, CPU-only llama.cpp (no dynamic-link / mtmd / openmp): the Android
 # `.so` self-contains everything, and the aarch64 smoke binary runs cleanly
 # under qemu-user without hunting for shared objects.
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.9.0", default-features = false }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.10.0", default-features = false }
 anyhow = "1"
 
 # JNI glue is only compiled for Android targets; the host/`aarch64-linux-gnu`

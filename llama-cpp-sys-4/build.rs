@@ -2247,6 +2247,17 @@ fn main() {
         // undefined behaviour. Block it and use the `llama_memory_buffers_collect`
         // shim above instead.
         .blocklist_function("llama_memory_get_buffers")
+        // Same trap, new in b12032: the architecture queries in `llama-ext.h`
+        // traffic in C++ types by value or reference. bindgen degrades
+        // `std::vector<llm_arch>` to `-> u8`, turns a returned `std::string`
+        // into an opaque type with no destructor, and renders a
+        // `const std::string &` parameter as a pointer Rust cannot construct.
+        // All three are ABI mismatches rather than merely awkward, so block
+        // them; `llama_arch_name` and `llama_arch_supports_sm_tensor` take and
+        // return plain C types and stay.
+        .blocklist_function("llama_arch_all")
+        .blocklist_function("llama_arch_from_string")
+        .blocklist_function("llama_arch_kv_name")
         .allowlist_function("llama_memory_breakdown_collect")
         .allowlist_type("llama_memory_breakdown_entry")
         .allowlist_function("llama_quant_.*_guarded")
