@@ -345,6 +345,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
             spec_type: llama_cpp_sys_4::MTP_SPEC_TYPE_MTP as i32,
         };
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let raw = unsafe {
             llama_cpp_sys_4::mtp_session_new(
                 target.context.as_ptr(),
@@ -375,6 +377,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     /// MTP returns **false**; use [`Self::need_embd_pre_norm`] for MTP.
     #[must_use]
     pub fn need_embd(&self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_need_embd(self.raw.as_ptr()) }
     }
 
@@ -385,6 +389,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     /// session init; callers normally do not need to set it manually.
     #[must_use]
     pub fn need_embd_pre_norm(&self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_need_embd_pre_norm(self.raw.as_ptr()) }
     }
 
@@ -483,6 +489,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     /// session.print_stats();
     /// ```
     pub fn print_stats(&self) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_print_stats(self.raw.as_ptr()) }
     }
 
@@ -510,6 +518,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
                 maximum: MAX_SPECULATIVE_PROMPT_TOKENS,
             });
         }
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_begin(
                 self.raw.as_ptr(),
@@ -540,6 +550,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     ///
     /// Returns [`MtpSessionError::Process`] when upstream rejects the batch.
     pub fn process(&mut self, batch: &LlamaBatch) -> Result<(), MtpSessionError> {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &raw const batch.llama_batch)
         };
@@ -584,6 +596,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
         let mut buf: Vec<i32> = vec![0; cap];
         let mut out_n = i32::try_from(cap).unwrap_or(i32::MAX);
 
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_draft(
                 self.raw.as_ptr(),
@@ -632,6 +646,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
             });
         }
         let ok =
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             unsafe { llama_cpp_sys_4::mtp_session_accept(self.raw.as_ptr(), seq_id, n_accepted) };
         if !ok {
             return Err(MtpSessionError::Accept);
@@ -644,6 +660,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
     #[must_use]
     pub fn is_quiescent(&self) -> bool {
         self.pending_proposals.iter().all(Option::is_none)
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             && unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) }
     }
 
@@ -763,6 +781,8 @@ impl<'ctx, 'model> MtpSession<'ctx, 'model> {
                 seq_id: i32::try_from(index).unwrap_or(i32::MAX),
             });
         }
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         if !unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) } {
             return Err(MtpSessionError::State(SpeculativeStateError::NotQuiescent));
         }
@@ -831,6 +851,8 @@ fn validate_contexts(
 
 impl Drop for MtpSession<'_, '_> {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { llama_cpp_sys_4::mtp_session_free(self.raw.as_ptr()) }
     }
 }

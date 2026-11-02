@@ -110,7 +110,7 @@ fn main() -> Result<()> {
         .n_threads(args.n_threads)
         .print_timings(false);
 
-    let mtmd_ctx = MtmdContext::init_from_file(&args.mmproj, &model, ctx_params)
+    let mut mtmd_ctx = MtmdContext::init_from_file(&args.mmproj, &model, ctx_params)
         .map_err(|e| anyhow::anyhow!("Failed to load mmproj: {e}"))?;
 
     println!(
@@ -175,7 +175,7 @@ fn main() -> Result<()> {
     let mut n_past: i32 = 0;
     mtmd_ctx
         .eval_chunks(
-            lctx.as_ptr(),
+            &mut lctx,
             &chunks,
             0,
             0,

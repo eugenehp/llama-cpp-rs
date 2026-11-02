@@ -36,6 +36,8 @@ impl RpcBackend {
     pub fn init(endpoint: &str, device: u32) -> Result<Self, RpcError> {
         let c_endpoint = CString::new(endpoint)?;
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let backend = unsafe { sys::ggml_backend_rpc_init(c_endpoint.as_ptr(), device) };
 
         NonNull::new(backend)
@@ -52,6 +54,8 @@ impl RpcBackend {
     /// Check if a backend is an RPC backend
     #[must_use]
     pub fn is_rpc(&self) -> bool {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::ggml_backend_is_rpc(self.backend.as_ptr()) }
     }
 
@@ -60,6 +64,8 @@ impl RpcBackend {
     pub fn buffer_type(&self) -> Option<NonNull<sys::ggml_backend_buffer_type>> {
         let c_endpoint = CString::new(self.endpoint.as_str()).ok()?;
         let buffer_type =
+            // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+            // the library owns whatever it returns.
             unsafe { sys::ggml_backend_rpc_buffer_type(c_endpoint.as_ptr(), self.device) };
         NonNull::new(buffer_type)
     }
@@ -78,6 +84,8 @@ impl RpcBackend {
         let mut free: usize = 0;
         let mut total: usize = 0;
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe {
             sys::ggml_backend_rpc_get_device_memory(
                 c_endpoint.as_ptr(),
@@ -118,6 +126,8 @@ impl RpcBackend {
 
 impl Drop for RpcBackend {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe {
             sys::ggml_backend_free(self.backend.as_ptr());
         }

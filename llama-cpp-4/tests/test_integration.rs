@@ -234,8 +234,71 @@ fn integration_embeddings() {
 
     let last = batch.n_tokens() - 1;
     let emb = ctx.embeddings_ith(last).expect("token embedding");
-    assert_eq!(emb.len(), model.n_embd() as usize);
+    // `n_embd_out()`, not `n_embd()`: llama.cpp strides and allocates the
+    // output buffer by the *output* width. They coincide on this checkpoint,
+    // which is exactly why the two were confused — see issue #360 — so assert
+    // against the output width and pin that the two agree here.
+    assert_eq!(emb.len(), model.n_embd_out() as usize);
+    assert_eq!(
+        model.n_embd_out(),
+        model.n_embd(),
+        "this fixture is expected to have equal internal and output widths; \
+         if that changes, the assertion above is still the correct one"
+    );
     assert!(emb.iter().any(|x| *x != 0.0));
+}
+
+/// The row width of both embedding accessors must come from the model and the
+/// pooling mode, never from `n_embd()`.
+///
+/// Issue #360: `embeddings_ith` sliced with `n_embd()` while llama.cpp strides
+/// the buffer by `n_embd_out()`. For a model whose output is narrower, that
+/// read past the row — and past the allocation entirely on the last row. The
+/// sequence accessor had the same bug, plus a second case: llama.cpp sizes a
+/// RANK-pooled row by `n_cls_out` rather than the embedding width at all.
+#[test]
+fn integration_embedding_row_width_follows_the_model_not_n_embd() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+
+    let mut ctx = model
+        .new_context(
+            backend(),
+            LlamaContextParams::default()
+                .with_n_ctx(NonZeroU32::new(64))
+                .with_embeddings(true),
+        )
+        .unwrap();
+
+    let tokens = model.str_to_token("hello", AddBos::Always).unwrap();
+    let mut batch = LlamaBatch::new(64, 1);
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch.add(tok, i as i32, &[0], true).unwrap();
+    }
+    ctx.decode(&mut batch).unwrap();
+
+    let expected = match ctx.pooling_type() {
+        LlamaPoolingType::Rank => model.n_cls_out() as usize,
+        _ => model.n_embd_out() as usize,
+    };
+
+    if let Ok(emb) = ctx.embeddings_ith(batch.n_tokens() - 1) {
+        assert_eq!(
+            emb.len(),
+            model.n_embd_out() as usize,
+            "embeddings_ith must use the output width"
+        );
+    }
+    if let Ok(emb) = ctx.embeddings_seq_ith(0) {
+        assert_eq!(
+            emb.len(),
+            expected,
+            "embeddings_seq_ith must follow the pooling mode"
+        );
+    }
 }
 
 #[test]

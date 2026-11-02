@@ -46,6 +46,8 @@ impl MemoryBreakdownEntry {
 fn raw_entry_to_rust(
     entry: &llama_cpp_sys_4::llama_memory_breakdown_entry,
 ) -> MemoryBreakdownEntry {
+    // SAFETY: `buft_name` is a fixed-size `c_char` array inside the entry, so
+    // its own pointer and length describe exactly that array.
     let bytes: &[u8] = unsafe {
         std::slice::from_raw_parts(entry.buft_name.as_ptr().cast(), entry.buft_name.len())
     };
@@ -87,6 +89,8 @@ pub(crate) fn collect_memory_breakdown(
             capacity
         ];
 
+        // SAFETY: `ctx` is a live context, and `raw` is a Rust buffer whose
+        // capacity is passed alongside its pointer, so the shim cannot overrun it.
         let n = unsafe {
             llama_cpp_sys_4::llama_memory_breakdown_collect(ctx, raw.as_mut_ptr(), capacity)
         };

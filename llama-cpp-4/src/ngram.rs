@@ -63,6 +63,9 @@ pub fn ngram_simple_draft(
     sampled: LlamaToken,
 ) -> Result<Vec<LlamaToken>> {
     let raw: Vec<i32> = tokens.iter().map(|t| t.0).collect();
+    // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+    // and the shim reports how much it needed; nothing is read back unless it
+    // reported success.
     read_tokens(|out, cap, len| unsafe {
         sys::common_shim_ngram_simple_draft(
             size_ngram,
@@ -109,6 +112,8 @@ unsafe impl Send for NgramCache {}
 
 impl Drop for NgramCache {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { sys::common_shim_ngram_cache_free(self.raw.as_ptr()) }
     }
 }
@@ -127,6 +132,8 @@ impl NgramCache {
     /// Panics if the allocation fails.
     #[must_use]
     pub fn new() -> Self {
+        // SAFETY: no borrowed pointer is involved beyond arguments alive for the call;
+        // the returned handle is checked for null before being wrapped.
         let raw = unsafe { sys::common_shim_ngram_cache_init() };
         Self {
             raw: NonNull::new(raw).expect("common_shim_ngram_cache_init returned null"),
@@ -141,6 +148,8 @@ impl NgramCache {
     /// [`NgramError::Nul`] for an interior NUL in `path`.
     pub fn load(path: &str) -> Result<Self> {
         let c_path = CString::new(path)?;
+        // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+        // out-param is a stack local the shim writes through.
         let raw = unsafe { sys::common_shim_ngram_cache_load(c_path.as_ptr()) };
         NonNull::new(raw)
             .map(|raw| Self { raw })
@@ -156,6 +165,8 @@ impl NgramCache {
     pub fn save(&mut self, path: &str) -> Result<()> {
         let c_path = CString::new(path)?;
         let status =
+            // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+            // out-param is a stack local the shim writes through.
             unsafe { sys::common_shim_ngram_cache_save(self.raw.as_ptr(), c_path.as_ptr()) };
         check_status(status)
     }
@@ -167,6 +178,8 @@ impl NgramCache {
     /// Returns [`NgramError::Failed`] if llama.cpp throws.
     pub fn merge(&mut self, other: &mut NgramCache) -> Result<()> {
         let status =
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             unsafe { sys::common_shim_ngram_cache_merge(self.raw.as_ptr(), other.raw.as_ptr()) };
         check_status(status)
     }
@@ -174,6 +187,8 @@ impl NgramCache {
     /// Number of distinct n-grams recorded.
     #[must_use]
     pub fn len(&self) -> usize {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_ngram_cache_size(self.raw.as_ptr()) }
     }
 
@@ -202,6 +217,8 @@ impl NgramCache {
         print_progress: bool,
     ) -> Result<()> {
         let raw: Vec<i32> = tokens.iter().map(|t| t.0).collect();
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_ngram_cache_update(
                 self.raw.as_ptr(),
@@ -243,6 +260,9 @@ pub fn ngram_cache_draft(
     let dyn_ptr = dynamic.map_or(std::ptr::null_mut(), |c| c.raw.as_ptr());
     let sta_ptr = statik.map_or(std::ptr::null_mut(), |c| c.raw.as_ptr());
 
+    // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+    // and the shim reports how much it needed; nothing is read back unless it
+    // reported success.
     read_tokens(|out, cap, len| unsafe {
         sys::common_shim_ngram_cache_draft(
             raw.as_ptr(),
@@ -286,6 +306,8 @@ unsafe impl Send for NgramMap {}
 
 impl Drop for NgramMap {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { sys::common_shim_ngram_map_free(self.raw.as_ptr()) }
     }
 }
@@ -305,6 +327,8 @@ impl NgramMap {
     /// it reserves a 2^18-entry hash table up front.
     pub fn new(size_key: u16, size_value: u16, key_only: bool, min_hits: u16) -> Result<Self> {
         let raw =
+            // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+            // the library owns whatever it returns.
             unsafe { sys::common_shim_ngram_map_init(size_key, size_value, key_only, min_hits) };
         NonNull::new(raw)
             .map(|raw| Self { raw })
@@ -319,6 +343,8 @@ impl NgramMap {
     pub fn begin(&mut self, tokens: &[LlamaToken]) -> Result<()> {
         let raw: Vec<i32> = tokens.iter().map(|t| t.0).collect();
         let status =
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             unsafe { sys::common_shim_ngram_map_begin(self.raw.as_ptr(), raw.as_ptr(), raw.len()) };
         check_status(status)
     }
@@ -333,6 +359,9 @@ impl NgramMap {
     /// Returns [`NgramError::Failed`] if llama.cpp throws.
     pub fn draft(&mut self, tokens: &[LlamaToken], sampled: LlamaToken) -> Result<Vec<LlamaToken>> {
         let raw: Vec<i32> = tokens.iter().map(|t| t.0).collect();
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_tokens(|out, cap, len| unsafe {
             sys::common_shim_ngram_map_draft(
                 self.raw.as_ptr(),
@@ -351,6 +380,8 @@ impl NgramMap {
     /// This is what makes the map adaptive; skipping it leaves it drafting
     /// blind.
     pub fn accept(&mut self, n_accepted: u16) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_ngram_map_accept(self.raw.as_ptr(), n_accepted) }
     }
 }

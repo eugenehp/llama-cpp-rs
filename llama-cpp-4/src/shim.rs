@@ -50,10 +50,15 @@ pub(crate) type Result<T> = std::result::Result<T, ShimError>;
 ///
 /// One buffer across all shims, so this is always about whatever just failed.
 pub(crate) fn last_error() -> String {
+    // SAFETY: the shim takes no arguments and returns a pointer into its own
+    // thread-local error buffer. The null case is handled below rather than
+    // assumed away.
     let ptr = unsafe { sys::llama_shim_last_error() };
     if ptr.is_null() {
         return String::new();
     }
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     unsafe { CStr::from_ptr(ptr) }
         .to_string_lossy()
         .into_owned()

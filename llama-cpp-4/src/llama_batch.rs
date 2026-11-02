@@ -1,9 +1,5 @@
 //! Safe wrapper around `llama_batch`.
 
-// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
-// way. See the note on the lint in the workspace `Cargo.toml`.
-#![deny(clippy::undocumented_unsafe_blocks)]
-
 use crate::token::LlamaToken;
 use llama_cpp_sys_4::{llama_batch, llama_batch_free, llama_batch_init, llama_pos, llama_seq_id};
 

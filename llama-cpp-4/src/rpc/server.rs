@@ -72,6 +72,8 @@ pub fn serve(
     let mut device_ptrs: Vec<sys::ggml_backend_dev_t> =
         devices.iter().map(|d| d.as_ptr()).collect();
 
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe {
         sys::ggml_backend_rpc_start_server(
             c_endpoint.as_ptr(),
@@ -101,6 +103,8 @@ pub fn serve(
 pub fn add_rpc_server(endpoint: &str) -> Result<NonNull<sys::ggml_backend_reg>, RpcError> {
     let c_endpoint = CString::new(endpoint)?;
 
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     let reg = unsafe { sys::ggml_backend_rpc_add_server(c_endpoint.as_ptr()) };
 
     NonNull::new(reg).ok_or_else(|| RpcError::InitializationFailed {

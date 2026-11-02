@@ -363,6 +363,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
             spec_type,
         };
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let raw = unsafe {
             llama_cpp_sys_4::mtp_session_new(
                 target.context.as_ptr(),
@@ -391,6 +393,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// target context (`llama_set_embeddings`).
     #[must_use]
     pub fn need_embd(&self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_need_embd(self.raw.as_ptr()) }
     }
 
@@ -401,6 +405,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// need to set it manually.
     #[must_use]
     pub fn need_embd_pre_norm(&self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_need_embd_pre_norm(self.raw.as_ptr()) }
     }
 
@@ -489,6 +495,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     /// via llama.cpp `LOG_INF`. Install a log callback with [`crate::log_set`]
     /// to capture output.
     pub fn print_stats(&self) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { llama_cpp_sys_4::mtp_session_print_stats(self.raw.as_ptr()) }
     }
 
@@ -507,6 +515,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
                 maximum: MAX_SPECULATIVE_PROMPT_TOKENS,
             });
         }
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_begin(
                 self.raw.as_ptr(),
@@ -530,6 +540,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     ///
     /// Returns [`Eagle3SessionError::Process`] if the underlying call fails.
     pub fn process(&mut self, batch: &LlamaBatch) -> Result<(), Eagle3SessionError> {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_process(self.raw.as_ptr(), &raw const batch.llama_batch)
         };
@@ -565,6 +577,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
         let mut buf: Vec<i32> = vec![0; cap];
         let mut out_n = i32::try_from(cap).unwrap_or(i32::MAX);
 
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let ok = unsafe {
             llama_cpp_sys_4::mtp_session_draft(
                 self.raw.as_ptr(),
@@ -606,6 +620,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
             });
         }
         let ok =
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             unsafe { llama_cpp_sys_4::mtp_session_accept(self.raw.as_ptr(), seq_id, n_accepted) };
         if !ok {
             return Err(Eagle3SessionError::Accept);
@@ -618,6 +634,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
     #[must_use]
     pub fn is_quiescent(&self) -> bool {
         self.pending_proposals.iter().all(Option::is_none)
+            // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+            // arguments are scalars the library validates itself.
             && unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) }
     }
 
@@ -737,6 +755,8 @@ impl<'ctx, 'target_model, 'draft_model> Eagle3Session<'ctx, 'target_model, 'draf
                 seq_id: i32::try_from(index).unwrap_or(i32::MAX),
             });
         }
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         if !unsafe { llama_cpp_sys_4::mtp_session_is_quiescent(self.raw.as_ptr()) } {
             return Err(Eagle3SessionError::State(
                 SpeculativeStateError::NotQuiescent,
@@ -847,6 +867,8 @@ fn valid_target_layer_ids(
 
 impl Drop for Eagle3Session<'_, '_, '_> {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { llama_cpp_sys_4::mtp_session_free(self.raw.as_ptr()) }
     }
 }

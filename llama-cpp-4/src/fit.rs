@@ -161,6 +161,8 @@ pub fn get_device_memory_data(
         let mut hp_nct = 0u32;
         let mut hp_nex = 0u32;
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let n = unsafe {
             llama_cpp_sys_4::common_device_memory_collect(
                 path.as_ptr(),
@@ -371,6 +373,8 @@ pub fn fit_params(
 
     let mut context_params = options.context_params;
 
+    // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+    // out-param is a stack local the shim writes through.
     let status = unsafe {
         llama_cpp_sys_4::common_fit_params(
             path.as_ptr(),

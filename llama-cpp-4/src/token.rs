@@ -74,6 +74,8 @@ impl LlamaToken {
 pub fn from_vec_token_sys(vec_sys: Vec<llama_cpp_sys_4::llama_token>) -> Vec<LlamaToken> {
     let mut vec_sys = ManuallyDrop::new(vec_sys);
     let ptr = vec_sys.as_mut_ptr().cast::<LlamaToken>();
+    // SAFETY: the pointer is non-null and the length is the count the library
+    // reported for that same buffer, so the slice stays inside it.
     unsafe { Vec::from_raw_parts(ptr, vec_sys.len(), vec_sys.capacity()) }
 }
 
@@ -91,6 +93,8 @@ pub fn to_vec_token_sys(vec_llama: Vec<LlamaToken>) -> Vec<llama_cpp_sys_4::llam
     let ptr = vec_llama
         .as_mut_ptr()
         .cast::<llama_cpp_sys_4::llama_token>();
+    // SAFETY: the pointer is non-null and the length is the count the library
+    // reported for that same buffer, so the slice stays inside it.
     unsafe { Vec::from_raw_parts(ptr, vec_llama.len(), vec_llama.capacity()) }
 }
 

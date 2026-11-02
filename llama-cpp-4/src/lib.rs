@@ -77,6 +77,8 @@
 //! - `openmp` enables OpenMP multi-core CPU parallelism (on by default).
 //! - `rpc` enables RPC backend support for distributed inference across multiple machines.
 //! - `mtmd` enables multimodal (image + audio) support via `libmtmd`.
+#![deny(clippy::undocumented_unsafe_blocks)]
+
 use std::ffi::NulError;
 use std::fmt::Debug;
 use std::num::NonZeroI32;
@@ -396,6 +398,8 @@ pub enum LlamaLoraAdapterRemoveError {
 /// ```
 #[must_use]
 pub fn llama_time_us() -> i64 {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_time_us() }
 }
 
@@ -407,6 +411,8 @@ pub fn llama_time_us() -> i64 {
 /// ```
 #[must_use]
 pub fn max_devices() -> usize {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_max_devices() }
 }
 
@@ -420,6 +426,8 @@ pub fn max_devices() -> usize {
 /// ```
 #[must_use]
 pub fn mmap_supported() -> bool {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_supports_mmap() }
 }
 
@@ -433,6 +441,8 @@ pub fn mmap_supported() -> bool {
 /// ```
 #[must_use]
 pub fn mlock_supported() -> bool {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_supports_mlock() }
 }
 
@@ -523,6 +533,8 @@ pub enum ApplyChatTemplateError {
 /// assert!(elapsed >= 10)
 #[must_use]
 pub fn ggml_time_us() -> i64 {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::ggml_time_us() }
 }
 
@@ -539,6 +551,8 @@ pub fn ggml_time_us() -> i64 {
 /// ```
 #[must_use]
 pub fn llama_supports_mlock() -> bool {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_supports_mlock() }
 }
 
@@ -547,6 +561,8 @@ pub fn llama_supports_mlock() -> bool {
 /// Returns `true` if the library was compiled with GPU support (CUDA, Metal, Vulkan, etc.).
 #[must_use]
 pub fn supports_gpu_offload() -> bool {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_supports_gpu_offload() }
 }
 
@@ -555,6 +571,8 @@ pub fn supports_gpu_offload() -> bool {
 /// Returns `true` if the library was compiled with RPC support.
 #[must_use]
 pub fn supports_rpc() -> bool {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_supports_rpc() }
 }
 
@@ -594,7 +612,11 @@ pub fn llama_version() -> &'static str {
 /// Panics if the returned string is not valid UTF-8.
 #[must_use]
 pub fn print_system_info() -> String {
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { llama_cpp_sys_4::llama_print_system_info() };
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
     c_str
         .to_str()
@@ -605,12 +627,16 @@ pub fn print_system_info() -> String {
 /// Get the maximum number of parallel sequences supported.
 #[must_use]
 pub fn max_parallel_sequences() -> usize {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_max_parallel_sequences() }
 }
 
 /// Get the maximum number of tensor buffer type overrides.
 #[must_use]
 pub fn max_tensor_buft_overrides() -> usize {
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     unsafe { llama_cpp_sys_4::llama_max_tensor_buft_overrides() }
 }
 
@@ -621,7 +647,11 @@ pub fn max_tensor_buft_overrides() -> usize {
 /// Panics if the returned string is not valid UTF-8.
 #[must_use]
 pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { llama_cpp_sys_4::llama_flash_attn_type_name(flash_attn_type) };
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
     c_str
         .to_str()
@@ -636,7 +666,11 @@ pub fn flash_attn_type_name(flash_attn_type: i32) -> String {
 /// Panics if the returned string is not valid UTF-8.
 #[must_use]
 pub fn model_meta_key_str(key: u32) -> String {
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { llama_cpp_sys_4::llama_model_meta_key_str(key as _) };
+    // SAFETY: the pointer is non-null and points at a NUL-terminated string the
+    // library owns, which outlives the borrow taken here.
     let c_str = unsafe { std::ffi::CStr::from_ptr(c_str) };
     c_str
         .to_str()
@@ -677,6 +711,8 @@ pub fn model_quantize(
     let c_inp = std::ffi::CString::new(fname_inp).expect("input path contains null bytes");
     let c_out = std::ffi::CString::new(fname_out).expect("output path contains null bytes");
     let guard = params.to_raw();
+    // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+    // the library owns whatever it returns.
     let rc = unsafe {
         llama_cpp_sys_4::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), &raw const guard.raw)
     };

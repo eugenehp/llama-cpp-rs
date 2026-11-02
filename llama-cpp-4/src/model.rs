@@ -92,10 +92,15 @@ impl LlamaBackendDevice {
     ///
     /// Returns an error when the name pointer is null or not valid UTF-8.
     pub fn name(&self) -> Result<&str, StringFromModelError> {
+        // SAFETY: a read through a live handle — the device, vocab or model
+        // this borrows from — returning a pointer llama.cpp owns and keeps
+        // valid; it is only checked and converted below, never freed here.
         let ptr = unsafe { llama_cpp_sys_4::ggml_backend_dev_name(self.dev) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
@@ -106,10 +111,15 @@ impl LlamaBackendDevice {
     ///
     /// Returns an error when the description pointer is null or not valid UTF-8.
     pub fn description(&self) -> Result<&str, StringFromModelError> {
+        // SAFETY: a read through a live handle — the device, vocab or model
+        // this borrows from — returning a pointer llama.cpp owns and keeps
+        // valid; it is only checked and converted below, never freed here.
         let ptr = unsafe { llama_cpp_sys_4::ggml_backend_dev_description(self.dev) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
@@ -117,6 +127,8 @@ impl LlamaBackendDevice {
     /// Device class (CPU, GPU, integrated GPU, …).
     #[must_use]
     pub fn device_type(&self) -> LlamaBackendDeviceType {
+        // SAFETY: `self.dev` is a device handle owned by ggml's static registry, which
+        // outlives this borrow; the call only reads its class.
         unsafe { llama_cpp_sys_4::ggml_backend_dev_type(self.dev).into() }
     }
 
@@ -125,6 +137,8 @@ impl LlamaBackendDevice {
     pub fn memory(&self) -> (usize, usize) {
         let mut free = 0usize;
         let mut total = 0usize;
+        // SAFETY: `self.dev` is a device handle owned by ggml's static
+        // registry, and `free`/`total` are stack locals ggml writes through.
         unsafe {
             llama_cpp_sys_4::ggml_backend_dev_memory(self.dev, &raw mut free, &raw mut total);
         }
@@ -192,6 +206,8 @@ impl LlamaVocab {
     /// Get the number of tokens in the vocabulary.
     #[must_use]
     pub fn n_tokens(&self) -> i32 {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_n_tokens(self.vocab.as_ref()) }
     }
 
@@ -202,102 +218,136 @@ impl LlamaVocab {
     /// Panics if the C API returns a vocabulary type that does not fit in `u32`.
     #[must_use]
     pub fn vocab_type(&self) -> u32 {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_type(self.vocab.as_ref()) as u32 }
     }
 
     /// Get the BOS token.
     #[must_use]
     pub fn bos(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_bos(self.vocab.as_ref()) })
     }
 
     /// Get the EOS token.
     #[must_use]
     pub fn eos(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_eos(self.vocab.as_ref()) })
     }
 
     /// Get the EOT (end of turn) token.
     #[must_use]
     pub fn eot(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_eot(self.vocab.as_ref()) })
     }
 
     /// Get the CLS (classification) token.
     #[must_use]
     pub fn cls(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_cls(self.vocab.as_ref()) })
     }
 
     /// Get the SEP (separator) token.
     #[must_use]
     pub fn sep(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_sep(self.vocab.as_ref()) })
     }
 
     /// Get the NL (newline) token.
     #[must_use]
     pub fn nl(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_nl(self.vocab.as_ref()) })
     }
 
     /// Get the PAD (padding) token.
     #[must_use]
     pub fn pad(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_pad(self.vocab.as_ref()) })
     }
 
     /// Get the FIM prefix token.
     #[must_use]
     pub fn fim_pre(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_pre(self.vocab.as_ref()) })
     }
 
     /// Get the FIM suffix token.
     #[must_use]
     pub fn fim_suf(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_suf(self.vocab.as_ref()) })
     }
 
     /// Get the FIM middle token.
     #[must_use]
     pub fn fim_mid(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_mid(self.vocab.as_ref()) })
     }
 
     /// Get the FIM padding token.
     #[must_use]
     pub fn fim_pad(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_pad(self.vocab.as_ref()) })
     }
 
     /// Get the FIM repository token.
     #[must_use]
     pub fn fim_rep(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_rep(self.vocab.as_ref()) })
     }
 
     /// Get the FIM separator token.
     #[must_use]
     pub fn fim_sep(&self) -> LlamaToken {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_fim_sep(self.vocab.as_ref()) })
     }
 
     /// Check whether BOS should be added.
     #[must_use]
     pub fn get_add_bos(&self) -> bool {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_get_add_bos(self.vocab.as_ref()) }
     }
 
     /// Check whether EOS should be added.
     #[must_use]
     pub fn get_add_eos(&self) -> bool {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_get_add_eos(self.vocab.as_ref()) }
     }
 
     /// Check whether SEP should be added.
     #[must_use]
     pub fn get_add_sep(&self) -> bool {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_get_add_sep(self.vocab.as_ref()) }
     }
 
@@ -314,6 +364,8 @@ impl LlamaVocab {
     #[must_use]
     pub fn suppress_tokens(&self) -> &[LlamaToken] {
         let mut n: i32 = 0;
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         let ptr = unsafe {
             llama_cpp_sys_4::llama_vocab_get_suppress_tokens(self.vocab.as_ref(), &raw mut n)
         };
@@ -348,10 +400,15 @@ impl LlamaVocab {
     ///
     /// Returns an error if llama.cpp reports a null text pointer.
     pub fn get_text_bytes(&self, token: LlamaToken) -> Result<&[u8], StringFromModelError> {
+        // SAFETY: a read through a live handle — the device, vocab or model
+        // this borrows from — returning a pointer llama.cpp owns and keeps
+        // valid; it is only checked and converted below, never freed here.
         let ptr = unsafe { llama_cpp_sys_4::llama_vocab_get_text(self.vocab.as_ref(), token.0) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         Ok(cstr.to_bytes())
     }
@@ -359,6 +416,8 @@ impl LlamaVocab {
     /// Get the score of a token.
     #[must_use]
     pub fn get_score(&self, token: LlamaToken) -> f32 {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_get_score(self.vocab.as_ref(), token.0) }
     }
 
@@ -369,24 +428,32 @@ impl LlamaVocab {
     /// Panics if the C API returns attributes that do not fit in `u32`.
     #[must_use]
     pub fn get_attr(&self, token: LlamaToken) -> u32 {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.vocab.as_ref(), token.0) as u32 }
     }
 
     /// Check if a token is a control token.
     #[must_use]
     pub fn is_control(&self, token: LlamaToken) -> bool {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_is_control(self.vocab.as_ref(), token.0) }
     }
 
     /// Check if a token is an end-of-generation token.
     #[must_use]
     pub fn is_eog(&self, token: LlamaToken) -> bool {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         unsafe { llama_cpp_sys_4::llama_vocab_is_eog(self.vocab.as_ref(), token.0) }
     }
 
     /// Get the token mask value for the vocabulary.
     #[must_use]
     pub fn mask(&self) -> LlamaToken {
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_mask(self.vocab.as_ref()) })
     }
 }
@@ -403,6 +470,8 @@ impl LlamaLoraAdapter {
     /// Get the number of metadata key-value pairs in the adapter.
     #[must_use]
     pub fn meta_count(&self) -> i32 {
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         unsafe { llama_cpp_sys_4::llama_adapter_meta_count(self.lora_adapter.as_ptr()) }
     }
 
@@ -418,6 +487,8 @@ impl LlamaLoraAdapter {
         buf_size: usize,
     ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         let ret = unsafe {
             llama_cpp_sys_4::llama_adapter_meta_key_by_index(
                 self.lora_adapter.as_ptr(),
@@ -443,6 +514,8 @@ impl LlamaLoraAdapter {
     pub fn meta_val_str(&self, key: &str, buf_size: usize) -> Result<String, StringFromModelError> {
         let c_key = CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         let ret = unsafe {
             llama_cpp_sys_4::llama_adapter_meta_val_str(
                 self.lora_adapter.as_ptr(),
@@ -471,6 +544,8 @@ impl LlamaLoraAdapter {
         buf_size: usize,
     ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         let ret = unsafe {
             llama_cpp_sys_4::llama_adapter_meta_val_str_by_index(
                 self.lora_adapter.as_ptr(),
@@ -507,6 +582,8 @@ impl LlamaLoraAdapter {
     /// Get the number of invocation tokens for this adapter.
     #[must_use]
     pub fn n_invocation_tokens(&self) -> u64 {
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         unsafe {
             llama_cpp_sys_4::llama_adapter_get_alora_n_invocation_tokens(self.lora_adapter.as_ptr())
         }
@@ -522,6 +599,8 @@ impl LlamaLoraAdapter {
         if n == 0 {
             return &[];
         }
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         let ptr = unsafe {
             llama_cpp_sys_4::llama_adapter_get_alora_invocation_tokens(self.lora_adapter.as_ptr())
         };
@@ -529,12 +608,16 @@ impl LlamaLoraAdapter {
             return &[];
         }
         // LlamaToken is repr(transparent) over llama_token (i32), so this cast is safe
+        // SAFETY: the pointer is non-null and the length is the count llama.cpp reported
+        // for that same buffer, so the slice stays inside it.
         unsafe { std::slice::from_raw_parts(ptr.cast::<LlamaToken>(), n) }
     }
 }
 
 impl Drop for LlamaLoraAdapter {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe {
             llama_cpp_sys_4::llama_adapter_lora_free(self.lora_adapter.as_ptr());
         }
@@ -580,8 +663,13 @@ pub enum Special {
     Plaintext,
 }
 
+// SAFETY: a `llama_model` is not tied to the thread that loaded it; llama.cpp
+// stores no thread-local state in it.
 unsafe impl Send for LlamaModel {}
 
+// SAFETY: every method on `LlamaModel` that mutates the underlying model takes
+// `&mut self` (`set_attn_rot`), so a shared reference reaches only reads,
+// which llama.cpp allows concurrently.
 unsafe impl Sync for LlamaModel {}
 
 impl LlamaModel {
@@ -610,6 +698,8 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn get_vocab(&self) -> LlamaVocab {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let llama_vocab = unsafe { llama_model_get_vocab(self.model.as_ptr()) }.cast_mut();
 
         LlamaVocab {
@@ -627,6 +717,8 @@ impl LlamaModel {
     /// which is almost certainly positive.
     #[must_use]
     pub fn n_ctx_train(&self) -> u32 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let n_ctx_train = unsafe { llama_model_n_ctx_train(self.model.as_ptr()) };
         u32::try_from(n_ctx_train).expect("n_ctx_train fits into an u32")
     }
@@ -767,12 +859,16 @@ impl LlamaModel {
     ///
     /// Returns an error if the token text is null or not valid UTF-8.
     pub fn token_get_text(&self, token: LlamaToken) -> Result<&str, StringFromModelError> {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         let ptr = unsafe {
             llama_cpp_sys_4::llama_vocab_get_text(self.get_vocab().vocab.as_ref(), token.0)
         };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
@@ -795,6 +891,8 @@ impl LlamaModel {
     /// of a sequence generation).
     #[must_use]
     pub fn decode_start_token(&self) -> LlamaToken {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let token = unsafe { llama_model_decoder_start_token(self.model.as_ptr()) };
         LlamaToken(token)
     }
@@ -888,6 +986,10 @@ impl LlamaModel {
             buffer.resize(capacity, 0);
             let native_capacity = c_int::try_from(capacity)
                 .map_err(|_| TokenToStringError::BufferCapacityExceeded(capacity))?;
+            // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+            // cannot write past it; a negative return means the buffer was too small
+            // and nothing was written. Any string arguments are `CString`s alive for
+            // the call.
             let size = unsafe {
                 llama_token_to_piece(
                     self.get_vocab().vocab.as_ref(),
@@ -1099,6 +1201,10 @@ impl LlamaModel {
         }
         let buffer_capacity = c_int::try_from(buffer.capacity())?;
         let text_length = c_int::try_from(str.len())?;
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let size = unsafe {
             llama_tokenize(
                 self.get_vocab().vocab.as_ref(),
@@ -1119,6 +1225,10 @@ impl LlamaModel {
                 buffer.reserve_exact(required);
             }
             let retry_capacity = c_int::try_from(buffer.capacity())?;
+            // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+            // cannot write past it; a negative return means the buffer was too small
+            // and nothing was written. Any string arguments are `CString`s alive for
+            // the call.
             unsafe {
                 llama_tokenize(
                     self.get_vocab().vocab.as_ref(),
@@ -1159,6 +1269,10 @@ impl LlamaModel {
         if let Some(position) = str.as_bytes().iter().position(|byte| *byte == 0) {
             return Err(StringToTokenError::InteriorNul(position));
         }
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let size = unsafe {
             llama_tokenize(
                 self.get_vocab().vocab.as_ref(),
@@ -1202,6 +1316,8 @@ impl LlamaModel {
     #[must_use]
     pub fn token_attr(&self, LlamaToken(id): LlamaToken) -> LlamaTokenAttrs {
         let token_type =
+            // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+            // token and index arguments are scalars llama.cpp range-checks.
             unsafe { llama_cpp_sys_4::llama_vocab_get_attr(self.get_vocab().vocab.as_ref(), id) };
         LlamaTokenAttrs::try_from(token_type).expect("token type is valid")
     }
@@ -1233,6 +1349,10 @@ impl LlamaModel {
         // First call with empty buffer to get required size
         let n_tokens = tokens.len() as i32;
         let token_ptr = tokens.as_ptr().cast::<llama_cpp_sys_4::llama_token>();
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let needed = unsafe {
             llama_detokenize(
                 self.get_vocab().vocab.as_ref(),
@@ -1251,6 +1371,10 @@ impl LlamaModel {
             needed as usize
         };
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let ret = unsafe {
             llama_detokenize(
                 self.get_vocab().vocab.as_ref(),
@@ -1376,6 +1500,10 @@ impl LlamaModel {
         let len = c_int::try_from(len).expect("length fits into c_int");
         let buf = string.into_raw();
         let lstrip = lstrip.map_or(0, |it| i32::from(it.get()));
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let size = unsafe {
             llama_token_to_piece(
                 self.get_vocab().vocab.as_ref(),
@@ -1391,6 +1519,8 @@ impl LlamaModel {
             0 => Err(TokenToStringError::UnknownTokenType),
             i if i.is_negative() => Err(TokenToStringError::InsufficientBufferSpace(i)),
             size => {
+                // SAFETY: the bytes come from llama.cpp's own output and contain no interior NUL,
+                // which is what the unchecked constructor requires.
                 let string = unsafe { CString::from_raw(buf) };
                 let mut bytes = string.into_bytes();
                 let len = usize::try_from(size).expect("size is positive and fits into usize");
@@ -1428,6 +1558,10 @@ impl LlamaModel {
         let mut buffer = vec![0_u8; buffer_size];
         let len = c_int::try_from(buffer.len()).expect("length fits into c_int");
         let lstrip = lstrip.map_or(0, |it| i32::from(it.get()));
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let size = unsafe {
             llama_token_to_piece(
                 self.get_vocab().vocab.as_ref(),
@@ -1498,6 +1632,8 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn vocab_type(&self) -> VocabType {
+        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
+        // token and index arguments are scalars llama.cpp range-checks.
         let vocab_type = unsafe { llama_vocab_type(self.get_vocab().vocab.as_ref()) };
         VocabType::try_from(vocab_type).expect("invalid vocab type")
     }
@@ -1527,12 +1663,16 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_embd(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_embd(self.model.as_ptr()) }
     }
 
     /// Get the number of transformer layers in the model.
     #[must_use]
     pub fn n_layer(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_layer(self.model.as_ptr()) }
     }
 
@@ -1559,6 +1699,8 @@ impl LlamaModel {
     /// ```
     #[must_use]
     pub fn n_layer_nextn(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_layer_nextn(self.model.as_ptr()) }
     }
 
@@ -1567,6 +1709,8 @@ impl LlamaModel {
     /// Returns `0` for dense (non-MoE) checkpoints.
     #[must_use]
     pub fn n_expert(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_expert(self.model.as_ptr()) }
     }
 
@@ -1576,6 +1720,8 @@ impl LlamaModel {
     /// the model is not yet loaded onto any device.
     #[must_use]
     pub fn n_devices(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_devices(self.model.as_ptr()) }
     }
 
@@ -1588,6 +1734,8 @@ impl LlamaModel {
         if index < 0 || index >= self.n_devices() {
             return None;
         }
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let dev = unsafe { llama_model_get_device(self.model.as_ptr(), index) };
         if dev.is_null() {
             None
@@ -1615,14 +1763,20 @@ impl LlamaModel {
     /// metadata is absent.
     #[must_use]
     pub fn target_layer_ids(&self) -> &[i32] {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let n = unsafe { llama_model_target_layer_ids_n(self.model.as_ptr()) };
         if n == 0 {
             return &[];
         }
+        // SAFETY: the pointer is non-null and the length is the count llama.cpp reported
+        // for that same buffer, so the slice stays inside it.
         let ptr = unsafe { llama_model_target_layer_ids(self.model.as_ptr()) };
         if ptr.is_null() {
             &[]
         } else {
+            // SAFETY: the pointer is non-null and the length is the count llama.cpp reported
+            // for that same buffer, so the slice stays inside it.
             unsafe { slice::from_raw_parts(ptr, n as usize) }
         }
     }
@@ -1630,24 +1784,32 @@ impl LlamaModel {
     /// Get the number of attention heads in the model.
     #[must_use]
     pub fn n_head(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_head(self.model.as_ptr()) }
     }
 
     /// Get the number of key-value attention heads in the model.
     #[must_use]
     pub fn n_head_kv(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_head_kv(self.model.as_ptr()) }
     }
 
     /// Get the input embedding size of the model.
     #[must_use]
     pub fn n_embd_inp(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_embd_inp(self.model.as_ptr()) }
     }
 
     /// Get the output embedding size of the model.
     #[must_use]
     pub fn n_embd_out(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_embd_out(self.model.as_ptr()) }
     }
 
@@ -1655,36 +1817,48 @@ impl LlamaModel {
     /// Returns 0 if the model does not use sliding window attention.
     #[must_use]
     pub fn n_swa(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_swa(self.model.as_ptr()) }
     }
 
     /// Get the `RoPE` type used by the model.
     #[must_use]
     pub fn rope_type(&self) -> i32 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_rope_type(self.model.as_ptr()) }
     }
 
     /// Get the `RoPE` frequency scale used during training.
     #[must_use]
     pub fn rope_freq_scale_train(&self) -> f32 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_rope_freq_scale_train(self.model.as_ptr()) }
     }
 
     /// Get the model size in bytes.
     #[must_use]
     pub fn model_size(&self) -> u64 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_size(self.model.as_ptr()) }
     }
 
     /// Get the number of parameters in the model.
     #[must_use]
     pub fn n_params(&self) -> u64 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_params(self.model.as_ptr()) }
     }
 
     /// Get the number of classification outputs.
     #[must_use]
     pub fn n_cls_out(&self) -> u32 {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_n_cls_out(self.model.as_ptr()) }
     }
 
@@ -1694,10 +1868,15 @@ impl LlamaModel {
     ///
     /// Returns an error if the label is null or not valid UTF-8.
     pub fn cls_label(&self, index: u32) -> Result<&str, StringFromModelError> {
+        // SAFETY: a read through a live handle — the device, vocab or model
+        // this borrows from — returning a pointer llama.cpp owns and keeps
+        // valid; it is only checked and converted below, never freed here.
         let ptr = unsafe { llama_model_cls_label(self.model.as_ptr(), index) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
@@ -1716,6 +1895,8 @@ impl LlamaModel {
     /// Get the number of metadata key-value pairs.
     #[must_use]
     pub fn meta_count(&self) -> c_int {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_meta_count(self.model.as_ptr()) }
     }
 
@@ -1743,10 +1924,15 @@ impl LlamaModel {
             None => None,
         };
         let name_ptr = c_name.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        // SAFETY: a read through a live handle — the device, vocab or model
+        // this borrows from — returning a pointer llama.cpp owns and keeps
+        // valid; it is only checked and converted below, never freed here.
         let ptr = unsafe { llama_model_chat_template(self.model.as_ptr(), name_ptr) };
         if ptr.is_null() {
             return Err(StringFromModelError::ReturnedError(-1));
         }
+        // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+        // it owns, which outlives the borrow taken here.
         let cstr = unsafe { CStr::from_ptr(ptr) };
         cstr.to_str().map_err(StringFromModelError::Utf8Error)
     }
@@ -1758,6 +1944,8 @@ impl LlamaModel {
     /// specify one) or a type added upstream since this release.
     #[must_use]
     pub fn ftype(&self) -> Option<LlamaFtype> {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let raw = unsafe { llama_model_ftype(self.model.as_ptr()) };
         LlamaFtype::try_from(raw).ok()
     }
@@ -1843,6 +2031,8 @@ impl LlamaModel {
             if raw.is_null() {
                 break;
             }
+            // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+            // it owns, which outlives the borrow taken here.
             let label = unsafe { std::ffi::CStr::from_ptr(raw) };
             match label.to_str() {
                 Ok(label) => out.push(label.to_owned()),
@@ -1892,11 +2082,15 @@ impl LlamaModel {
     /// token-embedding tensor.
     pub fn token_embeddings(&self) -> Result<Vec<f32>, StringFromModelError> {
         // A null `out` asks for the element count without writing anything.
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let n = unsafe { llama_model_get_tok_embd(self.model.as_ptr(), std::ptr::null_mut()) };
         if n == 0 {
             return Err(StringFromModelError::ReturnedError(-1));
         }
         let mut out = vec![0.0_f32; n as usize];
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let written = unsafe { llama_model_get_tok_embd(self.model.as_ptr(), out.as_mut_ptr()) };
         if written == 0 {
             return Err(StringFromModelError::ReturnedError(-1));
@@ -1918,6 +2112,10 @@ impl LlamaModel {
     #[allow(clippy::cast_sign_loss)]
     pub fn desc(&self, buf_size: usize) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let ret = unsafe {
             llama_model_desc(
                 self.model.as_ptr(),
@@ -1948,6 +2146,10 @@ impl LlamaModel {
         buf_size: usize,
     ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let ret = unsafe {
             llama_model_meta_key_by_index(
                 self.model.as_ptr(),
@@ -1979,6 +2181,8 @@ impl LlamaModel {
         buf_size: usize,
     ) -> Result<String, StringFromModelError> {
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let ret = unsafe {
             llama_model_meta_val_str_by_index(
                 self.model.as_ptr(),
@@ -2007,6 +2211,10 @@ impl LlamaModel {
     pub fn meta_val_str(&self, key: &str, buf_size: usize) -> Result<String, StringFromModelError> {
         let c_key = CString::new(key).map_err(|_| StringFromModelError::ReturnedError(-1))?;
         let mut buf = vec![0u8; buf_size];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let ret = unsafe {
             llama_model_meta_val_str(
                 self.model.as_ptr(),
@@ -2048,30 +2256,40 @@ impl LlamaModel {
     /// Check if the model has an encoder.
     #[must_use]
     pub fn has_encoder(&self) -> bool {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_has_encoder(self.model.as_ptr()) }
     }
 
     /// Check if the model has a decoder.
     #[must_use]
     pub fn has_decoder(&self) -> bool {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_has_decoder(self.model.as_ptr()) }
     }
 
     /// Check if the model is recurrent (e.g. Mamba, RWKV).
     #[must_use]
     pub fn is_recurrent(&self) -> bool {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_is_recurrent(self.model.as_ptr()) }
     }
 
     /// Check if the model is a hybrid model.
     #[must_use]
     pub fn is_hybrid(&self) -> bool {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_is_hybrid(self.model.as_ptr()) }
     }
 
     /// Check if the model is a diffusion model.
     #[must_use]
     pub fn is_diffusion(&self) -> bool {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe { llama_model_is_diffusion(self.model.as_ptr()) }
     }
 
@@ -2109,6 +2327,10 @@ impl LlamaModel {
         let chat_ptr = chat_temp.into_raw();
         let chat_name = CString::new("tokenizer.chat_template").expect("no null bytes");
 
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let ret = unsafe {
             llama_model_meta_val_str(self.model.as_ptr(), chat_name.as_ptr(), chat_ptr, buf_size)
         };
@@ -2117,6 +2339,8 @@ impl LlamaModel {
             return Err(ChatTemplateError::MissingTemplate(ret));
         }
 
+        // SAFETY: the bytes come from llama.cpp's own output and contain no interior NUL,
+        // which is what the unchecked constructor requires.
         let template_c = unsafe { CString::from_raw(chat_ptr) };
         let template = template_c.to_str()?;
 
@@ -2167,6 +2391,8 @@ impl LlamaModel {
             .ok_or(LlamaModelLoadError::PathToStrError(path.to_path_buf()))?;
 
         let cstr = CString::new(path)?;
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let llama_model = unsafe { llama_model_load_from_file(cstr.as_ptr(), params.params) };
 
         let model = NonNull::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
@@ -2236,6 +2462,8 @@ impl LlamaModel {
         let c_ptrs: Vec<*const c_char> = c_strings.iter().map(|s| s.as_ptr()).collect();
 
         // Load the model from splits
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         let llama_model = unsafe {
             llama_model_load_from_splits(c_ptrs.as_ptr().cast_mut(), c_ptrs.len(), params.params)
         };
@@ -2298,6 +2526,8 @@ impl LlamaModel {
         let path = path.as_ref();
         let path_str = path.to_str().expect("path is not valid UTF-8");
         let c_path = CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
+        // scalars llama.cpp validates itself.
         unsafe {
             llama_model_save_to_file(self.model.as_ptr(), c_path.as_ptr());
         }
@@ -2314,17 +2544,27 @@ impl LlamaModel {
     #[must_use]
     pub fn chat_builtin_templates() -> Vec<String> {
         // First call to get count
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let count = unsafe { llama_chat_builtin_templates(std::ptr::null_mut(), 0) };
         if count <= 0 {
             return Vec::new();
         }
         let count = count as usize;
         let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); count];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         unsafe {
             llama_chat_builtin_templates(ptrs.as_mut_ptr(), count);
         }
         ptrs.iter()
             .map(|&p| {
+                // SAFETY: the pointer comes from llama.cpp and points at a NUL-terminated string
+                // it owns, which outlives the borrow taken here.
                 let cstr = unsafe { CStr::from_ptr(p) };
                 cstr.to_str()
                     .expect("template name is not valid UTF-8")
@@ -2375,6 +2615,8 @@ impl LlamaModel {
             ))?;
 
         let cstr = CString::new(path)?;
+        // SAFETY: the adapter handle and the model it came from are both alive for the
+        // call; any path argument is a `CString` that outlives it.
         let adapter = unsafe { llama_adapter_lora_init(self.model.as_ptr(), cstr.as_ptr()) };
 
         let adapter = NonNull::new(adapter).ok_or(LlamaLoraAdapterInitError::NullResult)?;
@@ -2539,12 +2781,21 @@ impl LlamaModel {
         let context_type = params.ctx_type();
         let context_params = params.context_params;
         let embeddings_enabled = params.embeddings();
+        // SAFETY: the model outlives the context by the lifetime on the return type, and
+        // the params are a plain struct passed by value. The result is checked
+        // for null before being wrapped.
         let context = unsafe { llama_init_from_model(self.model.as_ptr(), context_params) };
 
         // Restore the env-var to its previous state.
         #[allow(unused_unsafe)]
         match prev_rot_var {
+            // SAFETY: setting an environment variable races with any concurrent `getenv` in
+            // the process. This runs during model setup, before any thread that
+            // could read it is started, which is the only point it is safe to do.
             Some(v) => unsafe { std::env::set_var("LLAMA_ATTN_ROT_DISABLE", v) },
+            // SAFETY: setting an environment variable races with any concurrent `getenv` in
+            // the process. This runs during model setup, before any thread that
+            // could read it is started, which is the only point it is safe to do.
             None if params.attn_rot_disabled => unsafe {
                 std::env::remove_var("LLAMA_ATTN_ROT_DISABLE");
             },
@@ -2650,6 +2901,11 @@ impl LlamaModel {
         for _ in 0..2 {
             // Use u8 so that as_mut_ptr()/as_ptr() match the binding (*mut u8 / *const u8).
             let mut buff = vec![0u8; buf_size];
+            // SAFETY: the template and message pointers are alive for the
+            // call, and `buff`'s pointer and length are passed together so
+            // llama.cpp cannot write past it. A return larger than the
+            // buffer means nothing was written and the loop retries with
+            // exactly the size it reported.
             let res = unsafe {
                 llama_chat_apply_template(
                     tmpl_ptr,
@@ -2716,6 +2972,10 @@ impl LlamaModel {
     #[must_use]
     pub fn split_path(path_prefix: &str, split_no: i32, split_count: i32) -> String {
         let mut buffer = vec![0u8; 1024];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let len = unsafe {
             llama_split_path(
                 buffer.as_mut_ptr().cast::<c_char>(),
@@ -2761,6 +3021,10 @@ impl LlamaModel {
     #[must_use]
     pub fn split_prefix(split_path: &str, split_no: i32, split_count: i32) -> Option<String> {
         let mut buffer = vec![0u8; 1024];
+        // SAFETY: the buffer's pointer and capacity are passed together, so llama.cpp
+        // cannot write past it; a negative return means the buffer was too small
+        // and nothing was written. Any string arguments are `CString`s alive for
+        // the call.
         let len = unsafe {
             llama_split_prefix(
                 buffer.as_mut_ptr().cast::<c_char>(),
@@ -2799,6 +3063,8 @@ impl fmt::Display for LlamaModel {
 
 impl Drop for LlamaModel {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { llama_model_free(self.model.as_ptr()) }
     }
 }

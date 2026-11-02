@@ -1,9 +1,5 @@
 //! Representation of an initialized llama backend
 
-// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
-// way. See the note on the lint in the workspace `Cargo.toml`.
-#![deny(clippy::undocumented_unsafe_blocks)]
-
 use crate::LLamaCppError;
 use llama_cpp_sys_4::ggml_log_level;
 use std::sync::atomic::AtomicBool;

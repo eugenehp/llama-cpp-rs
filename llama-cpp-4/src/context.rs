@@ -120,6 +120,119 @@ impl Debug for LlamaContext<'_> {
     }
 }
 
+impl LlamaContext<'_> {
+    // ── raw output buffers ───────────────────────────────────────────────
+    //
+    // Every accessor below reads a buffer llama.cpp owns, through a pointer it
+    // hands back, for a number of elements this crate has to supply. The width
+    // is not a cosmetic detail: pass one too large and the slice runs off the
+    // row — off the whole allocation, on the last one. That is exactly what
+    // issue #360 was, in five separate accessors, because each picked its own
+    // width inline and nothing tied the choice to llama.cpp's allocation.
+    //
+    // So the widths are derived in one place here, and the pointer-to-slice
+    // step happens in one of two helpers rather than at each call site. There
+    // are three correct answers and they are easy to confuse:
+    //
+    //   embd / embd_nextn   n_embd_out()   `n_embd_out*n_outputs_max`
+    //   embd_seq            pooling-dependent: n_cls_out for RANK, else n_embd_out
+    //   embd_layer_inp      n_embd         layer *inputs*, a different buffer
+    //   logits              n_vocab
+
+    /// Read a scalar straight off the context.
+    ///
+    /// These are all the same one-line shape — call an llama.cpp getter with
+    /// the context pointer and return what it says — so they share one
+    /// justification here rather than repeating it a dozen times.
+    fn get<T>(&self, f: unsafe extern "C" fn(*const llama_cpp_sys_4::llama_context) -> T) -> T {
+        // SAFETY: `f` is an llama.cpp accessor that only reads from the
+        // context, and `self.context` is non-null and kept alive by this
+        // borrow. Nothing here escapes a pointer.
+        unsafe { f(self.context.as_ptr()) }
+    }
+
+    /// [`Self::get`] for the handful of read-only getters whose binding still
+    /// takes `*mut llama_context`.
+    ///
+    /// The mutability is upstream's signature, not a statement about what the
+    /// call does, which is why this takes `&self` like its sibling.
+    fn get_via_mut<T>(
+        &self,
+        f: unsafe extern "C" fn(*mut llama_cpp_sys_4::llama_context) -> T,
+    ) -> T {
+        // SAFETY: as `get` above — a read through a live, non-null context.
+        unsafe { f(self.context.as_ptr()) }
+    }
+
+    /// Row width of the token-embedding buffers (`embd` and `embd_nextn`).
+    ///
+    /// llama.cpp allocates both as `n_embd_out * n_outputs_max` and strides
+    /// them by `hparams.n_embd_out()`, which is `n_embd_out_impl` when the
+    /// model declares one and `n_embd` otherwise — so this is *not*
+    /// interchangeable with [`LlamaModel::n_embd`].
+    fn embd_row_width(&self) -> usize {
+        usize::try_from(self.model.n_embd_out()).expect("n_embd_out does not fit into a usize")
+    }
+
+    /// Row width of the pooled `embd_seq` buffer, which depends on pooling.
+    ///
+    /// RANK pooling stores `n_cls_out` rerank scores per sequence rather than
+    /// an embedding, so it is not an embedding width at all.
+    fn embd_seq_row_width(&self) -> usize {
+        if self.pooling_type() == LlamaPoolingType::Rank {
+            usize::try_from(self.model.n_cls_out()).expect("n_cls_out does not fit into a usize")
+        } else {
+            self.embd_row_width()
+        }
+    }
+
+    /// Row width of the logits buffer.
+    fn logits_row_width(&self) -> usize {
+        usize::try_from(self.model.n_vocab()).expect("n_vocab does not fit into a usize")
+    }
+
+    /// One row from a whole-buffer accessor, or `None` if llama.cpp has no
+    /// data for it.
+    ///
+    /// `len` must be a width from the helpers above; passing anything else is
+    /// what this exists to prevent.
+    fn buffer(
+        &self,
+        get: unsafe extern "C" fn(*mut llama_cpp_sys_4::llama_context) -> *mut f32,
+        len: usize,
+    ) -> Option<&[f32]> {
+        // SAFETY: `get` is one of llama.cpp's buffer accessors and
+        // `self.context` is a live, non-null context this borrow keeps alive,
+        // so the call is valid and returns either null or a pointer to a
+        // buffer llama.cpp owns. `len` comes from the width helpers above,
+        // which mirror llama.cpp's own allocation, so the slice stays inside
+        // it. The lifetime is tied to `&self`, and every method that can
+        // invalidate the buffer takes `&mut self`.
+        unsafe {
+            let ptr = get(self.context.as_ptr());
+            (!ptr.is_null() && len != 0).then(|| slice::from_raw_parts(ptr, len))
+        }
+    }
+
+    /// One row from an accessor indexed by token or sequence id.
+    ///
+    /// Out-of-range indices come back as `None`: llama.cpp logs and returns
+    /// null rather than trapping (in release builds).
+    fn buffer_at<I, T>(
+        &self,
+        get: unsafe extern "C" fn(*mut llama_cpp_sys_4::llama_context, I) -> *mut T,
+        i: I,
+        len: usize,
+    ) -> Option<&[T]> {
+        // SAFETY: as `buffer` above; `i` is passed through to llama.cpp, which
+        // range-checks it and returns null when it is out of range.
+        unsafe {
+            let ptr = get(self.context.as_ptr(), i);
+            (!ptr.is_null() && len != 0).then(|| slice::from_raw_parts(ptr, len))
+        }
+    }
+}
+
 impl<'model> LlamaContext<'model> {
     /// Creates a new instance of `LlamaContext` with the provided model, context, and embeddings flag.
     ///
@@ -188,19 +301,19 @@ impl<'model> LlamaContext<'model> {
     /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to `n_ubatch`.
     #[must_use]
     pub fn n_batch(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_batch(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_batch)
     }
 
     /// Gets the max number of physical tokens (hardware level) to decode in batch. Must be less than or equal to `n_batch`.
     #[must_use]
     pub fn n_ubatch(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_ubatch(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_ubatch)
     }
 
     /// Gets the size of the context.
     #[must_use]
     pub fn n_ctx(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_ctx(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_ctx)
     }
 
     /// Decodes the batch.
@@ -214,6 +327,9 @@ impl<'model> LlamaContext<'model> {
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn decode(&mut self, batch: &mut LlamaBatch) -> Result<(), DecodeError> {
         let result =
+            // SAFETY: `self.context` is non-null and kept alive by this borrow, and `batch` is owned by the caller and
+            // valid for the duration of the call. llama.cpp reports failure through the
+            // return code rather than by trapping.
             unsafe { llama_cpp_sys_4::llama_decode(self.context.as_ptr(), batch.llama_batch) };
         if let Some(failure) = self
             .tensor_transactions
@@ -280,6 +396,10 @@ impl<'model> LlamaContext<'model> {
             return Err(ProcessError::IncompleteEntry(entry));
         }
 
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and
+        // `batch` belongs to this context — checked against `batch.ctx_id`
+        // above — with every entry confirmed complete, so llama.cpp will not
+        // read an uninitialised one. Failure comes back as a return code.
         let result = unsafe {
             llama_cpp_sys_4::llama_process(self.context.as_ptr(), kind.into(), batch.as_ptr())
         };
@@ -373,6 +493,8 @@ impl<'model> LlamaContext<'model> {
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn encode(&mut self, batch: &mut LlamaBatch) -> Result<(), EncodeError> {
         let result =
+            // SAFETY: `self.context` is non-null and kept alive by this borrow, and `batch` is owned by the caller and
+            // valid for the duration of the call.
             unsafe { llama_cpp_sys_4::llama_encode(self.context.as_ptr(), batch.llama_batch) };
 
         match NonZeroI32::new(result) {
@@ -388,6 +510,7 @@ impl<'model> LlamaContext<'model> {
     /// Return Pooling type for Llama's Context
     #[must_use]
     pub fn pooling_type(&self) -> LlamaPoolingType {
+        // SAFETY: a plain read through a live context.
         let pooling_type = unsafe { llama_pooling_type(self.context.as_ptr()) };
 
         LlamaPoolingType::from(pooling_type)
@@ -408,25 +531,20 @@ impl<'model> LlamaContext<'model> {
     ///
     /// # Panics
     ///
-    /// * `n_embd` does not fit into a usize
+    /// * the row width does not fit into a usize
     pub fn embeddings_seq_ith(&self, i: i32) -> Result<&[f32], EmbeddingsError> {
         if !self.embeddings_enabled {
             return Err(EmbeddingsError::NotEnabled);
         }
 
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys_4::llama_get_embeddings_seq(self.context.as_ptr(), i);
-
-            // Technically also possible whenever `i >= max(batch.n_seq)`, but can't check that here.
-            if embedding.is_null() {
-                Err(EmbeddingsError::NonePoolType)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
-        }
+        // Technically also possible whenever `i >= max(batch.n_seq)`, but can't
+        // check that here.
+        self.buffer_at(
+            llama_cpp_sys_4::llama_get_embeddings_seq,
+            i,
+            self.embd_seq_row_width(),
+        )
+        .ok_or(EmbeddingsError::NonePoolType)
     }
 
     /// Get the embeddings for the `i`th token in the current context.
@@ -434,7 +552,8 @@ impl<'model> LlamaContext<'model> {
     /// # Returns
     ///
     /// A slice containing the embeddings for the last decoded batch of the given token.
-    /// The size corresponds to the `n_embd` parameter of the context's model.
+    /// The size corresponds to [`LlamaModel::n_embd_out`], the model's *output*
+    /// embedding width.
     ///
     /// # Errors
     ///
@@ -444,24 +563,20 @@ impl<'model> LlamaContext<'model> {
     ///
     /// # Panics
     ///
-    /// * `n_embd` does not fit into a usize
+    /// * `n_embd_out` does not fit into a usize
     pub fn embeddings_ith(&self, i: i32) -> Result<&[f32], EmbeddingsError> {
         if !self.embeddings_enabled {
             return Err(EmbeddingsError::NotEnabled);
         }
 
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys_4::llama_get_embeddings_ith(self.context.as_ptr(), i);
-            // Technically also possible whenever `i >= batch.n_tokens`, but no good way of checking `n_tokens` here.
-            if embedding.is_null() {
-                Err(EmbeddingsError::LogitsNotEnabled)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
-        }
+        // Technically also possible whenever `i >= batch.n_tokens`, but no good
+        // way of checking `n_tokens` here.
+        self.buffer_at(
+            llama_cpp_sys_4::llama_get_embeddings_ith,
+            i,
+            self.embd_row_width(),
+        )
+        .ok_or(EmbeddingsError::LogitsNotEnabled)
     }
 
     /// Get the logits for the last token in the context.
@@ -512,11 +627,8 @@ impl<'model> LlamaContext<'model> {
     /// - token data returned is null
     #[must_use]
     pub fn get_logits(&self) -> &[f32] {
-        let data = unsafe { llama_cpp_sys_4::llama_get_logits(self.context.as_ptr()) };
-        assert!(!data.is_null(), "logits data for last token is null");
-        let len = usize::try_from(self.model.n_vocab()).expect("n_vocab does not fit into a usize");
-
-        unsafe { slice::from_raw_parts(data, len) }
+        self.buffer(llama_cpp_sys_4::llama_get_logits, self.logits_row_width())
+            .expect("logits data for last token is null")
     }
 
     /// Get the logits for the ith token in the context.
@@ -552,44 +664,48 @@ impl<'model> LlamaContext<'model> {
             i
         );
 
-        let data = unsafe { llama_cpp_sys_4::llama_get_logits_ith(self.context.as_ptr(), i) };
-        let len = usize::try_from(self.model.n_vocab()).expect("n_vocab does not fit into a usize");
-
-        unsafe { slice::from_raw_parts(data, len) }
+        self.buffer_at(
+            llama_cpp_sys_4::llama_get_logits_ith,
+            i,
+            self.logits_row_width(),
+        )
+        .expect("logits data for this token is null")
     }
 
     /// Get the number of context tokens per sequence.
     #[must_use]
     pub fn n_ctx_seq(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_ctx_seq(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_ctx_seq)
     }
 
     /// Get the maximum number of sequences.
     #[must_use]
     pub fn n_seq_max(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_seq_max(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_seq_max)
     }
 
     /// Get the number of recurrent-state snapshots per sequence.
     #[must_use]
     pub fn n_rs_seq(&self) -> u32 {
-        unsafe { llama_cpp_sys_4::llama_n_rs_seq(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_n_rs_seq)
     }
 
     /// Get the number of threads used for generation.
     #[must_use]
     pub fn n_threads(&self) -> i32 {
-        unsafe { llama_cpp_sys_4::llama_n_threads(self.context.as_ptr()) }
+        self.get_via_mut(llama_cpp_sys_4::llama_n_threads)
     }
 
     /// Get the number of threads used for batch processing.
     #[must_use]
     pub fn n_threads_batch(&self) -> i32 {
-        unsafe { llama_cpp_sys_4::llama_n_threads_batch(self.context.as_ptr()) }
+        self.get_via_mut(llama_cpp_sys_4::llama_n_threads_batch)
     }
 
     /// Set the number of threads used for generation and batch processing.
     pub fn set_n_threads(&mut self, n_threads: i32, n_threads_batch: i32) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the two counts are plain integers
+        // llama.cpp range-checks itself.
         unsafe {
             llama_cpp_sys_4::llama_set_n_threads(self.context.as_ptr(), n_threads, n_threads_batch);
         }
@@ -600,6 +716,8 @@ impl<'model> LlamaContext<'model> {
     /// If set to `false`, the model will use non-causal attention, which is
     /// needed for embedding models.
     pub fn set_causal_attn(&mut self, causal_attn: bool) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
+        // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_causal_attn(self.context.as_ptr(), causal_attn);
         }
@@ -613,7 +731,7 @@ impl<'model> LlamaContext<'model> {
     /// via the model's own default, not from anything the caller set.
     #[must_use]
     pub fn causal_attn(&self) -> bool {
-        unsafe { llama_cpp_sys_4::llama_get_causal_attn(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_get_causal_attn)
     }
 
     /// Set whether to compute embeddings.
@@ -622,6 +740,8 @@ impl<'model> LlamaContext<'model> {
     /// context creation time).
     pub fn set_embeddings(&mut self, embeddings: bool) {
         self.embeddings_enabled = embeddings;
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
+        // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_embeddings(self.context.as_ptr(), embeddings);
         }
@@ -632,6 +752,8 @@ impl<'model> LlamaContext<'model> {
     /// Warmup runs are useful for GPU backends to compile kernels before
     /// actual inference begins.
     pub fn set_warmup(&mut self, warmup: bool) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
+        // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_warmup(self.context.as_ptr(), warmup);
         }
@@ -639,6 +761,7 @@ impl<'model> LlamaContext<'model> {
 
     /// Wait for all pending async computations to finish.
     pub fn synchronize(&mut self) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; this only waits for pending work.
         unsafe {
             llama_cpp_sys_4::llama_synchronize(self.context.as_ptr());
         }
@@ -656,23 +779,14 @@ impl<'model> LlamaContext<'model> {
     ///
     /// # Panics
     ///
-    /// * `n_embd` does not fit into a usize
+    /// * `n_embd_out` does not fit into a usize
     pub fn get_embeddings(&self) -> Result<&[f32], EmbeddingsError> {
         if !self.embeddings_enabled {
             return Err(EmbeddingsError::NotEnabled);
         }
 
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys_4::llama_get_embeddings(self.context.as_ptr());
-            if embedding.is_null() {
-                Err(EmbeddingsError::NonePoolType)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
-        }
+        self.buffer(llama_cpp_sys_4::llama_get_embeddings, self.embd_row_width())
+            .ok_or(EmbeddingsError::LogitsNotEnabled)
     }
 
     /// Toggle extraction of next-n embeddings (Rust name: pre-norm) — hidden
@@ -689,6 +803,8 @@ impl<'model> LlamaContext<'model> {
     /// and draft contexts automatically. Call this manually only for custom
     /// speculative setups.
     pub fn set_embeddings_pre_norm(&mut self, value: bool, masked: bool) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
+        // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_embeddings_nextn(self.context.as_ptr(), value, masked);
         }
@@ -698,7 +814,7 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns `None` when pre-norm embeddings are disabled or the buffer
     /// hasn't been populated. The length of the returned slice is
-    /// `n_embd * <number of pre-norm rows>` — interpretation of the row
+    /// `n_embd_out * <number of pre-norm rows>` — interpretation of the row
     /// count depends on whether the setter was called with `masked=true`
     /// (one row per sampled token) or `masked=false` (one row per batch
     /// token). Use [`get_embeddings_pre_norm_ith`](Self::get_embeddings_pre_norm_ith)
@@ -709,16 +825,10 @@ impl<'model> LlamaContext<'model> {
     /// Panics if `n_embd` does not fit in `usize`.
     #[must_use]
     pub fn get_embeddings_pre_norm(&self) -> Option<&[f32]> {
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-        unsafe {
-            let p = llama_cpp_sys_4::llama_get_embeddings_nextn(self.context.as_ptr());
-            if p.is_null() {
-                None
-            } else {
-                Some(slice::from_raw_parts(p, n_embd))
-            }
-        }
+        self.buffer(
+            llama_cpp_sys_4::llama_get_embeddings_nextn,
+            self.embd_row_width(),
+        )
     }
 
     /// Get the pre-norm embedding row for the `i`th output position of the
@@ -730,16 +840,11 @@ impl<'model> LlamaContext<'model> {
     /// Panics if `n_embd` does not fit in `usize`.
     #[must_use]
     pub fn get_embeddings_pre_norm_ith(&self, i: i32) -> Option<&[f32]> {
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-        unsafe {
-            let p = llama_cpp_sys_4::llama_get_embeddings_nextn_ith(self.context.as_ptr(), i);
-            if p.is_null() {
-                None
-            } else {
-                Some(slice::from_raw_parts(p, n_embd))
-            }
-        }
+        self.buffer_at(
+            llama_cpp_sys_4::llama_get_embeddings_nextn_ith,
+            i,
+            self.embd_row_width(),
+        )
     }
 
     /// Select which `NextN` block the MTP draft graph runs.
@@ -766,6 +871,8 @@ impl<'model> LlamaContext<'model> {
     /// # }
     /// ```
     pub fn set_nextn_layer_offset(&mut self, offset: i32) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the offset is a plain scalar
+        // llama.cpp validates itself.
         unsafe {
             llama_cpp_sys_4::llama_set_nextn_layer_offset(self.context.as_ptr(), offset);
         }
@@ -779,29 +886,34 @@ impl<'model> LlamaContext<'model> {
     /// was configured.
     #[must_use]
     pub fn ctx_other(&self) -> Option<NonNull<llama_cpp_sys_4::llama_context>> {
-        NonNull::new(unsafe { llama_cpp_sys_4::llama_get_ctx_other(self.context.as_ptr()) })
+        NonNull::new(self.get_via_mut(llama_cpp_sys_4::llama_get_ctx_other))
     }
 
     /// Reset the timings for the context.
     pub fn reset_timings(&mut self) {
+        // SAFETY: no pointer is involved; this initialises ggml's global timer and is
+        // safe to call more than once.
         unsafe { llama_cpp_sys_4::ggml_time_init() }
     }
 
     /// Returns the timings for the context.
     pub fn timings(&mut self) -> PerfContextData {
-        let perf_context_data =
-            unsafe { llama_cpp_sys_4::llama_perf_context(self.context.as_ptr()) };
+        let perf_context_data = self.get(llama_cpp_sys_4::llama_perf_context);
         PerfContextData { perf_context_data }
     }
 
     /// Reset the performance counters for the context.
     pub fn perf_context_reset(&mut self) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and `&mut self` rules out a
+        // concurrent read of the counters being reset.
         unsafe { llama_cpp_sys_4::llama_perf_context_reset(self.context.as_ptr()) }
     }
 
     /// Check if the KV cache memory supports shifting.
     #[must_use]
     pub fn memory_can_shift(&self) -> bool {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle it returns is
+        // borrowed from that context and valid for the rest of this block.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_can_shift(mem)
@@ -811,6 +923,8 @@ impl<'model> LlamaContext<'model> {
     /// Get the minimum position in a sequence's KV cache.
     #[must_use]
     pub fn memory_seq_pos_min(&self, seq_id: i32) -> i32 {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle it returns is
+        // borrowed from that context and valid for the rest of this block.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_pos_min(mem, seq_id)
@@ -821,6 +935,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// For structured access use [`Self::memory_breakdown`].
     pub fn memory_breakdown_print(&self) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the shim only reads from it and
+        // writes to llama.cpp's own log.
         unsafe {
             llama_cpp_sys_4::common_memory_breakdown_print(self.context.as_ptr());
         }
@@ -855,6 +971,8 @@ impl<'model> LlamaContext<'model> {
     /// Maps to `llama_set_embeddings_layer_inp`. After a successful
     /// [`Self::decode`], read the vector with [`Self::get_embeddings_layer_inp`].
     pub fn set_embeddings_layer_inp(&mut self, layer_id: u32, value: bool) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
+        // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_embeddings_layer_inp(self.context.as_ptr(), layer_id, value);
         }
@@ -871,17 +989,18 @@ impl<'model> LlamaContext<'model> {
     /// Panics if `n_embd` does not fit in `usize`.
     #[must_use]
     pub fn get_embeddings_layer_inp(&self, layer_id: u32) -> Option<&[f32]> {
+        // `n_embd()` here is deliberate, unlike every other buffer on this
+        // type, which take `n_embd_out()`. These rows are layer *inputs*:
+        // llama.cpp allocates `embd_layer_inp[lid]` as `n_embd * n_batch` and
+        // asserts `row_floats == hparams.n_embd` when filling it. The output
+        // width does not apply.
         let n_embd =
             usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-        unsafe {
-            let p =
-                llama_cpp_sys_4::llama_get_embeddings_layer_inp(self.context.as_ptr(), layer_id);
-            if p.is_null() {
-                None
-            } else {
-                Some(slice::from_raw_parts(p, n_embd))
-            }
-        }
+        self.buffer_at(
+            llama_cpp_sys_4::llama_get_embeddings_layer_inp,
+            layer_id,
+            n_embd,
+        )
     }
 
     /// Get the size of the full context state in bytes.
@@ -890,7 +1009,7 @@ impl<'model> LlamaContext<'model> {
     /// [`state_set_data`](Self::state_set_data).
     #[must_use]
     pub fn state_get_size(&mut self) -> usize {
-        unsafe { llama_cpp_sys_4::llama_state_get_size(self.context.as_ptr()) }
+        self.get_via_mut(llama_cpp_sys_4::llama_state_get_size)
     }
 
     /// Copy the full context state into a byte buffer.
@@ -899,6 +1018,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes written.
     pub fn state_get_data(&mut self, dst: &mut [u8]) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and the destination is a Rust buffer
+        // whose length is passed alongside it, so llama.cpp cannot write past it.
         unsafe {
             llama_cpp_sys_4::llama_state_get_data(
                 self.context.as_ptr(),
@@ -912,6 +1033,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes read.
     pub fn state_set_data(&mut self, src: &[u8]) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and `src` is a Rust slice whose
+        // pointer and length are passed together, so the read stays in bounds.
         unsafe {
             llama_cpp_sys_4::llama_state_set_data(self.context.as_ptr(), src.as_ptr(), src.len())
         }
@@ -931,6 +1054,8 @@ impl<'model> LlamaContext<'model> {
     ) -> bool {
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for the
+        // call, and the token pointer and count come from the same slice.
         unsafe {
             llama_cpp_sys_4::llama_state_save_file(
                 self.context.as_ptr(),
@@ -958,6 +1083,8 @@ impl<'model> LlamaContext<'model> {
         let mut n_token_count: usize = 0;
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for the
+        // call, and the output buffer's capacity is passed with it.
         let ok = unsafe {
             llama_cpp_sys_4::llama_state_load_file(
                 self.context.as_ptr(),
@@ -976,6 +1103,7 @@ impl<'model> LlamaContext<'model> {
     /// Get the size of a single sequence's state in bytes.
     #[must_use]
     pub fn state_seq_get_size(&mut self, seq_id: i32) -> usize {
+        // SAFETY: a read through a live context; `seq_id` is validated by llama.cpp.
         unsafe { llama_cpp_sys_4::llama_state_seq_get_size(self.context.as_ptr(), seq_id) }
     }
 
@@ -983,6 +1111,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes written.
     pub fn state_seq_get_data(&mut self, dst: &mut [u8], seq_id: i32) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and the destination buffer's length
+        // is passed with its pointer.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_get_data(
                 self.context.as_ptr(),
@@ -997,6 +1127,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes read.
     pub fn state_seq_set_data(&mut self, src: &[u8], dest_seq_id: i32) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and `src` is a Rust slice passed as
+        // pointer plus length.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_set_data(
                 self.context.as_ptr(),
@@ -1022,6 +1154,8 @@ impl<'model> LlamaContext<'model> {
     ) -> usize {
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for
+        // the call, and the token pointer and count come from one slice.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_save_file(
                 self.context.as_ptr(),
@@ -1051,6 +1185,8 @@ impl<'model> LlamaContext<'model> {
         let mut n_token_count: usize = 0;
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for
+        // the call, and the destination capacity is passed with its pointer.
         let ret = unsafe {
             llama_cpp_sys_4::llama_state_seq_load_file(
                 self.context.as_ptr(),
@@ -1086,6 +1222,8 @@ impl<'model> LlamaContext<'model> {
         il_start: i32,
         il_end: i32,
     ) -> Result<(), i32> {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the control-vector data is a Rust
+        // slice whose pointer and length are passed together.
         let ret = unsafe {
             llama_cpp_sys_4::llama_set_adapter_cvec(
                 self.context.as_ptr(),
@@ -1109,6 +1247,7 @@ impl<'model> LlamaContext<'model> {
     #[must_use]
     pub fn get_sampled_token_ith(&self, i: i32) -> LlamaToken {
         let token =
+            // SAFETY: a read through a live context; llama.cpp range-checks `i`.
             unsafe { llama_cpp_sys_4::llama_get_sampled_token_ith(self.context.as_ptr(), i) };
         LlamaToken(token)
     }
@@ -1118,6 +1257,7 @@ impl<'model> LlamaContext<'model> {
     /// Returns a slice of candidate tokens from the last decode call.
     #[must_use]
     pub fn get_sampled_candidates_ith(&self, i: i32) -> &[LlamaToken] {
+        // SAFETY: a read through a live context; llama.cpp range-checks `i`.
         let count = unsafe {
             llama_cpp_sys_4::llama_get_sampled_candidates_count_ith(self.context.as_ptr(), i)
         } as usize;
@@ -1125,16 +1265,23 @@ impl<'model> LlamaContext<'model> {
             return &[];
         }
         let ptr =
+            // SAFETY: a read through a live context; the returned pointer is checked
+            // for null immediately below.
             unsafe { llama_cpp_sys_4::llama_get_sampled_candidates_ith(self.context.as_ptr(), i) };
         if ptr.is_null() {
             return &[];
         }
+        // SAFETY: `ptr` is non-null (checked just above) and `count` came from
+        // llama.cpp's own count accessor for this same row, so it matches the
+        // allocation. `LlamaToken` is `#[repr(transparent)]` over `llama_token`,
+        // so the cast is a layout no-op.
         unsafe { slice::from_raw_parts(ptr.cast::<LlamaToken>(), count) }
     }
 
     /// Get the number of sampled logits for the `i`th position.
     #[must_use]
     pub fn get_sampled_logits_count_ith(&self, i: i32) -> u32 {
+        // SAFETY: a read through a live context; llama.cpp range-checks `i`.
         unsafe { llama_cpp_sys_4::llama_get_sampled_logits_count_ith(self.context.as_ptr(), i) }
     }
 
@@ -1144,20 +1291,16 @@ impl<'model> LlamaContext<'model> {
     #[must_use]
     pub fn get_sampled_logits_ith(&self, i: i32) -> &[f32] {
         let count = self.get_sampled_logits_count_ith(i) as usize;
-        if count == 0 {
-            return &[];
-        }
-        let ptr =
-            unsafe { llama_cpp_sys_4::llama_get_sampled_logits_ith(self.context.as_ptr(), i) };
-        if ptr.is_null() {
-            return &[];
-        }
-        unsafe { slice::from_raw_parts(ptr, count) }
+        // `buffer_at` already returns `None` for a null pointer or a zero
+        // length, which is what an uninitialised row looks like here.
+        self.buffer_at(llama_cpp_sys_4::llama_get_sampled_logits_ith, i, count)
+            .unwrap_or(&[])
     }
 
     /// Get the number of sampled probabilities for the `i`th position.
     #[must_use]
     pub fn get_sampled_probs_count_ith(&self, i: i32) -> u32 {
+        // SAFETY: a read through a live context; llama.cpp range-checks `i`.
         unsafe { llama_cpp_sys_4::llama_get_sampled_probs_count_ith(self.context.as_ptr(), i) }
     }
 
@@ -1167,19 +1310,16 @@ impl<'model> LlamaContext<'model> {
     #[must_use]
     pub fn get_sampled_probs_ith(&self, i: i32) -> &[f32] {
         let count = self.get_sampled_probs_count_ith(i) as usize;
-        if count == 0 {
-            return &[];
-        }
-        let ptr = unsafe { llama_cpp_sys_4::llama_get_sampled_probs_ith(self.context.as_ptr(), i) };
-        if ptr.is_null() {
-            return &[];
-        }
-        unsafe { slice::from_raw_parts(ptr, count) }
+        // `buffer_at` already returns `None` for a null pointer or a zero
+        // length, which is what an uninitialised row looks like here.
+        self.buffer_at(llama_cpp_sys_4::llama_get_sampled_probs_ith, i, count)
+            .unwrap_or(&[])
     }
 
     /// Get the size of a single sequence's state with flags.
     #[must_use]
     pub fn state_seq_get_size_ext(&mut self, seq_id: i32, flags: u32) -> usize {
+        // SAFETY: a read through a live context; `seq_id` is validated by llama.cpp.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_get_size_ext(self.context.as_ptr(), seq_id, flags)
         }
@@ -1189,6 +1329,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes written.
     pub fn state_seq_get_data_ext(&mut self, dst: &mut [u8], seq_id: i32, flags: u32) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and the destination buffer's length
+        // is passed with its pointer.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_get_data_ext(
                 self.context.as_ptr(),
@@ -1204,6 +1346,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// Returns the number of bytes read.
     pub fn state_seq_set_data_ext(&mut self, src: &[u8], dest_seq_id: i32, flags: u32) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and `src` is a Rust slice passed as
+        // pointer plus length.
         unsafe {
             llama_cpp_sys_4::llama_state_seq_set_data_ext(
                 self.context.as_ptr(),
@@ -1252,6 +1396,8 @@ impl<'model> LlamaContext<'model> {
 
     /// Detach the thread pool from the context.
     pub fn detach_threadpool(&mut self) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; detaching is idempotent and leaves the
+        // pool owned by the caller.
         unsafe {
             llama_cpp_sys_4::llama_detach_threadpool(self.context.as_ptr());
         }
@@ -1265,6 +1411,8 @@ impl<'model> LlamaContext<'model> {
         seq_id: i32,
         sampler: &mut crate::sampling::LlamaSampler,
     ) -> bool {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the sampler outlives the call and
+        // llama.cpp takes its own reference.
         unsafe {
             llama_cpp_sys_4::llama_set_sampler(
                 self.context.as_ptr(),
@@ -1280,7 +1428,7 @@ impl<'model> LlamaContext<'model> {
     /// the model via the `model` field instead.
     #[must_use]
     pub fn get_model_ptr(&self) -> *const llama_cpp_sys_4::llama_model {
-        unsafe { llama_cpp_sys_4::llama_get_model(self.context.as_ptr()) }
+        self.get(llama_cpp_sys_4::llama_get_model)
     }
 
     /// Sets a lora adapter.
@@ -1293,6 +1441,8 @@ impl<'model> LlamaContext<'model> {
         adapter: &mut LlamaLoraAdapter,
         scale: f32,
     ) -> Result<(), LlamaLoraAdapterSetError> {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the adapter array is built here and
+        // stays alive for the call, with its length passed alongside.
         let err_code = unsafe {
             // llama_set_adapter_lora / llama_rm_adapter_lora were replaced by llama_set_adapters_lora
             // which takes a full list of adapters + scales at once (b8249+)
@@ -1326,6 +1476,8 @@ impl<'model> LlamaContext<'model> {
         &self,
         _adapter: &mut LlamaLoraAdapter,
     ) -> Result<(), LlamaLoraAdapterRemoveError> {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the adapter array is built here and
+        // stays alive for the call, with its length passed alongside.
         let err_code = unsafe {
             llama_cpp_sys_4::llama_set_adapters_lora(
                 self.context.as_ptr(),
@@ -1345,6 +1497,8 @@ impl<'model> LlamaContext<'model> {
 
 impl Drop for LlamaContext<'_> {
     fn drop(&mut self) {
+        // SAFETY: this is the only place the context is freed, `Drop` runs once, and
+        // nothing reads `self.context` afterwards.
         unsafe { llama_cpp_sys_4::llama_free(self.context.as_ptr()) }
     }
 }

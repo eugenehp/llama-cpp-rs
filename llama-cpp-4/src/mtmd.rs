@@ -24,7 +24,7 @@
 //!
 //! // Load the multimodal projector (mmproj) model.
 //! let ctx_params = MtmdContextParams::default();
-//! let mtmd_ctx   = MtmdContext::init_from_file(Path::new("mmproj.gguf"), &model, ctx_params)
+//! let mut mtmd_ctx = MtmdContext::init_from_file(Path::new("mmproj.gguf"), &model, ctx_params)
 //!                               .unwrap();
 //!
 //! // Load an image from a file.
@@ -42,7 +42,7 @@
 //! // Evaluate / decode all chunks.
 //! let n_batch = lctx.n_batch() as i32;
 //! let mut n_past = 0i32;
-//! mtmd_ctx.eval_chunks(lctx.as_ptr(), &chunks, 0, 0, n_batch, true, &mut n_past).unwrap();
+//! mtmd_ctx.eval_chunks(&mut lctx, &chunks, 0, 0, n_batch, true, &mut n_past).unwrap();
 //! # }
 //! ```
 //!
@@ -158,6 +158,7 @@ impl std::fmt::Debug for MtmdContextParams {
 
 impl Default for MtmdContextParams {
     fn default() -> Self {
+        // SAFETY: no pointer is involved; upstream returns a fully initialised struct by value.
         let params = unsafe { sys::mtmd_context_params_default() };
         Self { params }
     }
@@ -327,24 +328,45 @@ impl MtmdContextParams {
 /// internal state and must not be called concurrently.
 pub struct MtmdContext {
     ptr: NonNull<sys::mtmd_context>,
+    /// Elements in the buffer `mtmd_get_output_embd` points at, recorded by
+    /// the last successful [`encode_chunk`](MtmdContext::encode_chunk).
+    ///
+    /// upstream documents the size only in prose — `n_embd_inp(model) *
+    /// chunk.n_tokens()` — and offers no accessor for it, so the only way for
+    /// [`output_embd`](MtmdContext::output_embd) to be a safe function is to
+    /// remember it at the point it is known. `0` before any encode, which is
+    /// also what an empty slice means.
+    last_output_elements: usize,
 }
 
-// The underlying mtmd_context is internally synchronised for tokenize().
-// encode / decode must be called from a single thread at a time (caller's
-// responsibility, enforced by the inference semaphore in the server).
+// SAFETY: `Send` is sound because nothing in `mtmd_context` is tied to the
+// thread that created it.
+//
+// `Sync` is sound because every operation that mutates the context now takes
+// `&mut self` — `encode_chunk` and the three eval/decode helpers — so a shared
+// `&MtmdContext` can only reach the read-only accessors and `tokenize`, which
+// upstream synchronises internally. That was *not* true before: those methods
+// took `&self`, which let two threads encode through a shared reference while
+// a third held a slice from `output_embd`. The signatures are what makes this
+// claim hold, so moving any of them back to `&self` invalidates it.
 unsafe impl Send for MtmdContext {}
+// SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+// remaining arguments are scalars or pointers valid for the call.
 unsafe impl Sync for MtmdContext {}
 
 impl std::fmt::Debug for MtmdContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MtmdContext")
             .field("ptr", &self.ptr)
+            .field("last_output_elements", &self.last_output_elements)
             .finish()
     }
 }
 
 impl Drop for MtmdContext {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_free(self.ptr.as_ptr()) }
     }
 }
@@ -354,7 +376,12 @@ impl MtmdContext {
     /// (currently `"<__media__>"`).
     #[must_use]
     pub fn default_marker() -> &'static str {
+        // SAFETY: a read through a live handle (or no handle at all, for the
+        // library-wide accessors); the returned pointer is only converted
+        // below, never freed here.
         let ptr = unsafe { sys::mtmd_default_marker() };
+        // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+        // handle-owned NUL-terminated string that outlives the borrow taken here.
         unsafe { CStr::from_ptr(ptr) }
             .to_str()
             .unwrap_or("<__media__>")
@@ -384,12 +411,18 @@ impl MtmdContext {
             .ok_or(MtmdError::PathNotUtf8)?;
         let c_path = CString::new(path)?;
 
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe {
             sys::mtmd_init_from_file(c_path.as_ptr(), text_model.model.as_ptr(), params.params)
         };
 
         let ptr = NonNull::new(ptr).ok_or(MtmdError::ContextCreateFailed)?;
-        Ok(Self { ptr })
+        Ok(Self {
+            ptr,
+            last_output_elements: 0,
+        })
     }
 
     // ── Logging ──────────────────────────────────────────────────────────
@@ -406,6 +439,8 @@ impl MtmdContext {
             _ud: *mut ::std::os::raw::c_void,
         ) {
         }
+        // SAFETY: the callback is a plain `extern "C"` function with no captured
+        // state, and the user-data pointer is null, which upstream allows.
         unsafe { sys::mtmd_log_set(Some(noop), std::ptr::null_mut()) };
     }
 
@@ -421,6 +456,8 @@ impl MtmdContext {
             _ud: *mut ::std::os::raw::c_void,
         ) {
         }
+        // SAFETY: the callback is a plain `extern "C"` function with no captured
+        // state, and the user-data pointer is null, which upstream allows.
         unsafe { sys::mtmd_helper_log_set(Some(noop), std::ptr::null_mut()) };
     }
 
@@ -429,12 +466,16 @@ impl MtmdContext {
     /// Returns `true` if the model supports vision (image) input.
     #[must_use]
     pub fn supports_vision(&self) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_support_vision(self.ptr.as_ptr()) }
     }
 
     /// Returns `true` if the model supports audio input.
     #[must_use]
     pub fn supports_audio(&self) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_support_audio(self.ptr.as_ptr()) }
     }
 
@@ -448,6 +489,8 @@ impl MtmdContext {
         note = "upstream deprecated `mtmd_helper_support_video`; use `capabilities(model).video`"
     )]
     pub fn supports_video(&self) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_helper_support_video(self.ptr.as_ptr()) }
     }
 
@@ -487,10 +530,15 @@ impl MtmdContext {
     /// [`MtmdContextParams::media_marker`]. Wraps `mtmd_get_marker`.
     #[must_use]
     pub fn marker(&self) -> &str {
+        // SAFETY: a read through a live handle (or no handle at all, for the
+        // library-wide accessors); the returned pointer is only converted
+        // below, never freed here.
         let ptr = unsafe { sys::mtmd_get_marker(self.ptr.as_ptr()) };
         if ptr.is_null() {
             return Self::default_marker();
         }
+        // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+        // handle-owned NUL-terminated string that outlives the borrow taken here.
         unsafe { CStr::from_ptr(ptr) }
             .to_str()
             .unwrap_or_else(|_| Self::default_marker())
@@ -500,6 +548,8 @@ impl MtmdContext {
     /// audio is not supported.
     #[must_use]
     pub fn audio_sample_rate(&self) -> i32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_get_audio_sample_rate(self.ptr.as_ptr()) }
     }
 
@@ -507,12 +557,16 @@ impl MtmdContext {
     /// decoding image embeddings for this model.
     #[must_use]
     pub fn decode_use_non_causal(&self, chunk: &MtmdInputChunk<'_>) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_decode_use_non_causal(self.ptr.as_ptr(), chunk.as_ptr()) }
     }
 
     /// Whether the model uses M-RoPE for `llama_decode`.
     #[must_use]
     pub fn decode_use_mrope(&self) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_decode_use_mrope(self.ptr.as_ptr()) }
     }
 
@@ -552,6 +606,8 @@ impl MtmdContext {
         // Length-delimited (llama.cpp #25548), so interior NULs are preserved.
         let c_text = text.as_raw();
 
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ret = unsafe {
             sys::mtmd_tokenize(
                 self.ptr.as_ptr(),
@@ -626,6 +682,8 @@ impl MtmdContext {
         let part_ptrs: Vec<*const sys::mtmd_input_part> =
             raw_parts.iter().map(std::ptr::from_ref).collect();
 
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ret = unsafe {
             sys::mtmd_tokenize_from_parts(
                 self.ptr.as_ptr(),
@@ -649,6 +707,8 @@ impl MtmdContext {
     /// Wraps `mtmd_gen_audio_get_info`.
     #[must_use]
     pub fn gen_audio_info(&self) -> Option<MtmdGenAudioInfo> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let info = unsafe { sys::mtmd_gen_audio_get_info(self.ptr.as_ptr()) };
         if info.type_ == sys::MTMD_GEN_AUDIO_TYPE_NONE {
             return None;
@@ -657,6 +717,8 @@ impl MtmdContext {
             None
         } else {
             Some(
+                // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+                // handle-owned NUL-terminated string that outlives the borrow taken here.
                 unsafe { CStr::from_ptr(info.model_variant) }
                     .to_string_lossy()
                     .into_owned(),
@@ -678,6 +740,8 @@ impl MtmdContext {
         note = "upstream deprecated `mtmd_helper_model_can_chat`; use `capabilities(model).chat`"
     )]
     pub fn model_can_chat(&self, ctx: &crate::context::LlamaContext<'_>) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_helper_model_can_chat(ctx.context.as_ptr(), self.ptr.as_ptr()) }
     }
 
@@ -692,11 +756,20 @@ impl MtmdContext {
     /// # Errors
     ///
     /// Returns [`MtmdError::EncodeError`] if encoding fails.
-    pub fn encode_chunk(&self, chunk: &MtmdInputChunk<'_>) -> Result<()> {
+    pub fn encode_chunk(&mut self, model: &LlamaModel, chunk: &MtmdInputChunk<'_>) -> Result<()> {
+        // SAFETY: a live `&mut self` gives an exclusive, non-null context, and
+        // `chunk` is owned by the caller and valid for the call.
         let ret = unsafe { sys::mtmd_encode_chunk(self.ptr.as_ptr(), chunk.ptr) };
         if ret != 0 {
             return Err(MtmdError::EncodeError(ret));
         }
+        // Record what the output buffer now holds, while it is knowable.
+        // Saturating rather than wrapping: a product this large cannot be a
+        // real buffer, and a wrapped value would be a short slice over a long
+        // one, which is the dangerous direction.
+        self.last_output_elements = usize::try_from(model.n_embd_inp())
+            .unwrap_or(0)
+            .saturating_mul(chunk.n_tokens());
         Ok(())
     }
 
@@ -713,12 +786,23 @@ impl MtmdContext {
     /// The returned slice is valid until the next call that mutates the
     /// context (e.g. another `encode_chunk`).
     #[must_use]
-    pub fn output_embd(&self, n_elements: usize) -> &[f32] {
-        let ptr = unsafe { sys::mtmd_get_output_embd(self.ptr.as_ptr()) };
-        if ptr.is_null() || n_elements == 0 {
+    pub fn output_embd(&self) -> &[f32] {
+        if self.last_output_elements == 0 {
             return &[];
         }
-        unsafe { slice::from_raw_parts(ptr, n_elements) }
+        // SAFETY: the pointer belongs to this context and is non-null once an
+        // encode has run — which `last_output_elements != 0` implies, since it
+        // is only set by a successful `encode_chunk`. That same call recorded
+        // the element count from the chunk it encoded, so the slice stays
+        // inside the buffer. The borrow is tied to `&self` and `encode_chunk`
+        // takes `&mut self`, so the slice cannot outlive the data.
+        unsafe {
+            let ptr = sys::mtmd_get_output_embd(self.ptr.as_ptr());
+            if ptr.is_null() {
+                return &[];
+            }
+            slice::from_raw_parts(ptr, self.last_output_elements)
+        }
     }
 
     // ── Helper API ────────────────────────────────────────────────────────
@@ -746,10 +830,10 @@ impl MtmdContext {
     /// # Errors
     ///
     /// Returns [`MtmdError::EvalError`] if evaluation fails.
-    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
     pub fn eval_chunks(
-        &self,
-        lctx: *mut sys::llama_context,
+        &mut self,
+        lctx: &mut crate::context::LlamaContext<'_>,
         chunks: &MtmdInputChunks,
         n_past: i32,
         seq_id: i32,
@@ -757,10 +841,15 @@ impl MtmdContext {
         logits_last: bool,
         new_n_past: &mut i32,
     ) -> Result<()> {
+        // SAFETY: both contexts are live and non-null — the mtmd one
+        // through `&self`, the llama one through an exclusive `&mut`
+        // borrow, which is what makes decoding into it sound. The
+        // remaining arguments are scalars llama.cpp range-checks, and
+        // `new_n_past` is a caller-owned `i32` written through.
         let ret = unsafe {
             sys::mtmd_helper_eval_chunks(
                 self.ptr.as_ptr(),
-                lctx,
+                lctx.context.as_ptr(),
                 chunks.ptr.as_ptr(),
                 n_past,
                 seq_id,
@@ -769,6 +858,11 @@ impl MtmdContext {
                 new_n_past,
             )
         };
+        // These encode chunks internally, so the output buffer no longer
+        // matches what `encode_chunk` last recorded — and the chunk sizes are
+        // not visible from here. Forget the length rather than hand out a
+        // slice sized for a different chunk; `output_embd` then reports empty.
+        self.last_output_elements = 0;
         if ret != 0 {
             return Err(MtmdError::EvalError(ret));
         }
@@ -783,10 +877,10 @@ impl MtmdContext {
     /// # Errors
     ///
     /// Returns [`MtmdError::EvalError`] if evaluation fails.
-    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
     pub fn eval_chunk_single(
-        &self,
-        lctx: *mut sys::llama_context,
+        &mut self,
+        lctx: &mut crate::context::LlamaContext<'_>,
         chunk: &MtmdInputChunk<'_>,
         n_past: i32,
         seq_id: i32,
@@ -794,10 +888,15 @@ impl MtmdContext {
         logits_last: bool,
         new_n_past: &mut i32,
     ) -> Result<()> {
+        // SAFETY: both contexts are live and non-null — the mtmd one
+        // through `&self`, the llama one through an exclusive `&mut`
+        // borrow, which is what makes decoding into it sound. The
+        // remaining arguments are scalars llama.cpp range-checks, and
+        // `new_n_past` is a caller-owned `i32` written through.
         let ret = unsafe {
             sys::mtmd_helper_eval_chunk_single(
                 self.ptr.as_ptr(),
-                lctx,
+                lctx.context.as_ptr(),
                 chunk.ptr,
                 n_past,
                 seq_id,
@@ -806,6 +905,11 @@ impl MtmdContext {
                 new_n_past,
             )
         };
+        // These encode chunks internally, so the output buffer no longer
+        // matches what `encode_chunk` last recorded — and the chunk sizes are
+        // not visible from here. Forget the length rather than hand out a
+        // slice sized for a different chunk; `output_embd` then reports empty.
+        self.last_output_elements = 0;
         if ret != 0 {
             return Err(MtmdError::EvalError(ret));
         }
@@ -830,10 +934,10 @@ impl MtmdContext {
     ///
     /// Returns [`MtmdError::EvalError`] with code `-1` if `chunk` is not an
     /// image/audio chunk, or `1` if `llama_decode` fails.
-    #[allow(clippy::too_many_arguments, clippy::not_unsafe_ptr_arg_deref)]
+    #[allow(clippy::too_many_arguments)]
     pub fn decode_image_chunk(
-        &self,
-        lctx: *mut sys::llama_context,
+        &mut self,
+        lctx: &mut crate::context::LlamaContext<'_>,
         chunk: &MtmdInputChunk<'_>,
         encoded_embd: &[f32],
         n_past: i32,
@@ -841,10 +945,15 @@ impl MtmdContext {
         n_batch: i32,
         new_n_past: &mut i32,
     ) -> Result<()> {
+        // SAFETY: both contexts are live and non-null — the mtmd one
+        // through `&self`, the llama one through an exclusive `&mut`
+        // borrow, which is what makes decoding into it sound. The
+        // remaining arguments are scalars llama.cpp range-checks, and
+        // `new_n_past` is a caller-owned `i32` written through.
         let ret = unsafe {
             sys::mtmd_helper_decode_image_chunk(
                 self.ptr.as_ptr(),
-                lctx,
+                lctx.context.as_ptr(),
                 chunk.ptr,
                 encoded_embd.as_ptr().cast_mut(),
                 n_past,
@@ -856,6 +965,11 @@ impl MtmdContext {
                 std::ptr::null_mut(),
             )
         };
+        // These encode chunks internally, so the output buffer no longer
+        // matches what `encode_chunk` last recorded — and the chunk sizes are
+        // not visible from here. Forget the length rather than hand out a
+        // slice sized for a different chunk; `output_embd` then reports empty.
+        self.last_output_elements = 0;
         if ret != 0 {
             return Err(MtmdError::EvalError(ret));
         }
@@ -987,7 +1101,11 @@ pub struct MtmdBitmap {
     ptr: NonNull<sys::mtmd_bitmap>,
 }
 
+// SAFETY: a bitmap owns its `mtmd_bitmap` outright and nothing in it is tied
+// to the creating thread.
 unsafe impl Send for MtmdBitmap {}
+// SAFETY: every method that mutates a bitmap takes `&mut self`, so a shared
+// reference reaches only reads.
 unsafe impl Sync for MtmdBitmap {}
 
 impl std::fmt::Debug for MtmdBitmap {
@@ -1003,6 +1121,8 @@ impl std::fmt::Debug for MtmdBitmap {
 
 impl Drop for MtmdBitmap {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_bitmap_free(self.ptr.as_ptr()) }
     }
 }
@@ -1019,6 +1139,9 @@ impl MtmdBitmap {
     /// Returns [`MtmdError::BitmapCreateFailed`] if the underlying C call
     /// returns null.
     pub fn from_rgb(nx: u32, ny: u32, data: &[u8]) -> Result<Self> {
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe { sys::mtmd_bitmap_init(nx, ny, data.as_ptr()) };
         let ptr = NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?;
         Ok(Self { ptr })
@@ -1033,6 +1156,9 @@ impl MtmdBitmap {
     /// Returns [`MtmdError::BitmapCreateFailed`] if the underlying C call
     /// returns null.
     pub fn from_audio(samples: &[f32]) -> Result<Self> {
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe { sys::mtmd_bitmap_init_from_audio(samples.len(), samples.as_ptr()) };
         let ptr = NonNull::new(ptr).ok_or(MtmdError::BitmapCreateFailed)?;
         Ok(Self { ptr })
@@ -1047,6 +1173,8 @@ impl MtmdBitmap {
     /// we free it here to avoid leaking it. Use [`MtmdVideo`] for video input.
     fn from_wrapper(wrapper: sys::mtmd_helper_bitmap_wrapper) -> Result<Self> {
         if !wrapper.video_ctx.is_null() {
+            // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+            // reads it afterwards.
             unsafe { sys::mtmd_helper_video_free(wrapper.video_ctx) };
         }
         let ptr = NonNull::new(wrapper.bitmap).ok_or(MtmdError::BitmapCreateFailed)?;
@@ -1067,6 +1195,9 @@ impl MtmdBitmap {
 
         // `placeholder = false`: load the real bitmap data (not a token-count
         // placeholder). For image/audio the returned `video_ctx` is always null.
+        // SAFETY: the context handle and the `CString` path are both alive for
+        // the call, and `mtmd_helper_init_opt_default()` returns an options
+        // struct by value. The result is checked before being wrapped.
         let wrapper = unsafe {
             sys::mtmd_helper_bitmap_init_from_file(
                 ctx.ptr.as_ptr(),
@@ -1088,6 +1219,9 @@ impl MtmdBitmap {
     pub fn from_buf(ctx: &MtmdContext, buf: &[u8]) -> Result<Self> {
         // `placeholder = false`: load the real bitmap data (not a token-count
         // placeholder). For image/audio the returned `video_ctx` is always null.
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let wrapper = unsafe {
             sys::mtmd_helper_bitmap_init_from_buf(
                 ctx.ptr.as_ptr(),
@@ -1110,6 +1244,8 @@ impl MtmdBitmap {
     ///
     /// Wraps `mtmd_bitmap_set_mergeable`.
     pub fn set_mergeable(&mut self, mergeable: bool) {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_set_mergeable(self.ptr.as_ptr(), mergeable) }
     }
 
@@ -1136,24 +1272,32 @@ impl MtmdBitmap {
     /// Width in pixels (for images) or 0 (for audio).
     #[must_use]
     pub fn nx(&self) -> u32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_get_nx(self.ptr.as_ptr()) }
     }
 
     /// Height in pixels (for images) or 0 (for audio).
     #[must_use]
     pub fn ny(&self) -> u32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_get_ny(self.ptr.as_ptr()) }
     }
 
     /// Total number of bytes in the bitmap data.
     #[must_use]
     pub fn n_bytes(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_get_n_bytes(self.ptr.as_ptr()) }
     }
 
     /// Returns `true` if this bitmap contains audio (rather than image) data.
     #[must_use]
     pub fn is_audio(&self) -> bool {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_is_audio(self.ptr.as_ptr()) }
     }
 
@@ -1164,7 +1308,11 @@ impl MtmdBitmap {
         if n == 0 {
             return &[];
         }
+        // SAFETY: a read through a live, non-null bitmap handle.
         let ptr = unsafe { sys::mtmd_bitmap_get_data(self.ptr.as_ptr()) };
+        // SAFETY: `n` is this bitmap's own `n_bytes()`, which is exactly how
+        // many bytes upstream allocated for the buffer `ptr` points at, and
+        // the borrow is tied to `&self`.
         unsafe { slice::from_raw_parts(ptr, n) }
     }
 
@@ -1172,10 +1320,15 @@ impl MtmdBitmap {
     /// cache tracking), or `None` if no ID has been set.
     #[must_use]
     pub fn id(&self) -> Option<&str> {
+        // SAFETY: a read through a live handle (or no handle at all, for the
+        // library-wide accessors); the returned pointer is only converted
+        // below, never freed here.
         let ptr = unsafe { sys::mtmd_bitmap_get_id(self.ptr.as_ptr()) };
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+        // handle-owned NUL-terminated string that outlives the borrow taken here.
         unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
 
@@ -1187,6 +1340,8 @@ impl MtmdBitmap {
     /// Returns an error if `id` contains an interior NUL byte.
     pub fn set_id(&mut self, id: &str) -> std::result::Result<(), std::ffi::NulError> {
         let cs = CString::new(id)?;
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_bitmap_set_id(self.ptr.as_ptr(), cs.as_ptr()) };
         Ok(())
     }
@@ -1232,6 +1387,7 @@ impl std::fmt::Debug for MtmdVideoParams {
 
 impl Default for MtmdVideoParams {
     fn default() -> Self {
+        // SAFETY: no pointer is involved; upstream returns a fully initialised struct by value.
         let params = unsafe { sys::mtmd_helper_video_init_params_default() };
         Self {
             params,
@@ -1347,6 +1503,8 @@ impl std::fmt::Debug for MtmdVideo {
 
 impl Drop for MtmdVideo {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_helper_video_free(self.ptr.as_ptr()) }
     }
 }
@@ -1367,6 +1525,9 @@ impl MtmdVideo {
     ) -> Result<Self> {
         let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
         let c_path = CString::new(path)?;
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe {
             sys::mtmd_helper_video_init(ctx.ptr.as_ptr(), c_path.as_ptr(), params.params)
         };
@@ -1381,6 +1542,9 @@ impl MtmdVideo {
     ///
     /// Returns [`MtmdError::VideoInitFailed`] if the stream cannot be opened.
     pub fn from_buf(ctx: &MtmdContext, buf: &[u8], params: &MtmdVideoParams) -> Result<Self> {
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe {
             sys::mtmd_helper_video_init_from_buf(
                 ctx.ptr.as_ptr(),
@@ -1397,6 +1561,8 @@ impl MtmdVideo {
     /// this stream.
     #[must_use]
     pub fn info(&self) -> MtmdVideoInfo {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let info = unsafe { sys::mtmd_helper_video_get_info(self.ptr.as_ptr()) };
         MtmdVideoInfo {
             width: info.width,
@@ -1417,6 +1583,8 @@ impl MtmdVideo {
     pub fn read_next(&mut self) -> Result<Option<MtmdVideoItem>> {
         let mut out_bitmap: *mut sys::mtmd_bitmap = std::ptr::null_mut();
         let mut out_text: *mut std::os::raw::c_char = std::ptr::null_mut();
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ret = unsafe {
             sys::mtmd_helper_video_read_next(
                 self.ptr.as_ptr(),
@@ -1429,10 +1597,15 @@ impl MtmdVideo {
                 if let Some(ptr) = NonNull::new(out_bitmap) {
                     Ok(Some(MtmdVideoItem::Frame(MtmdBitmap { ptr })))
                 } else if !out_text.is_null() {
+                    // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+                    // handle-owned NUL-terminated string that outlives the borrow taken here.
                     let text = unsafe { CStr::from_ptr(out_text) }
                         .to_string_lossy()
                         .into_owned();
                     // The C side allocated this with strdup/malloc; release it.
+                    // SAFETY: `out_text` was allocated by llama.cpp with `strdup`, so it must be
+                    // released with `free` rather than a Rust allocator, and it is not read
+                    // again afterwards.
                     unsafe { free(out_text.cast()) };
                     Ok(Some(MtmdVideoItem::Text(text)))
                 } else {
@@ -1467,6 +1640,8 @@ impl std::fmt::Debug for MtmdInputChunks {
 
 impl Drop for MtmdInputChunks {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_input_chunks_free(self.ptr.as_ptr()) }
     }
 }
@@ -1480,6 +1655,9 @@ impl MtmdInputChunks {
     /// Panics if the underlying C allocation fails (OOM).
     #[must_use]
     pub fn new() -> Self {
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe { sys::mtmd_input_chunks_init() };
         let ptr = NonNull::new(ptr).expect("mtmd_input_chunks_init returned null");
         Self { ptr }
@@ -1488,6 +1666,8 @@ impl MtmdInputChunks {
     /// Number of chunks in this list.
     #[must_use]
     pub fn len(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_input_chunks_size(self.ptr.as_ptr()) }
     }
 
@@ -1505,6 +1685,8 @@ impl MtmdInputChunks {
     /// Returns [`MtmdError::ChunkLoadFailed`] if the buffer is not a chunk
     /// this build can restore.
     pub fn load_chunk(buf: &[u8]) -> Result<OwnedMtmdInputChunk> {
+        // SAFETY: `buf` is a Rust slice whose pointer and length are passed together,
+        // so the read stays in bounds; the result is checked for null below.
         let ptr = unsafe {
             sys::mtmd_input_chunk_load(buf.as_ptr().cast::<std::os::raw::c_char>(), buf.len())
         };
@@ -1525,6 +1707,8 @@ impl MtmdInputChunks {
         if idx >= self.len() {
             return None;
         }
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ptr = unsafe { sys::mtmd_input_chunks_get(self.ptr.as_ptr(), idx) };
         if ptr.is_null() {
             return None;
@@ -1545,6 +1729,8 @@ impl MtmdInputChunks {
     /// Equivalent to `mtmd_helper_get_n_tokens`.
     #[must_use]
     pub fn n_tokens(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_helper_get_n_tokens(self.ptr.as_ptr()) }
     }
 
@@ -1554,6 +1740,8 @@ impl MtmdInputChunks {
     /// Equivalent to `mtmd_helper_get_n_pos`.
     #[must_use]
     pub fn n_pos(&self) -> i32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_helper_get_n_pos(self.ptr.as_ptr()) }
     }
 }
@@ -1611,6 +1799,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     /// The type of this chunk.
     #[must_use]
     pub fn chunk_type(&self) -> MtmdInputChunkType {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let t = unsafe { sys::mtmd_input_chunk_get_type(self.ptr) };
         MtmdInputChunkType::from(t)
     }
@@ -1618,12 +1808,16 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     /// Total number of tokens in this chunk.
     #[must_use]
     pub fn n_tokens(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_input_chunk_get_n_tokens(self.ptr) }
     }
 
     /// Number of temporal positions (equals `n_tokens` for non-M-RoPE models).
     #[must_use]
     pub fn n_pos(&self) -> i32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_input_chunk_get_n_pos(self.ptr) }
     }
 
@@ -1646,6 +1840,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     pub fn save(&self) -> Result<Vec<u8>> {
         // Two-call protocol: query the length, then fill.
         let mut needed: usize = 0;
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe {
             sys::mtmd_input_chunk_save(self.ptr, std::ptr::null_mut(), 0, &raw mut needed)
         };
@@ -1653,6 +1849,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
             return Err(MtmdError::ChunkSaveFailed(rc));
         }
         let mut buf = vec![0u8; needed];
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe {
             sys::mtmd_input_chunk_save(
                 self.ptr,
@@ -1682,6 +1880,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     ///
     /// Returns [`MtmdError::ChunkLoadFailed`] if llama.cpp returns null.
     pub fn to_owned_chunk(&self) -> Result<OwnedMtmdInputChunk> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ptr = unsafe { sys::mtmd_input_chunk_copy(self.ptr) };
         NonNull::new(ptr)
             .map(|ptr| OwnedMtmdInputChunk { ptr })
@@ -1700,6 +1900,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     ///
     /// Returns [`MtmdError::ChunkLoadFailed`] if llama.cpp returns null.
     pub fn to_placeholder(&self) -> Result<OwnedMtmdInputChunk> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ptr = unsafe { sys::mtmd_input_chunk_get_placeholder(self.ptr) };
         NonNull::new(ptr)
             .map(|ptr| OwnedMtmdInputChunk { ptr })
@@ -1715,10 +1917,14 @@ impl<'chunks> MtmdInputChunk<'chunks> {
             return None;
         }
         let mut n: usize = 0;
+        // SAFETY: a read through a live chunk; upstream writes the token count
+        // through `n` and returns a pointer into the chunk's own storage.
         let ptr = unsafe { sys::mtmd_input_chunk_get_tokens_text(self.ptr, &raw mut n) };
         if ptr.is_null() || n == 0 {
             return Some(&[]);
         }
+        // SAFETY: `ptr` is non-null (checked above) and `n` is the count upstream
+        // just wrote for this same buffer.
         Some(unsafe { slice::from_raw_parts(ptr, n) })
     }
 
@@ -1731,6 +1937,8 @@ impl<'chunks> MtmdInputChunk<'chunks> {
             MtmdInputChunkType::Image | MtmdInputChunkType::Audio => {}
             MtmdInputChunkType::Text => return None,
         }
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let ptr = unsafe { sys::mtmd_input_chunk_get_tokens_image(self.ptr) };
         if ptr.is_null() {
             return None;
@@ -1744,10 +1952,15 @@ impl<'chunks> MtmdInputChunk<'chunks> {
     /// Optional ID attached to this chunk (used for KV cache tracking).
     #[must_use]
     pub fn id(&self) -> Option<&str> {
+        // SAFETY: a read through a live handle (or no handle at all, for the
+        // library-wide accessors); the returned pointer is only converted
+        // below, never freed here.
         let ptr = unsafe { sys::mtmd_input_chunk_get_id(self.ptr) };
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+        // handle-owned NUL-terminated string that outlives the borrow taken here.
         unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
 
@@ -1800,34 +2013,47 @@ impl MtmdImageTokens<'_> {
     /// Total number of embedding tokens.
     #[must_use]
     pub fn n_tokens(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_image_tokens_get_n_tokens(self.ptr) }
     }
 
     /// Width of the token grid.
     #[must_use]
     pub fn nx(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_image_tokens_get_nx(self.ptr) }
     }
 
     /// Height of the token grid.
     #[must_use]
     pub fn ny(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_image_tokens_get_ny(self.ptr) }
     }
 
     /// Number of temporal positions (M-RoPE variant; equals `n_tokens` otherwise).
     #[must_use]
     pub fn n_pos(&self) -> i32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_image_tokens_get_n_pos(self.ptr) }
     }
 
     /// Optional ID for KV cache tracking.
     #[must_use]
     pub fn id(&self) -> Option<&str> {
+        // SAFETY: a read through a live handle (or no handle at all, for the
+        // library-wide accessors); the returned pointer is only converted
+        // below, never freed here.
         let ptr = unsafe { sys::mtmd_image_tokens_get_id(self.ptr) };
         if ptr.is_null() {
             return None;
         }
+        // SAFETY: the pointer comes from an mtmd accessor, which returns a static or
+        // handle-owned NUL-terminated string that outlives the borrow taken here.
         unsafe { CStr::from_ptr(ptr) }.to_str().ok()
     }
 
@@ -1845,6 +2071,8 @@ impl MtmdImageTokens<'_> {
         if n == 0 {
             return out;
         }
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe {
             sys::mtmd_helper_image_get_decoder_pos(
                 self.ptr,
@@ -1984,6 +2212,8 @@ impl std::fmt::Debug for OwnedMtmdInputChunk {
 
 impl Drop for OwnedMtmdInputChunk {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_input_chunk_free(self.ptr.as_ptr()) }
     }
 }
@@ -1992,18 +2222,24 @@ impl OwnedMtmdInputChunk {
     /// The type of this chunk.
     #[must_use]
     pub fn chunk_type(&self) -> MtmdInputChunkType {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         MtmdInputChunkType::from(unsafe { sys::mtmd_input_chunk_get_type(self.ptr.as_ptr()) })
     }
 
     /// Total number of tokens in this chunk.
     #[must_use]
     pub fn n_tokens(&self) -> usize {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_input_chunk_get_n_tokens(self.ptr.as_ptr()) }
     }
 
     /// Number of temporal positions.
     #[must_use]
     pub fn n_pos(&self) -> i32 {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_input_chunk_get_n_pos(self.ptr.as_ptr()) }
     }
 
@@ -2014,6 +2250,8 @@ impl OwnedMtmdInputChunk {
     /// Returns [`MtmdError::ChunkSaveFailed`] if llama.cpp cannot serialize it.
     pub fn save(&self) -> Result<Vec<u8>> {
         let mut needed: usize = 0;
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe {
             sys::mtmd_input_chunk_save(self.ptr.as_ptr(), std::ptr::null_mut(), 0, &raw mut needed)
         };
@@ -2021,6 +2259,8 @@ impl OwnedMtmdInputChunk {
             return Err(MtmdError::ChunkSaveFailed(rc));
         }
         let mut buf = vec![0u8; needed];
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe {
             sys::mtmd_input_chunk_save(
                 self.ptr.as_ptr(),
@@ -2065,6 +2305,8 @@ impl std::fmt::Debug for MtmdBatch<'_> {
 
 impl Drop for MtmdBatch<'_> {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_batch_free(self.ptr.as_ptr()) }
     }
 }
@@ -2076,6 +2318,9 @@ impl<'ctx> MtmdBatch<'ctx> {
     ///
     /// Returns [`MtmdError::BatchCreateFailed`] if llama.cpp returns null.
     pub fn new(ctx: &'ctx MtmdContext) -> Result<Self> {
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe { sys::mtmd_batch_init(ctx.ptr.as_ptr()) };
         NonNull::new(ptr)
             .map(|ptr| Self {
@@ -2094,6 +2339,8 @@ impl<'ctx> MtmdBatch<'ctx> {
     /// cannot be batched with what is already there (differing image
     /// geometry, say).
     pub fn add_chunk(&mut self, chunk: &MtmdInputChunk<'_>) -> Result<()> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe { sys::mtmd_batch_add_chunk(self.ptr.as_ptr(), chunk.ptr) };
         if rc == 0 {
             Ok(())
@@ -2108,6 +2355,8 @@ impl<'ctx> MtmdBatch<'ctx> {
     ///
     /// Returns [`MtmdError::EncodeError`] on failure.
     pub fn encode(&mut self) -> Result<()> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe { sys::mtmd_batch_encode(self.ptr.as_ptr()) };
         if rc == 0 {
             Ok(())
@@ -2127,16 +2376,27 @@ impl<'ctx> MtmdBatch<'ctx> {
     /// llama.cpp reports only a pointer, so the length is derived from the
     /// chunk's token count and the context's embedding dimension.
     #[must_use]
-    pub fn output_embd(&self, chunk: &MtmdInputChunk<'_>, n_embd: usize) -> Option<&[f32]> {
-        let ptr = unsafe { sys::mtmd_batch_get_output_embd(self.ptr.as_ptr(), chunk.ptr) };
-        if ptr.is_null() {
-            return None;
-        }
-        let len = chunk.n_tokens().checked_mul(n_embd)?;
+    pub fn output_embd(&self, model: &LlamaModel, chunk: &MtmdInputChunk<'_>) -> Option<&[f32]> {
+        // The width is `n_embd_inp`, and `chunk` is the key the buffer is
+        // looked up by — so deriving the length from that same chunk cannot
+        // disagree with the buffer it describes. Taking a bare `usize` here
+        // let a caller name any length at all.
+        let n_embd_inp = usize::try_from(model.n_embd_inp()).ok()?;
+        let len = chunk.n_tokens().checked_mul(n_embd_inp)?;
         if len == 0 {
             return Some(&[]);
         }
-        Some(unsafe { slice::from_raw_parts(ptr, len) })
+        // SAFETY: `mtmd_batch_get_output_embd` returns either null or the
+        // buffer it holds for exactly this chunk, and `len` is that chunk's
+        // token count times the input embedding width — upstream's own
+        // documented size. The borrow is tied to `&self`.
+        unsafe {
+            let ptr = sys::mtmd_batch_get_output_embd(self.ptr.as_ptr(), chunk.ptr);
+            if ptr.is_null() {
+                return None;
+            }
+            Some(slice::from_raw_parts(ptr, len))
+        }
     }
 }
 
@@ -2222,6 +2482,8 @@ impl std::fmt::Debug for MtmdAudioGen<'_> {
 
 impl Drop for MtmdAudioGen<'_> {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop`, the handle is non-null, and nothing
+        // reads it afterwards.
         unsafe { sys::mtmd_helper_gen_audio_free(self.ptr.as_ptr()) }
     }
 }
@@ -2238,6 +2500,9 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         mctx: &'ctx MtmdContext,
     ) -> Result<Self> {
         let ptr =
+            // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+            // and the model/context handles are borrowed — and the result is checked
+            // for null before being wrapped.
             unsafe { sys::mtmd_helper_gen_audio_init(lctx.context.as_ptr(), mctx.ptr.as_ptr()) };
         NonNull::new(ptr)
             .map(|ptr| Self {
@@ -2249,6 +2514,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
 
     /// Clear all state, ready for another utterance.
     pub fn reset(&mut self) {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         unsafe { sys::mtmd_helper_gen_audio_reset(self.ptr.as_ptr()) }
     }
 
@@ -2287,6 +2554,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         // [`MtmdAudioGen`] collects the whole clip and reads it once, so leave
         // it off regardless of what upstream defaults it to.
         inp.stream = false;
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe { sys::mtmd_helper_gen_audio_set_input(self.ptr.as_ptr(), &raw const inp) };
         if rc == 0 {
             Ok(())
@@ -2304,6 +2573,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
     ///
     /// Returns [`MtmdError::EvalError`] if llama.cpp reports a negative code.
     pub fn step_prompt(&mut self, n_batch: i32) -> Result<i32> {
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe { sys::mtmd_helper_gen_audio_step_prompt(self.ptr.as_ptr(), n_batch) };
         if rc < 0 {
             return Err(MtmdError::EvalError(rc));
@@ -2369,12 +2640,15 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         &mut self,
         sampled: Option<crate::token::LlamaToken>,
         h_state_in: Option<&[f32]>,
-        n_text_embd: usize,
+        model: &LlamaModel,
     ) -> Result<(Option<Vec<f32>>, bool)> {
         let token = sampled.map_or(sys::LLAMA_TOKEN_NULL, |t| t.0);
         let in_ptr = h_state_in.map_or(std::ptr::null(), <[f32]>::as_ptr);
         let mut out_ptr: *const f32 = std::ptr::null();
         let mut stop = false;
+        // SAFETY: a live `&mut self` gives an exclusive, non-null generator.
+        // `in_ptr` is either null or borrowed from `h_state_in` for the call,
+        // and the two out-params are stack locals upstream writes through.
         let rc = unsafe {
             sys::mtmd_helper_gen_audio_step_gen(
                 self.ptr.as_ptr(),
@@ -2387,12 +2661,20 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         if rc < 0 {
             return Err(MtmdError::EvalError(rc));
         }
+        // The hidden state is one row of `n_embd` floats — upstream builds it
+        // with `h_state_buf.assign(he, he + n_embd)` where `n_embd` is
+        // `llama_model_n_embd(model)`. Taking that from the model rather than
+        // from the caller is what keeps this a safe function.
+        let n_embd = usize::try_from(model.n_embd()).unwrap_or(0);
         // Copy rather than borrow: upstream documents the buffer as valid only
         // until the next step_gen/reset, which a returned slice could outlive.
-        let state = if out_ptr.is_null() || n_text_embd == 0 {
+        let state = if out_ptr.is_null() || n_embd == 0 {
             None
         } else {
-            Some(unsafe { slice::from_raw_parts(out_ptr, n_text_embd) }.to_vec())
+            // SAFETY: `out_ptr` is non-null and points at the generator's
+            // hidden-state buffer, which upstream sized at `n_embd` floats.
+            // The copy happens before any call that could invalidate it.
+            Some(unsafe { slice::from_raw_parts(out_ptr, n_embd) }.to_vec())
         };
         Ok((state, stop))
     }
@@ -2411,6 +2693,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         let mut data: *const std::os::raw::c_char = std::ptr::null();
         let mut data_len: usize = 0;
         let mut n_samples: i64 = 0;
+        // SAFETY: `self.ptr` is a live, non-null handle kept alive by this borrow, and the
+        // remaining arguments are scalars or pointers valid for the call.
         let rc = unsafe {
             sys::mtmd_helper_gen_audio_get_output(
                 self.ptr.as_ptr(),
@@ -2428,6 +2712,8 @@ impl<'ctx> MtmdAudioGen<'ctx> {
         } else {
             // Copied for the same reason as step_gen: valid only until the next
             // get_output/reset.
+            // SAFETY: `data` and `data_len` are the pointer and byte count upstream wrote
+            // through its out-params for this generator's audio buffer.
             unsafe { slice::from_raw_parts(data.cast::<u8>(), data_len) }.to_vec()
         };
         Ok((sample_rate, bytes, n_samples))
@@ -2556,6 +2842,8 @@ pub struct MtmdCaps {
 pub fn mmproj_caps(path: impl AsRef<Path>) -> Result<MtmdCaps> {
     let path = path.as_ref().to_str().ok_or(MtmdError::PathNotUtf8)?;
     let c_path = CString::new(path)?;
+    // SAFETY: the path is a `CString` alive for the call; upstream only reads the
+    // file and returns a plain struct.
     let caps = unsafe { sys::mtmd_get_cap_from_file(c_path.as_ptr()) };
     Ok(MtmdCaps {
         vision: caps.inp_vision,
@@ -2632,6 +2920,9 @@ impl MtmdLazyBitmap {
         });
         let user_data = std::ptr::from_mut(state.as_mut()).cast::<std::os::raw::c_void>();
 
+        // SAFETY: every pointer argument is alive for the call — the paths are `CString`s
+        // and the model/context handles are borrowed — and the result is checked
+        // for null before being wrapped.
         let ptr = unsafe {
             sys::mtmd_bitmap_init_lazy(
                 ctx.ptr.as_ptr(),
@@ -2671,6 +2962,11 @@ extern "C" fn lazy_trampoline(
         if user_data.is_null() {
             return -2;
         }
+        // SAFETY: `user_data` is the pointer this crate handed to llama.cpp
+        // when registering the callback, checked non-null just above. It
+        // points at a `LazyCallbackState` that outlives the tokenize call,
+        // and llama.cpp invokes the callback from one thread at a time, so
+        // the exclusive reference is not aliased.
         let state = unsafe { &mut *user_data.cast::<LazyCallbackState>() };
         match (state.func)(chunk_idx) {
             MtmdLazyChunk::Bitmap(bitmap) => {
@@ -2678,6 +2974,9 @@ extern "C" fn lazy_trampoline(
                 // `mtmd_bitmap_free`; skip our own Drop.
                 let raw = bitmap.ptr.as_ptr();
                 std::mem::forget(bitmap);
+                // SAFETY: `out_bitmap` is an out-param llama.cpp provided for this callback,
+                // and `raw` is a bitmap whose ownership has just been released with
+                // `mem::forget`, so llama.cpp is now responsible for freeing it.
                 unsafe { *out_bitmap = raw };
                 0
             }
@@ -2688,10 +2987,15 @@ extern "C" fn lazy_trampoline(
                 // llama.cpp releases this with `free()`, so it must come from
                 // malloc — a Rust-allocated buffer would be freed by the wrong
                 // allocator.
+                // SAFETY: `c_text` is alive for the call, and `strdup` is used because
+                // llama.cpp releases this string with `free()` — a Rust-allocated buffer
+                // would be handed to the wrong allocator.
                 let dup = unsafe { strdup(c_text.as_ptr()) };
                 if dup.is_null() {
                     return -2;
                 }
+                // SAFETY: `out_text` is an out-param llama.cpp provided, and `dup` is a
+                // non-null malloc'd string (checked above) that llama.cpp now owns.
                 unsafe { *out_text = dup };
                 0
             }

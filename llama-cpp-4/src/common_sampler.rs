@@ -79,6 +79,9 @@ impl CommonSamplerType {
     ///
     /// Returns [`CommonSamplerError::Failed`] if llama.cpp cannot name it.
     pub fn name(self) -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_sampler_type_to_str(self as i32, buf, len, expected)
         })
@@ -99,6 +102,9 @@ impl CommonSamplerType {
             .collect::<std::result::Result<_, _>>()?;
         let ptrs: Vec<*const c_char> = c_names.iter().map(|c| c.as_ptr()).collect();
 
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_i32s(|out, cap, len| unsafe {
             sys::common_shim_sampler_types_from_names(ptrs.as_ptr(), ptrs.len(), out, cap, len)
         })
@@ -161,6 +167,8 @@ unsafe impl Send for CommonSamplerParams {}
 
 impl Drop for CommonSamplerParams {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { sys::common_shim_sampler_params_free(self.raw.as_ptr()) }
     }
 }
@@ -182,6 +190,8 @@ impl CommonSamplerParams {
     /// Panics if the allocation fails.
     #[must_use]
     pub fn new() -> Self {
+        // SAFETY: no borrowed pointer is involved beyond arguments alive for the call;
+        // the returned handle is checked for null before being wrapped.
         let raw = unsafe { sys::common_shim_sampler_params_init() };
         Self {
             raw: NonNull::new(raw).expect("common_shim_sampler_params_init returned null"),
@@ -191,7 +201,12 @@ impl CommonSamplerParams {
     /// Read the scalar knobs.
     #[must_use]
     pub fn scalars(&self) -> CommonSamplerScalars {
+        // SAFETY: the struct is a plain-old-data `repr(C)` type with no pointer or
+        // reference fields, so an all-zero value is a valid instance; the shim
+        // fills it in immediately below.
         let mut out: CommonSamplerScalars = unsafe { std::mem::zeroed() };
+        // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+        // out-param is a stack local the shim writes through.
         unsafe { sys::common_shim_sampler_params_get_scalars(self.raw.as_ptr(), &raw mut out) };
         out
     }
@@ -199,6 +214,8 @@ impl CommonSamplerParams {
     /// Replace the scalar knobs. Read [`Self::scalars`] first and modify it, so
     /// fields you do not care about keep llama.cpp's defaults.
     pub fn set_scalars(&mut self, scalars: &CommonSamplerScalars) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_sampler_params_set_scalars(self.raw.as_ptr(), scalars) }
     }
 
@@ -212,6 +229,8 @@ impl CommonSamplerParams {
     /// Returns [`CommonSamplerError::Nul`] for an interior NUL in `grammar`.
     pub fn set_grammar(&mut self, grammar: &str, source: GrammarSource, lazy: bool) -> Result<()> {
         let c_grammar = CString::new(grammar)?;
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_set_grammar(
                 self.raw.as_ptr(),
@@ -246,6 +265,8 @@ impl CommonSamplerParams {
             _ => return Err(CommonSamplerError::InvalidArg),
         };
         let c_value = CString::new(value)?;
+        // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+        // out-param is a stack local the shim writes through.
         let status = unsafe {
             sys::common_shim_sampler_params_add_grammar_trigger(
                 self.raw.as_ptr(),
@@ -264,6 +285,8 @@ impl CommonSamplerParams {
     /// Returns [`CommonSamplerError::Nul`] for an interior NUL.
     pub fn set_generation_prompt(&mut self, prompt: &str) -> Result<()> {
         let c_prompt = CString::new(prompt)?;
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_set_generation_prompt(
                 self.raw.as_ptr(),
@@ -279,6 +302,8 @@ impl CommonSamplerParams {
     ///
     /// Returns [`CommonSamplerError::InvalidArg`] if the params handle is bad.
     pub fn add_logit_bias(&mut self, token: LlamaToken, bias: f32) -> Result<()> {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_add_logit_bias(self.raw.as_ptr(), token.0, bias)
         };
@@ -292,6 +317,8 @@ impl CommonSamplerParams {
     /// Returns [`CommonSamplerError::InvalidArg`] if the params handle is bad.
     pub fn set_samplers(&mut self, samplers: &[CommonSamplerType]) -> Result<()> {
         let raw: Vec<i32> = samplers.iter().map(|s| *s as i32).collect();
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_set_samplers(self.raw.as_ptr(), raw.as_ptr(), raw.len())
         };
@@ -309,6 +336,8 @@ impl CommonSamplerParams {
             .map(|b| CString::new(*b))
             .collect::<std::result::Result<_, _>>()?;
         let ptrs: Vec<*const c_char> = c_breakers.iter().map(|c| c.as_ptr()).collect();
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_set_dry_breakers(
                 self.raw.as_ptr(),
@@ -342,6 +371,8 @@ impl CommonSamplerParams {
         let forced_raw: Vec<i32> = forced.iter().map(|t| t.0).collect();
         let c_message = CString::new(message)?;
 
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let status = unsafe {
             sys::common_shim_sampler_params_set_reasoning_budget(
                 self.raw.as_ptr(),
@@ -390,6 +421,8 @@ unsafe impl Send for CommonSampler {}
 
 impl Drop for CommonSampler {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { sys::common_shim_sampler_free(self.raw.as_ptr()) }
     }
 }
@@ -403,6 +436,8 @@ impl CommonSampler {
     /// most often a grammar that does not parse.
     pub fn new(model: &LlamaModel, params: &mut CommonSamplerParams) -> Result<Self> {
         let raw =
+            // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+            // the library owns whatever it returns.
             unsafe { sys::common_shim_sampler_init(model.model.as_ptr(), params.raw.as_ptr()) };
         NonNull::new(raw)
             .map(|raw| Self { raw })
@@ -426,6 +461,8 @@ impl CommonSampler {
         grammar_first: bool,
     ) -> Result<LlamaToken> {
         let mut status = sys::LLAMA_SHIM_OK;
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let token = unsafe {
             sys::common_shim_sampler_sample(
                 self.raw.as_ptr(),
@@ -444,6 +481,8 @@ impl CommonSampler {
     /// `is_generated` marks a token the model produced, as opposed to one from
     /// the prompt; penalties and the grammar treat the two differently.
     pub fn accept(&mut self, token: LlamaToken, is_generated: bool) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_sampler_accept(self.raw.as_ptr(), token.0, is_generated) }
     }
 
@@ -468,6 +507,9 @@ impl CommonSampler {
         grammar_first: bool,
     ) -> Result<Vec<LlamaToken>> {
         let raw_draft: Vec<i32> = draft.iter().map(|t| t.0).collect();
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_tokens(|out, cap, len| unsafe {
             sys::common_shim_sampler_sample_and_accept_n(
                 self.raw.as_ptr(),
@@ -484,6 +526,8 @@ impl CommonSampler {
 
     /// Clear all history and grammar state, keeping the configuration.
     pub fn reset(&mut self) {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_sampler_reset(self.raw.as_ptr()) }
     }
 
@@ -493,6 +537,8 @@ impl CommonSampler {
     ///
     /// Returns [`CommonSamplerError::Failed`] if llama.cpp returns null.
     pub fn try_clone(&self) -> Result<Self> {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let raw = unsafe { sys::common_shim_sampler_clone(self.raw.as_ptr()) };
         NonNull::new(raw)
             .map(|raw| Self { raw })
@@ -502,12 +548,16 @@ impl CommonSampler {
     /// The seed actually in use, after any `LLAMA_DEFAULT_SEED` was resolved.
     #[must_use]
     pub fn seed(&self) -> u32 {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_sampler_get_seed(self.raw.as_ptr()) }
     }
 
     /// The most recently sampled token.
     #[must_use]
     pub fn last(&self) -> LlamaToken {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         LlamaToken(unsafe { sys::common_shim_sampler_last(self.raw.as_ptr()) })
     }
 
@@ -515,6 +565,8 @@ impl CommonSampler {
     ///
     /// Returns `false` when there is no budget sampler or it is not counting.
     pub fn force_end_reasoning(&mut self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_sampler_reasoning_budget_force(self.raw.as_ptr()) }
     }
 
@@ -524,6 +576,9 @@ impl CommonSampler {
     ///
     /// Returns [`CommonSamplerError::Failed`] if llama.cpp throws.
     pub fn describe(&self) -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_sampler_print(self.raw.as_ptr(), buf, len, expected)
         })
@@ -535,6 +590,9 @@ impl CommonSampler {
     ///
     /// Returns [`CommonSamplerError::Failed`] if llama.cpp throws.
     pub fn prev_str(&mut self, ctx: &mut LlamaContext<'_>, n: i32) -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_sampler_prev_str(
                 self.raw.as_ptr(),
@@ -667,6 +725,8 @@ impl ReasoningBudget {
         let (ends_flat, end_lens) = flatten(ends);
         let forced_raw: Vec<i32> = forced.iter().map(|t| t.0).collect();
 
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let raw = unsafe {
             sys::common_shim_reasoning_budget_init(
                 model.get_vocab().vocab.as_ref(),
@@ -686,6 +746,8 @@ impl ReasoningBudget {
         // SAFETY: upstream returns a sampler the caller owns and frees with
         // `llama_sampler_free`, which is what `LlamaSampler` does.
         Ok(Self {
+            // SAFETY: `from_raw_ptr` is `unsafe` because it takes ownership; `ptr` is the
+            // non-null sampler the shim just created and nothing else holds it.
             sampler: unsafe { crate::sampling::LlamaSampler::from_raw_ptr(ptr) },
         })
     }
@@ -693,6 +755,8 @@ impl ReasoningBudget {
     /// Where the state machine currently is.
     #[must_use]
     pub fn state(&self) -> Option<ReasoningBudgetState> {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         let raw = unsafe {
             sys::common_shim_reasoning_budget_get_state(self.sampler.as_ptr().cast_const())
         };
@@ -702,6 +766,8 @@ impl ReasoningBudget {
     /// Cut the reasoning block short now. Returns `false` if it was not
     /// counting.
     pub fn force_end(&mut self) -> bool {
+        // SAFETY: the handle is non-null and kept alive by this borrow, and the remaining
+        // arguments are scalars the library validates itself.
         unsafe { sys::common_shim_reasoning_budget_force(self.sampler.as_ptr()) }
     }
 

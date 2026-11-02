@@ -63,6 +63,8 @@ impl PerfContextData {
     /// eval time
     /// total time
     pub fn print(ctx: &LlamaContext<'_>) {
+        // SAFETY: a live, non-null context; this only reads the counters and
+        // writes to llama.cpp's log.
         unsafe {
             llama_perf_context_print(ctx.context.as_ptr());
         };
@@ -81,6 +83,7 @@ impl PerfContextData {
 
         #[allow(clippy::cast_precision_loss)]
         {
+            // SAFETY: no pointer is involved; this reads ggml's monotonic clock.
             1e-3 * (unsafe { ggml_time_us() }) as f64
         }
     }

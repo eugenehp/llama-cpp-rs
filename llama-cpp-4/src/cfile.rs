@@ -10,10 +10,6 @@
 //! `fopen` gets wrong for a non-ASCII path on Windows. Only closing and seeking
 //! have to be declared here.
 
-// Every `unsafe` block below is justified in a `SAFETY:` comment; keep it that
-// way. See the note on the lint in the workspace `Cargo.toml`.
-#![deny(clippy::undocumented_unsafe_blocks)]
-
 use std::ffi::{c_char, c_int, CString};
 use std::io;
 use std::path::Path;

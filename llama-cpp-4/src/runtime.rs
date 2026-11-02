@@ -33,6 +33,9 @@ impl SpeculativeType {
     ///
     /// Returns [`RuntimeError::Failed`] if llama.cpp cannot name it.
     pub fn name(self) -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_speculative_type_to_str(self.0, buf, len, expected)
         })
@@ -50,6 +53,8 @@ impl SpeculativeType {
         let c_name = CString::new(name)?;
         let mut raw = 0i32;
         let status =
+            // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+            // out-param is a stack local the shim writes through.
             unsafe { sys::common_shim_speculative_type_from_name(c_name.as_ptr(), &raw mut raw) };
         check_status(status)?;
         Ok(Self(raw))
@@ -62,6 +67,9 @@ impl SpeculativeType {
     ///
     /// Returns [`RuntimeError::Failed`] if llama.cpp throws.
     pub fn all_names() -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_speculative_all_types_str(buf, len, expected)
         })
@@ -84,6 +92,8 @@ impl SpeculativeType {
 /// Returns [`RuntimeError::Nul`] for an interior NUL in `path`.
 pub fn speculative_types_from_gguf(path: &str) -> Result<Vec<SpeculativeType>> {
     let c_path = CString::new(path)?;
+    // SAFETY: the `CString` arguments are alive for the duration of the call, and any
+    // out-param is a stack local the shim writes through.
     let raw = read_i32s(|out, cap, len| unsafe {
         sys::common_shim_speculative_types_from_gguf(c_path.as_ptr(), out, cap, len)
     })?;
@@ -108,34 +118,46 @@ pub mod log {
 
     /// Drop log records below this verbosity.
     pub fn set_verbosity(verbosity: i32) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_set_verbosity(verbosity) }
     }
 
     /// The verbosity threshold configured for a `ggml_log_level`.
     #[must_use]
     pub fn verbosity_for_level(level: i32) -> i32 {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_get_verbosity(level) }
     }
 
     /// Include timestamps in the log prefix.
     pub fn set_timestamps(timestamps: bool) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_set_timestamps(timestamps) }
     }
 
     /// Include the level prefix on each record.
     pub fn set_prefix(prefix: bool) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_set_prefix(prefix) }
     }
 
     /// Colourise output. Disabling is what you want when the destination is not
     /// a terminal.
     pub fn set_colors(colors: bool) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_set_colors(colors) }
     }
 
     /// Emit one JSON object per record instead of human-readable text — for
     /// shipping llama.cpp's own logs into a structured pipeline.
     pub fn set_jsonl(jsonl: bool) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_set_jsonl(jsonl) }
     }
 
@@ -150,6 +172,8 @@ pub mod log {
     pub fn set_file(path: Option<&str>) -> Result<()> {
         let c_path = path.map(CString::new).transpose()?;
         let ptr = c_path.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let status = unsafe { sys::common_shim_log_set_file(ptr) };
         check_status(status)
     }
@@ -157,11 +181,15 @@ pub mod log {
     /// Pause the logger's worker thread. Records emitted while paused are
     /// dropped, which is how upstream keeps progress bars readable.
     pub fn pause() {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_pause() }
     }
 
     /// Resume after [`pause`].
     pub fn resume() {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe { sys::common_shim_log_resume() }
     }
 }
@@ -197,6 +225,9 @@ pub mod download {
         let c_repo = CString::new(repo_with_tag)?;
         let c_file = file.map(CString::new).transpose()?;
         let file_ptr = c_file.as_ref().map_or(std::ptr::null(), |c| c.as_ptr());
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_download_resolve_path(c_repo.as_ptr(), file_ptr, buf, len, expected)
         })
@@ -218,6 +249,8 @@ pub mod download {
         // Both outputs share one call, so size them together and fill together.
         let mut repo_len: usize = 0;
         let mut tag_len: usize = 0;
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let status = unsafe {
             sys::common_shim_download_split_repo_tag(
                 c_repo.as_ptr(),
@@ -235,6 +268,8 @@ pub mod download {
 
         let mut repo_buf = vec![0u8; repo_len.max(1)];
         let mut tag_buf = vec![0u8; tag_len.max(1)];
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let status = unsafe {
             sys::common_shim_download_split_repo_tag(
                 c_repo.as_ptr(),
@@ -264,6 +299,8 @@ pub mod download {
     /// [`RuntimeError::Nul`] for an interior NUL.
     pub fn remove_cached(repo_with_tag: &str) -> Result<bool> {
         let c_repo = CString::new(repo_with_tag)?;
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let rc = unsafe { sys::common_shim_download_remove(c_repo.as_ptr()) };
         if rc < 0 {
             check_status(rc)?;
@@ -282,6 +319,9 @@ pub mod download {
     ///
     /// Returns [`RuntimeError::Failed`] if the cache cannot be read.
     pub fn list_cached_json() -> Result<String> {
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_list_cached_models(buf, len, expected)
         })
@@ -295,6 +335,9 @@ pub mod download {
     /// [`RuntimeError::Nul`] for an interior NUL.
     pub fn resolve_docker(reference: &str) -> Result<String> {
         let c_ref = CString::new(reference)?;
+        // SAFETY: the closure hands the shim a buffer pointer together with its capacity,
+        // and the shim reports how much it needed; nothing is read back unless it
+        // reported success.
         read_string(|buf, len, expected| unsafe {
             sys::common_shim_docker_resolve_model(c_ref.as_ptr(), buf, len, expected)
         })

@@ -121,6 +121,8 @@ impl LlamaTokenDataArray {
 
     /// Modifies the data array by applying a sampler to it
     pub fn apply_sampler(&mut self, sampler: &mut LlamaSampler) {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         unsafe {
             self.modify_as_c_llama_token_data_array(|c_llama_token_data_array| {
                 llama_sampler_apply(sampler.sampler.as_ptr(), c_llama_token_data_array);

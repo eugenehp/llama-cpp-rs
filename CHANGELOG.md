@@ -1,5 +1,93 @@
 # Changelog
 
+## [0.10.1] - 2026-11-02
+
+### Breaking
+
+- **Four mtmd APIs took a length or a raw pointer from the caller and used it
+  unchecked.** Each was a safe function that could be made to read out of
+  bounds without writing `unsafe`:
+  - `MtmdContext::output_embd(n_elements)` → `output_embd()`. The length is
+    now recorded by `encode_chunk`, which is the only point at which it is
+    knowable (upstream documents the size in prose and offers no accessor).
+  - `MtmdBatch::output_embd(chunk, n_embd)` → `output_embd(model, chunk)`.
+    The width is derived from the model; `chunk` is the key the buffer is
+    looked up by, so a length derived from it cannot disagree with the buffer.
+  - `MtmdAudioGen::step_gen(…, n_text_embd)` → `step_gen(…, model)`. The
+    hidden state is one row of `n_embd` floats, which upstream builds as
+    `h_state_buf.assign(he, he + n_embd)`.
+  - `eval_chunks`, `eval_chunk_single` and `decode_image_chunk` took
+    `lctx: *mut llama_context` and dereferenced it from safe code. They take
+    `&mut LlamaContext` now. Clippy had been reporting this as
+    `not_unsafe_ptr_arg_deref`; the warning was silenced with an `allow`
+    rather than fixed, and the `allow` is gone.
+- **`encode_chunk` and the three eval helpers take `&mut self`.** They mutate
+  the context, and sharing that with `output_embd`'s `&self` borrow let a
+  caller hold a slice across the call that invalidates it — the borrow checker
+  now rejects that. The eval helpers also clear the recorded output length,
+  since they encode chunks whose sizes are not visible from the caller.
+  `encode_chunk` additionally takes `&LlamaModel`, which is where the width
+  comes from.
+- `unsafe impl Sync for MtmdContext` is now actually justified rather than
+  asserted: with every mutating method exclusive, a shared reference reaches
+  only the read-only accessors and `tokenize`, which upstream synchronises
+  internally.
+
+### Changed
+
+- **llama.cpp**: vendored submodule moved to `785322d17f` (`b12032` plus
+  upstream's `requirements: fix numpy dependencies` (#31508)), from
+  `dde879bc4f`. No API change; the README banners track it.
+
+- **Every `unsafe` block in `llama-cpp-4` now carries a `SAFETY` comment**, and
+  `#![deny(clippy::undocumented_unsafe_blocks)]` at the crate root keeps it
+  that way. The lint reported **340 undocumented blocks** before this pass and
+  reports 0 after; the per-module opt-ins that five modules carried are gone,
+  since the crate-wide deny subsumes them.
+  - This is not cosmetic. Issue #360 was five accessors that each built a slice
+    with a width nobody had justified in writing, and three of those widths
+    were wrong. A comment that has to say *why* a length is correct is what
+    makes a wrong one visible.
+  - Comments were drafted by shape and then checked by an audit pass that
+    compares each claim against the block it sits on. That found seven wrong
+    comments — one labelling a `user_data` cast as a `Drop`, five duplicating a
+    string justification onto a pointer *fetch*, one calling an init call a
+    by-value default — all corrected. A rubber-stamped comment is worse than
+    none.
+
+### Fixed
+
+- **`embeddings_ith` and `embeddings_seq_ith` sliced with the wrong width**
+  ([#360](https://github.com/eugenehp/llama-cpp-rs/issues/360), reported by
+  @gn64 and @Exlany). Both used `LlamaModel::n_embd` — the model's *internal*
+  embedding width — while llama.cpp strides and allocates the output buffer by
+  `hparams.n_embd_out()`. The two differ whenever a model declares a separate
+  output width (`n_embd_out()` returns `n_embd_out_impl` when set, falling back
+  to `n_embd`). Where the output is wider the result was silently truncated;
+  where it is narrower the slice ran past the row, and past the whole
+  allocation on the last one — reading uninitialised or unmapped memory from
+  safe code.
+  - `embeddings_seq_ith` had a second case on top of that: llama.cpp sizes a
+    RANK-pooled row by `n_cls_out` (one rerank score per class), not by any
+    embedding width at all. It now picks the width from the context's pooling
+    mode.
+  - Both accessors are safe functions handing out `&[f32]`, so neither caller
+    had any way to notice. Covered by a regression test that derives the
+    expected width from the model and pooling mode rather than hardcoding it.
+- **Three further accessors had the same wrong width**, found by auditing every
+  `from_raw_parts` in the crate after the report: `get_embeddings`,
+  `get_embeddings_pre_norm` and `get_embeddings_pre_norm_ith`. llama.cpp
+  allocates both backing buffers as `n_embd_out * n_outputs_max`
+  (`embd.size` / `embd_nextn.size`) and `get_embeddings_nextn_ith` strides by
+  `n_embd_out()`, so all three now use the output width too.
+  - `get_embeddings_layer_inp` deliberately keeps `n_embd` and is now commented
+    to say so: those rows are layer *inputs*, allocated `n_embd * n_batch`,
+    and upstream asserts `row_floats == hparams.n_embd` when filling them. The
+    output width does not apply there.
+  - The logits accessors were checked in the same pass and are correct:
+    `logits.size` is `n_vocab * n_outputs_max` and `get_logits_ith` strides by
+    `vocab.n_tokens()`, which is what the crate already used.
+
 ## [0.10.0] - 2026-11-01
 
 ### Breaking

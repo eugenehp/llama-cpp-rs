@@ -269,6 +269,8 @@ impl LlamaFtype {
     ///
     /// Returns [`FtypeNameError`] if llama.cpp returns null or non-UTF-8.
     pub fn upstream_name(self) -> Result<&'static str, FtypeNameError> {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let ptr = unsafe { llama_cpp_sys_4::llama_ftype_name(self.into()) };
         if ptr.is_null() {
             return Err(FtypeNameError::Unnamed(self));
@@ -289,6 +291,8 @@ impl LlamaFtype {
     /// Returns `None` for a `ggml` type this crate's [`GgmlType`] does not know.
     #[must_use]
     pub fn default_ggml_type(self) -> Option<GgmlType> {
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let raw = unsafe { llama_cpp_sys_4::llama_ftype_get_default_type(self.into()) };
         GgmlType::try_from(raw).ok()
     }
@@ -729,6 +733,8 @@ impl QuantizeParams {
     #[must_use]
     pub fn new(ftype: LlamaFtype) -> Self {
         // Read the C defaults so we match them exactly.
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let d = unsafe { llama_cpp_sys_4::llama_model_quantize_default_params() };
         Self {
             nthread: d.nthread,
@@ -1078,11 +1084,19 @@ pub fn set_attn_rot_disabled(disabled: bool) {
     if disabled {
         // SAFETY: single-threaded context required by the caller.
         #[allow(unused_unsafe)]
+        // SAFETY: setting an environment variable races with any concurrent
+        // `getenv` elsewhere in the process. This is a deliberate opt-in
+        // toggle meant to be set during setup, before threads that read it
+        // exist; the function's docs say so.
         unsafe {
             std::env::set_var("LLAMA_ATTN_ROT_DISABLE", "1");
         }
     } else {
         #[allow(unused_unsafe)]
+        // SAFETY: setting an environment variable races with any concurrent
+        // `getenv` elsewhere in the process. This is a deliberate opt-in
+        // toggle meant to be set during setup, before threads that read it
+        // exist; the function's docs say so.
         unsafe {
             std::env::remove_var("LLAMA_ATTN_ROT_DISABLE");
         }
@@ -1124,6 +1138,8 @@ pub struct QuantPreview<'model> {
 
 impl Drop for QuantPreview<'_> {
     fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing reads it
+        // afterwards.
         unsafe { llama_cpp_sys_4::llama_quant_free(self.qs.as_ptr()) }
     }
 }
@@ -1142,6 +1158,8 @@ impl<'model> QuantPreview<'model> {
         let guard = params.to_raw();
         // The guarded wrapper: `llama_quant_init` throws for a model it cannot
         // quantize, and that unwinding into Rust aborts the process.
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let qs = unsafe {
             llama_cpp_sys_4::llama_quant_init_guarded(model.model.as_ptr(), &raw const guard.raw)
         };
@@ -1164,6 +1182,8 @@ impl<'model> QuantPreview<'model> {
     #[must_use]
     pub fn allows_quantization(&self, tensor: &crate::ggml::GgmlTensor) -> bool {
         // 1 = yes, 0 = no, -1 = the underlying call threw and was caught.
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let rc = unsafe {
             llama_cpp_sys_4::llama_quant_tensor_allows_quantization_guarded(
                 self.qs.as_ptr(),
@@ -1206,6 +1226,8 @@ impl<'model> QuantPreview<'model> {
         let mut raw_tensors: Vec<*mut llama_cpp_sys_4::ggml_tensor> =
             tensors.iter().map(|t| t.as_ptr()).collect();
         let mut out = vec![0 as llama_cpp_sys_4::ggml_type; tensors.len()];
+        // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+        // the library owns whatever it returns.
         let rc = unsafe {
             llama_cpp_sys_4::llama_quant_compute_types_guarded(
                 self.qs.as_ptr(),
@@ -1313,6 +1335,8 @@ impl QuantModelDesc {
         // Guarded: an architecture llama.cpp does not know makes the raw entry
         // point throw, which aborts the process on the way back into Rust.
         let raw =
+            // SAFETY: the arguments are either scalars or pointers that outlive the call, and
+            // the library owns whatever it returns.
             unsafe { llama_cpp_sys_4::llama_quant_model_from_metadata_guarded(&raw const desc) };
         let ptr = std::ptr::NonNull::new(raw).ok_or(QuantPreviewError::MockModel)?;
         // SAFETY: upstream documents the result as owned by the caller and

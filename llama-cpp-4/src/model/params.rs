@@ -45,6 +45,9 @@ impl LlamaLoadMode {
     /// upstream table was corrupted.
     #[must_use]
     pub fn name(self) -> &'static str {
+        // SAFETY: the argument is a plain enum discriminant and upstream
+        // returns a pointer to a string literal; the null case is asserted
+        // rather than assumed.
         let ptr = unsafe { llama_cpp_sys_4::llama_load_mode_name(self as _) };
         assert!(!ptr.is_null(), "llama_load_mode_name returned null");
         // SAFETY: upstream returns a pointer to a string literal, so `'static`
@@ -388,6 +391,8 @@ impl LlamaModelParams {
 /// ```
 impl Default for LlamaModelParams {
     fn default() -> Self {
+        // SAFETY: no pointer is involved; llama.cpp returns a fully
+        // initialised params struct by value.
         let default_params = unsafe { llama_cpp_sys_4::llama_model_default_params() };
         LlamaModelParams {
             params: default_params,

@@ -53,17 +53,26 @@ impl From<&llama_cpp_sys_4::llama_model_kv_override> for ParamOverrideValue {
             __bindgen_anon_1,
         }: &llama_cpp_sys_4::llama_model_kv_override,
     ) -> Self {
+        // SAFETY (all four reads below): `llama_model_kv_override` is a tagged
+        // union — `tag` says which arm of `__bindgen_anon_1` is live, and each
+        // match arm reads exactly the field its tag names. Every variant is a
+        // plain scalar or a fixed `c_char` array, so none carries a pointer
+        // that could dangle.
         match *tag {
             llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_INT => {
+                // SAFETY: the tag matched above says this is the live union field.
                 ParamOverrideValue::Int(unsafe { __bindgen_anon_1.val_i64 })
             }
             llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_FLOAT => {
+                // SAFETY: the tag matched above says this is the live union field.
                 ParamOverrideValue::Float(unsafe { __bindgen_anon_1.val_f64 })
             }
             llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_BOOL => {
+                // SAFETY: the tag matched above says this is the live union field.
                 ParamOverrideValue::Bool(unsafe { __bindgen_anon_1.val_bool })
             }
             llama_cpp_sys_4::LLAMA_KV_OVERRIDE_TYPE_STR => {
+                // SAFETY: the tag matched above says this is the live union field.
                 ParamOverrideValue::Str(unsafe { __bindgen_anon_1.val_str })
             }
             _ => unreachable!("Unknown tag of {tag}"),
@@ -123,6 +132,10 @@ impl Iterator for KvOverrideValueIterator<'_> {
 
         let value = ParamOverrideValue::from(&current);
 
+        // SAFETY: `key` is a fixed-size `c_char` array inside the override
+        // struct, and the non-empty check above means it holds at least one
+        // byte; llama.cpp always NUL-terminates it. `to_owned` copies out
+        // before the borrow ends.
         let key = unsafe { CStr::from_ptr(current.key.as_ptr()).to_owned() };
 
         self.current += 1;

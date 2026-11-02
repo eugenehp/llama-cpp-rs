@@ -48,6 +48,10 @@ impl LlamaContext<'_> {
     /// * `dest` - The sequence id to copy the cache to.
     /// * `size` - The size of the cache to copy.
     pub fn copy_cache(&mut self, src: i32, dest: i32, size: i32) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_cp(mem, src, dest, 0, size);
@@ -79,6 +83,10 @@ impl LlamaContext<'_> {
         let p1 = p1
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_cp(mem, src, dest, p0, p1);
@@ -114,6 +122,10 @@ impl LlamaContext<'_> {
         let p1 = p1
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         Ok(unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_rm(mem, src, p0, p1)
@@ -122,6 +134,10 @@ impl LlamaContext<'_> {
 
     /// Clear the KV cache
     pub fn clear_kv_cache(&mut self) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_clear(mem, true);
@@ -134,6 +150,10 @@ impl LlamaContext<'_> {
     ///
     /// * `seq_id` - The sequence id to keep
     pub fn llama_kv_cache_seq_keep(&mut self, seq_id: i32) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_keep(mem, seq_id);
@@ -166,6 +186,10 @@ impl LlamaContext<'_> {
         let p1 = p1
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_add(mem, seq_id, p0, p1, delta);
@@ -199,6 +223,10 @@ impl LlamaContext<'_> {
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
         let d = i32::from(d.get());
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_div(mem, seq_id, p0, p1, d);
@@ -213,6 +241,10 @@ impl LlamaContext<'_> {
     /// * `seq_id` - The sequence id to get the max position for
     #[must_use]
     pub fn kv_cache_seq_pos_max(&self, seq_id: i32) -> i32 {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, so the memory handle
+        // `llama_get_memory` returns is borrowed from it and valid for the rest of
+        // this block. The sequence and position arguments are scalars llama.cpp
+        // range-checks itself.
         unsafe {
             let mem = llama_cpp_sys_4::llama_get_memory(self.context.as_ptr());
             llama_cpp_sys_4::llama_memory_seq_pos_max(mem, seq_id)

@@ -1,13 +1,13 @@
 [package]
 name = "openai-server"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 description = "Minimal OpenAI-compatible chat completion server"
 license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.10.0" }
+llama-cpp-4 = { path = "../../llama-cpp-4", version = "0.10.1" }
 # Default features pull in `compress-zstd`, and through it the `zstd` stack,
 # which carries four unfixed RUSTSEC advisories that cannot be updated past
 # actix-http's `zstd ^0.13` pin. This server negotiates gzip/brotli and never

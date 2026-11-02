@@ -536,6 +536,8 @@ impl LlamaContextParams {
         // somehow linked, this assert fails — rather than silently dropping the
         // hooks or reading a struct with a different layout.
         assert_eq!(
+            // SAFETY: no pointer is involved; the shim returns a constant ABI
+            // version compiled into libllama.
             unsafe { llama_cpp_sys_4::llama_cpp_rs_decode_hooks_abi_v1() },
             1,
             "libllama is missing the decode-hook ABI patch (0004)",
@@ -698,6 +700,8 @@ impl LlamaContextParams {
 /// ```
 impl Default for LlamaContextParams {
     fn default() -> Self {
+        // SAFETY: no pointer is involved; llama.cpp returns a fully
+        // initialised params struct by value.
         let context_params = unsafe { llama_cpp_sys_4::llama_context_default_params() };
         Self {
             context_params,
