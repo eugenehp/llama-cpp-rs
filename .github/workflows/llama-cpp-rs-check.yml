@@ -319,6 +319,14 @@ jobs:
       - name: Build rpc example
         if: matrix.features == 'rpc'
         run: cargo build --manifest-path examples/rpc/Cargo.toml
+
+      # The server's multimodal path sits behind its own `mtmd` feature, which
+      # is off by default — so a plain workspace build compiles none of it, and
+      # `openai-server` is excluded from the test jobs for runtime reasons. An
+      # API change to the mtmd wrappers broke this without any job noticing.
+      - name: Build openai-server with mtmd
+        if: matrix.features == 'mtmd'
+        run: cargo build -p openai-server --features mtmd
       - name: sccache stats
         run: sccache --show-stats || true
   mac:

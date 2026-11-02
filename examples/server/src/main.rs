@@ -338,7 +338,7 @@ impl ModelSource {
 // mmproj auto-detection and download
 // ---------------------------------------------------------------------------
 
-/// Try to download the best mmproj GGUF from a HuggingFace repo.
+/// Try to download the best mmproj GGUF from a `HuggingFace` repo.
 ///
 /// Lists the repo's files, picks the best `mmproj-*.gguf` by the same
 /// preference order as [`find_mmproj_in_dir`], downloads (or retrieves from
@@ -437,14 +437,13 @@ const MMPROJ_PREFER: &[&str] = &[
 fn find_mmproj_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
     let mut candidates: Vec<PathBuf> = entries
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.path())
         .filter(|p| {
             p.extension().and_then(|e| e.to_str()) == Some("gguf")
                 && p.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("mmproj"))
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.starts_with("mmproj"))
         })
         .collect();
 
@@ -465,15 +464,15 @@ fn find_mmproj_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     });
 
     let chosen = candidates.remove(0);
-    if !candidates.is_empty() {
+    if candidates.is_empty() {
+        tracing::info!("Auto-detected mmproj: {}", chosen.display());
+    } else {
         tracing::info!(
             "Auto-detected mmproj: {} ({} other candidate(s) in same dir; \
              use --mmproj to override)",
             chosen.display(),
             candidates.len()
         );
-    } else {
-        tracing::info!("Auto-detected mmproj: {}", chosen.display());
     }
     Some(chosen)
 }
@@ -526,8 +525,13 @@ struct AppState {
     /// In-memory store for files uploaded via `POST /v1/files`.
     file_store: Arc<RwLock<HashMap<String, FileEntry>>>,
     /// Multimodal context — `Some` when `--mmproj` is provided.
+    ///
+    /// Behind a `Mutex` because encoding mutates the context: `encode_chunk`
+    /// and the eval helpers take `&mut self`. The inference semaphore already
+    /// serialises requests, but that is a runtime convention the compiler
+    /// cannot see, and `AppState` is shared across handlers.
     #[cfg(feature = "mtmd")]
-    mtmd_ctx: Option<MtmdContext>,
+    mtmd_ctx: Option<std::sync::Mutex<MtmdContext>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -903,6 +907,11 @@ where
         .mtmd_ctx
         .as_ref()
         .expect("run_inference_multimodal called without mtmd_ctx");
+    // Held for the whole multimodal path: the bitmaps, the tokenize call and
+    // the eval all have to see the same context state.
+    let mut mtmd_ctx = mtmd_ctx
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // Vision models often embed 256–1024 tokens per image, so default to 8 K.
     const MM_DEFAULT_CTX: u32 = 8192;
@@ -931,7 +940,7 @@ where
         .iter()
         .enumerate()
         .map(|(i, bytes)| {
-            MtmdBitmap::from_buf(mtmd_ctx, bytes)
+            MtmdBitmap::from_buf(&mtmd_ctx, bytes)
                 .map_err(|e| internal_error(format!("bitmap {i}: {e}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -955,7 +964,7 @@ where
     tracing::info!("Calling eval_chunks…");
     mtmd_ctx
         .eval_chunks(
-            ctx.as_ptr(),
+            &mut ctx,
             &chunks,
             /* n_past */ 0,
             /* seq_id */ 0,
@@ -991,7 +1000,12 @@ where
     let mut decoder = encoding_rs::UTF_8.new_decoder();
     let mut finish_reason = FinishReason::Stop;
 
-    let max_stop_len = params.stop_seqs.iter().map(|s| s.len()).max().unwrap_or(0);
+    let max_stop_len = params
+        .stop_seqs
+        .iter()
+        .map(std::string::String::len)
+        .max()
+        .unwrap_or(0);
     let mut window = String::new();
     let mut cancelled = false;
 
@@ -1477,7 +1491,7 @@ async fn chat_completions(
                 tracing::info!(
                     "Images ready: {} image(s), sizes: {:?}",
                     bytes.len(),
-                    bytes.iter().map(|b| b.len()).collect::<Vec<_>>()
+                    bytes.iter().map(std::vec::Vec::len).collect::<Vec<_>>()
                 );
                 params.image_bytes = bytes;
             }
@@ -2393,7 +2407,7 @@ async fn main() -> std::io::Result<()> {
 
     // ── Multimodal projector (optional) ───────────────────────────────────────
     #[cfg(feature = "mtmd")]
-    let mtmd_ctx: Option<MtmdContext> = {
+    let mtmd_ctx: Option<std::sync::Mutex<MtmdContext>> = {
         tracing::info!("Model resolved to: {}", model_path.display());
         let model_dir = model_path.parent().unwrap_or(std::path::Path::new("."));
         tracing::info!("Scanning for mmproj in: {}", model_dir.display());
@@ -2443,13 +2457,13 @@ async fn main() -> std::io::Result<()> {
                         ctx.supports_vision(),
                         ctx.supports_audio()
                     );
-                    Some(ctx)
+                    Some(std::sync::Mutex::new(ctx))
                 }
                 Err(e) => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("failed to load mmproj '{}': {e}", p.display()),
-                    ))
+                    return Err(std::io::Error::other(format!(
+                        "failed to load mmproj '{}': {e}",
+                        p.display()
+                    )))
                 }
             }
         } else {

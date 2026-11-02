@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.10.1] - 2026-11-02
+## [0.11.0] - 2026-11-02
 
 ### Breaking
 
@@ -34,6 +34,17 @@
   internally.
 
 ### Changed
+
+- **`examples/server` holds its `MtmdContext` behind a `Mutex`.** Encoding
+  mutates the context, so the eval helpers take `&mut self` now; the server
+  reached it through a shared `&` from `AppState` and relied on its inference
+  semaphore, which is a runtime convention the compiler cannot see. The
+  `Mutex` makes that exclusivity a type-level fact.
+  - That path is behind the server's own non-default `mtmd` feature, so no
+    workspace build compiled it and CI never did either — `openai-server` is
+    excluded from the test jobs for runtime reasons. The `feature-combos`
+    workflow now builds it on its `mtmd` leg, and the seven pre-existing
+    clippy findings that had accumulated unlinted there are fixed.
 
 - **llama.cpp**: vendored submodule moved to `785322d17f` (`b12032` plus
   upstream's `requirements: fix numpy dependencies` (#31508)), from
