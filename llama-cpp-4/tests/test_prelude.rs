@@ -49,3 +49,13 @@ fn prelude_exports_the_newest_types() {
         n_outputs: 1,
     };
 }
+
+/// New in `b12388` — the prelude is the documented entry point, so these have
+/// to actually arrive through it.
+#[test]
+fn prelude_exports_the_b12388_types() {
+    let _: LlamaDflashVariant = LlamaDflashVariant::None;
+    let _: NextnRowsError = NextnRowsError::Unavailable;
+    // The resampler is only reachable through the prelude re-export here.
+    assert!(MtmdResampler::new(0, 0).is_err());
+}

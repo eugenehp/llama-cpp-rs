@@ -5,6 +5,7 @@
 #include "llama-ext.h"
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 size_t llama_memory_buffers_collect(
@@ -64,6 +65,7 @@ size_t common_device_memory_collect(
         struct common_device_memory_flat_entry * out,
         size_t                                   max_out,
         uint32_t *                               hp_ngl,
+        uint32_t *                               hp_ngl_skip,
         uint32_t *                               hp_n_ctx_train,
         uint32_t *                               hp_n_expert) {
     if (!path_model || !mparams || !cparams || !out || max_out == 0) {
@@ -73,14 +75,23 @@ size_t common_device_memory_collect(
     try {
         std::vector<ggml_backend_dev_t> devs;
         uint32_t                          ngl = 0;
+        uint32_t                     ngl_skip = 0;
         uint32_t                          nct = 0;
         uint32_t                          nex = 0;
 
+        // Upstream takes a list of model paths now, so a split model can be
+        // measured as one unit. This entry point still accepts a single path;
+        // wrap it rather than widen the C ABI for a case no caller has yet.
+        const std::vector<std::string> paths_model{ path_model };
+
         const auto vec = common_get_device_memory_data(
-                path_model, mparams, cparams, devs, ngl, nct, nex, log_level);
+                paths_model, mparams, cparams, devs, ngl, ngl_skip, nct, nex, log_level);
 
         if (hp_ngl) {
             *hp_ngl = ngl;
+        }
+        if (hp_ngl_skip) {
+            *hp_ngl_skip = ngl_skip;
         }
         if (hp_n_ctx_train) {
             *hp_n_ctx_train = nct;
@@ -100,6 +111,39 @@ size_t common_device_memory_collect(
         return n;
     } catch (...) {
         return (size_t) -1;
+    }
+}
+
+int32_t common_fit_params_one(
+        const char *                             path_model,
+        struct llama_model_params *              mparams,
+        struct llama_context_params *            cparams,
+        float *                                  tensor_split,
+        struct llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t *                                 margins,
+        uint32_t                                 n_ctx_min,
+        enum ggml_log_level                      log_level) {
+    if (!path_model || !mparams || !cparams) {
+        return 2; // COMMON_PARAMS_FIT_STATUS_ERROR
+    }
+
+    try {
+        // Upstream takes a list so a split model can be fitted as one unit;
+        // this entry point fits one path and wraps it.
+        const std::vector<std::string> paths_model{ path_model };
+
+        return (int32_t) common_fit_params(
+                paths_model,
+                mparams,
+                cparams,
+                tensor_split,
+                tensor_buft_overrides,
+                margins,
+                n_ctx_min,
+                /* extra */ nullptr,
+                log_level);
+    } catch (...) {
+        return 2; // COMMON_PARAMS_FIT_STATUS_ERROR
     }
 }
 

@@ -11,7 +11,7 @@
 mod support;
 
 use llama_cpp_4::llama_backend::LlamaBackend;
-use llama_cpp_4::model::{AddBos, LlamaModel, Special};
+use llama_cpp_4::model::{AddBos, LlamaDflashVariant, LlamaModel, Special};
 use llama_cpp_4::token::LlamaToken;
 use llama_cpp_4::TokenToStringError;
 
@@ -68,6 +68,20 @@ fn test_model_numeric_properties() {
     assert!(model.n_embd_out() > 0);
 }
 
+/// A plain checkpoint is not a `DFlash` draft, and both accessors have to say
+/// so rather than reading a variant out of an uninitialised field. `from_raw`
+/// maps anything it does not recognise to `None`, so a wrong read would show
+/// up as the `top_k` disagreeing with the variant.
+#[test]
+fn test_model_is_not_a_dflash_draft() {
+    let Some((_backend, model, _)) = load_test_model() else {
+        eprintln!("SKIP: no test model available");
+        return;
+    };
+    assert_eq!(model.dflash_variant(), LlamaDflashVariant::None);
+    assert_eq!(model.dflash_selector_top_k(), 0);
+}
+
 #[test]
 fn test_model_boolean_properties() {
     let Some((_backend, model, _)) = load_test_model() else {
@@ -114,7 +128,6 @@ fn test_special_tokens() {
     assert!(model.token_nl().0 >= 0);
 
     // These may return -1 if not supported, that's ok
-    let _ = model.token_cls();
     let _ = model.token_eot();
     let _ = model.token_pad();
     let _ = model.token_sep();

@@ -638,3 +638,188 @@ fn moe_cache_size_is_refused_by_a_model_that_cannot_honour_it() {
     // request being honoured is interesting here.
     assert!(ctx.n_ctx() >= N_CTX);
 }
+
+// ============================================================
+// Pre-norm device rows and row-sourced entries (new in b12388)
+// ============================================================
+
+/// A plain llama checkpoint is not a `DFlash` decoder, so the row-sourced
+/// input path has to report itself unavailable rather than let a batch through
+/// that `llama_decode` would then reject deeper in.
+#[test]
+fn embd_row_input_is_unavailable_on_a_plain_context() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let mut ctx = context(&model);
+    assert!(
+        !ctx.supports_embd_row(),
+        "stories260K is not a DFlash decoder"
+    );
+
+    // Enabling the layer-input device buffer is what would make it true on a
+    // DFlash pair, so it must not make it true here. It also must not be
+    // rejected: upstream returns nothing and simply allocates what it can.
+    ctx.set_embeddings_layer_inp(0, true);
+    ctx.set_embeddings_layer_inp_device(true);
+    assert!(
+        !ctx.supports_embd_row(),
+        "a device buffer does not make a non-DFlash context read rows"
+    );
+    ctx.set_embeddings_layer_inp_device(false);
+}
+
+/// Enabling the device buffer without `embeddings_nextn` must fail — and fail
+/// as a fallback rather than an error, because the rows are then extracted to
+/// host memory as before. The getter is what proves the buffer really was not
+/// allocated.
+#[test]
+fn pre_norm_device_rows_fall_back_when_the_buffer_is_off() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let mut ctx = context(&model);
+
+    assert!(
+        !ctx.set_embeddings_pre_norm_device(true),
+        "the device buffer needs unmasked nextn extraction, which is off here"
+    );
+
+    let width = model.n_embd_out() as usize;
+    let mut out = vec![0.0_f32; width];
+    assert_eq!(
+        ctx.get_embeddings_pre_norm_rows(0, &mut out),
+        Err(NextnRowsError::Unavailable)
+    );
+    assert_eq!(
+        ctx.set_embeddings_pre_norm_rows(0, &out),
+        Err(NextnRowsError::Unavailable)
+    );
+}
+
+/// The row count is derived from the buffer, so a buffer that is not a whole
+/// number of rows must be refused before llama.cpp sees a pointer — it would
+/// otherwise read or write past the end of the shorter side.
+#[test]
+fn pre_norm_rows_refuse_a_partial_row() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let mut ctx = context(&model);
+    let width = model.n_embd_out() as usize;
+    assert!(width > 1, "a width of 1 cannot have a partial row");
+
+    let mut out = vec![0.0_f32; width + 1];
+    assert_eq!(
+        ctx.get_embeddings_pre_norm_rows(0, &mut out),
+        Err(NextnRowsError::Shape {
+            len: width + 1,
+            width
+        }),
+        "a shape error must come back before the FFI call, not Unavailable"
+    );
+    assert_eq!(
+        ctx.set_embeddings_pre_norm_rows(0, &out),
+        Err(NextnRowsError::Shape {
+            len: width + 1,
+            width
+        })
+    );
+}
+
+/// Pairing two plain contexts cannot produce a state-row source: that needs an
+/// MTP context reading a buffer of matching width. Clearing the pairing is
+/// what lets `src` be dropped first, so it has to work on an unpaired context
+/// too.
+#[test]
+fn state_row_source_needs_an_mtp_context() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let src = context(&model);
+    let mut ctx = context(&model);
+
+    // SAFETY: `src` outlives `ctx` here — it is declared first, so it is
+    // dropped last — and no decode happens after the pairing is cleared.
+    let supported = unsafe { ctx.set_ctx_state_src(&src) };
+    assert!(!supported, "a non-MTP context accepts no state rows");
+    assert!(!ctx.clear_ctx_state_src());
+}
+
+/// Unlike `set_state_embedding`, which a default context refuses outright,
+/// a state *row* is only an index — the batch takes it and `process` is where
+/// it is refused. Both halves matter: a caller that only checked the setter
+/// would think the row had been accepted for decoding.
+#[test]
+fn a_state_row_is_taken_by_the_batch_and_refused_by_process() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let mut ctx = context(&model);
+    let mut batch = LlamaBatchExt::new(&ctx).expect("init batch_ext");
+    let entry = batch.add_token(model.token_bos(), 0).expect("add token");
+    batch.set_pos(entry, 0).expect("set pos");
+    batch.set_output(entry, true).expect("set output");
+
+    batch
+        .set_state_row(entry, 0)
+        .expect("the batch records the row");
+    assert!(
+        ctx.process(&mut batch, LlamaProcessType::Decode).is_err(),
+        "a default context cannot read state rows, so the decode must fail"
+    );
+}
+
+/// An entry carries one state, by row or by value — the second attempt has to
+/// be refused rather than overwrite the first.
+#[test]
+fn an_entry_takes_only_one_state_row() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let ctx = context(&model);
+    let mut batch = LlamaBatchExt::new(&ctx).expect("init batch_ext");
+    let entry = batch.add_token(model.token_bos(), 0).expect("add token");
+
+    batch.set_state_row(entry, 0).expect("first row");
+    assert_eq!(
+        batch.set_state_row(entry, 1),
+        Err(BatchExtError::StateAlreadySet(entry.index()))
+    );
+}
+
+/// A negative row is refused by llama.cpp, which is the only input validation
+/// it does here — the row is not bounds-checked against the source buffer
+/// until decode.
+#[test]
+fn a_negative_state_row_is_refused() {
+    let _guard = llama_guard();
+    let Some(model) = load_full_model() else {
+        skip_no_model();
+        return;
+    };
+    let ctx = context(&model);
+    let mut batch = LlamaBatchExt::new(&ctx).expect("init batch_ext");
+    let entry = batch.add_token(model.token_bos(), 0).expect("add token");
+
+    assert_eq!(
+        batch.set_state_row(entry, -1),
+        Err(BatchExtError::EmbeddingRejected)
+    );
+    // The rejection must not have marked the entry as carrying state.
+    batch
+        .set_state_row(entry, 0)
+        .expect("a valid row still works");
+}

@@ -26,7 +26,7 @@ use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 use crate::{
     DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
-    LlamaLoraAdapterSetError, ProcessError,
+    LlamaLoraAdapterSetError, NextnRowsError, ProcessError,
 };
 
 /// Source of [`LlamaContext::id`].
@@ -747,18 +747,6 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
-    /// Mark the next computation as a warmup run.
-    ///
-    /// Warmup runs are useful for GPU backends to compile kernels before
-    /// actual inference begins.
-    pub fn set_warmup(&mut self, warmup: bool) {
-        // SAFETY: `self.context` is non-null and kept alive by this borrow; the argument is a `bool` with no
-        // validity requirement.
-        unsafe {
-            llama_cpp_sys_4::llama_set_warmup(self.context.as_ptr(), warmup);
-        }
-    }
-
     /// Wait for all pending async computations to finish.
     pub fn synchronize(&mut self) {
         // SAFETY: `self.context` is non-null and kept alive by this borrow; this only waits for pending work.
@@ -845,6 +833,156 @@ impl<'model> LlamaContext<'model> {
             i,
             self.embd_row_width(),
         )
+    }
+
+    /// Whether `decode` accepts entries added with
+    /// [`LlamaBatchExt::add_embd_row`](crate::llama_batch_ext::LlamaBatchExt).
+    ///
+    /// Needs a DFlash/DSpark decoder context whose paired context has a layer
+    /// input device buffer. Wraps `llama_supports_embd_row`, new in `b12388`.
+    #[must_use]
+    pub fn supports_embd_row(&self) -> bool {
+        self.get(llama_cpp_sys_4::llama_supports_embd_row)
+    }
+
+    /// Keep the unmasked pre-norm rows in a device buffer instead of copying
+    /// them to host memory after every decode.
+    ///
+    /// Returns `false` when the buffer cannot be used, in which case the rows
+    /// are extracted to host memory as before — so a `false` here is a
+    /// fallback, not an error. Wraps `llama_set_embeddings_nextn_dev`, new in
+    /// `b12388`.
+    pub fn set_embeddings_pre_norm_device(&mut self, value: bool) -> bool {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the
+        // argument is a `bool` with no validity requirement.
+        unsafe { llama_cpp_sys_4::llama_set_embeddings_nextn_dev(self.context.as_ptr(), value) }
+    }
+
+    /// Copy rows out of the pre-norm device buffer, starting at `row0`.
+    ///
+    /// How many rows are read is derived from `out`: the buffer is
+    /// `[n_embd_out, n_batch + n_seq_max]`, so `out` must be a whole number of
+    /// `n_embd_out`-wide rows. Taking the count from the slice rather than as
+    /// a separate argument is deliberate — a caller-supplied row count that
+    /// disagreed with the buffer is exactly the shape of
+    /// [#360](https://github.com/eugenehp/llama-cpp-rs/issues/360).
+    ///
+    /// Wraps `llama_get_embeddings_nextn_rows`, new in `b12388`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NextnRowsError::Shape`] when `out` is not a whole number of
+    /// rows, and [`NextnRowsError::Unavailable`] when llama.cpp declines —
+    /// either because the device buffer was never enabled with
+    /// [`set_embeddings_pre_norm_device`](Self::set_embeddings_pre_norm_device),
+    /// or because `row0` plus the rows in `out` run past the end of it.
+    pub fn get_embeddings_pre_norm_rows(
+        &mut self,
+        row0: i64,
+        out: &mut [f32],
+    ) -> Result<usize, NextnRowsError> {
+        let n_rows = Self::rows_in(out.len(), self.embd_row_width())?;
+        // SAFETY: `self.context` is non-null and kept alive by this exclusive
+        // borrow, and `out`'s pointer is paired with a row count computed from
+        // its own length times the width llama.cpp allocates, so it cannot be
+        // written past.
+        let ok = unsafe {
+            llama_cpp_sys_4::llama_get_embeddings_nextn_rows(
+                self.context.as_ptr(),
+                row0,
+                n_rows,
+                out.as_mut_ptr(),
+            )
+        };
+        if ok {
+            Ok(usize::try_from(n_rows).unwrap_or(0))
+        } else {
+            Err(NextnRowsError::Unavailable)
+        }
+    }
+
+    /// Copy rows into the pre-norm device buffer, starting at `row0`.
+    ///
+    /// The row count comes from `data`, as in
+    /// [`get_embeddings_pre_norm_rows`](Self::get_embeddings_pre_norm_rows).
+    /// Rows at and above `n_batch` are the ones reserved for the caller.
+    ///
+    /// Wraps `llama_set_embeddings_nextn_rows`, new in `b12388`.
+    ///
+    /// # Errors
+    ///
+    /// As [`get_embeddings_pre_norm_rows`](Self::get_embeddings_pre_norm_rows).
+    pub fn set_embeddings_pre_norm_rows(
+        &mut self,
+        row0: i64,
+        data: &[f32],
+    ) -> Result<usize, NextnRowsError> {
+        let n_rows = Self::rows_in(data.len(), self.embd_row_width())?;
+        // SAFETY: as the getter above, with `data` read rather than written.
+        let ok = unsafe {
+            llama_cpp_sys_4::llama_set_embeddings_nextn_rows(
+                self.context.as_ptr(),
+                row0,
+                n_rows,
+                data.as_ptr(),
+            )
+        };
+        if ok {
+            Ok(usize::try_from(n_rows).unwrap_or(0))
+        } else {
+            Err(NextnRowsError::Unavailable)
+        }
+    }
+
+    /// Read batch state rows from `src`'s pre-norm device buffer.
+    ///
+    /// Returns whether `decode` will accept batches carrying state rows —
+    /// `false` unless this is an MTP context and `src`'s buffer has the width
+    /// the MTP graph expects. Wraps `llama_set_ctx_state_src`, new in
+    /// `b12388`.
+    ///
+    /// # Safety
+    ///
+    /// llama.cpp keeps the pointer to `src` in this context's parameters and
+    /// reads through it on every subsequent decode, so the borrow ending does
+    /// not end the aliasing: `src` must stay alive until this context is
+    /// dropped or the pairing is dropped with
+    /// [`clear_ctx_state_src`](Self::clear_ctx_state_src). Dropping `src`
+    /// first and decoding again reads freed memory.
+    ///
+    /// This mirrors
+    /// [`LlamaContextParams::with_ctx_other`](crate::context::params::LlamaContextParams::with_ctx_other),
+    /// which pairs contexts the same way at construction time.
+    pub unsafe fn set_ctx_state_src(&mut self, src: &Self) -> bool {
+        // SAFETY: both contexts are live and non-null here — this one through
+        // an exclusive borrow, `src` through a shared one. Keeping `src` alive
+        // past the call is the caller's half of the contract, documented above.
+        unsafe {
+            llama_cpp_sys_4::llama_set_ctx_state_src(self.context.as_ptr(), src.context.as_ptr())
+        }
+    }
+
+    /// Drop the pairing made by
+    /// [`set_ctx_state_src`](Self::set_ctx_state_src).
+    ///
+    /// This is what makes outliving the source context optional: clear the
+    /// pointer and the source is free to be dropped. Always returns `false`,
+    /// since a context with no state source accepts no state rows.
+    pub fn clear_ctx_state_src(&mut self) -> bool {
+        // SAFETY: `self.context` is live and non-null, and upstream reads
+        // `ctx_src` only to store it — a null source is how it spells "none".
+        unsafe {
+            llama_cpp_sys_4::llama_set_ctx_state_src(self.context.as_ptr(), std::ptr::null_mut())
+        }
+    }
+
+    /// Rows in a buffer of `len` floats, or an error if it is not a whole
+    /// number of them.
+    fn rows_in(len: usize, width: usize) -> Result<i64, NextnRowsError> {
+        if width == 0 || !len.is_multiple_of(width) {
+            return Err(NextnRowsError::Shape { len, width });
+        }
+        i64::try_from(len / width).map_err(|_| NextnRowsError::Shape { len, width })
     }
 
     /// Select which `NextN` block the MTP draft graph runs.
@@ -975,6 +1113,28 @@ impl<'model> LlamaContext<'model> {
         // validity requirement.
         unsafe {
             llama_cpp_sys_4::llama_set_embeddings_layer_inp(self.context.as_ptr(), layer_id, value);
+        }
+    }
+
+    /// Keep the enabled layer inputs in a device buffer instead of copying
+    /// them to host memory after every decode.
+    ///
+    /// The buffer is `[n_layer_inp * n_embd, n_batch]`, row `r` holding the
+    /// token at batch index `r` with the layers in ascending id order. It is
+    /// not readable from Rust — the point is that it stays on the device: a
+    /// paired `DFlash`/`DSpark` decoder reads it directly, which is what makes
+    /// [`supports_embd_row`](Self::supports_embd_row) true and
+    /// [`LlamaBatchExt::add_embd_row`](crate::llama_batch_ext::LlamaBatchExt::add_embd_row)
+    /// usable on the paired context.
+    ///
+    /// Call [`set_embeddings_layer_inp`](Self::set_embeddings_layer_inp) first
+    /// — the buffer is sized from the layers that are enabled when it is
+    /// allocated. Wraps `llama_set_embeddings_layer_inp_dev`, new in `b12388`.
+    pub fn set_embeddings_layer_inp_device(&mut self, value: bool) {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow; the
+        // argument is a `bool` with no validity requirement.
+        unsafe {
+            llama_cpp_sys_4::llama_set_embeddings_layer_inp_dev(self.context.as_ptr(), value);
         }
     }
 
@@ -1500,5 +1660,43 @@ impl Drop for LlamaContext<'_> {
         // SAFETY: this is the only place the context is freed, `Drop` runs once, and
         // nothing reads `self.context` afterwards.
         unsafe { llama_cpp_sys_4::llama_free(self.context.as_ptr()) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LlamaContext, NextnRowsError};
+
+    /// The row count handed to llama.cpp is derived from the buffer, so the
+    /// derivation is the thing that keeps a short buffer from being written
+    /// past — the mistake behind
+    /// [#360](https://github.com/eugenehp/llama-cpp-rs/issues/360).
+    #[test]
+    fn rows_in_counts_whole_rows_only() {
+        assert_eq!(LlamaContext::rows_in(0, 64), Ok(0));
+        assert_eq!(LlamaContext::rows_in(64, 64), Ok(1));
+        assert_eq!(LlamaContext::rows_in(192, 64), Ok(3));
+    }
+
+    #[test]
+    fn rows_in_rejects_a_partial_row() {
+        assert_eq!(
+            LlamaContext::rows_in(65, 64),
+            Err(NextnRowsError::Shape { len: 65, width: 64 })
+        );
+        assert_eq!(
+            LlamaContext::rows_in(63, 64),
+            Err(NextnRowsError::Shape { len: 63, width: 64 })
+        );
+    }
+
+    /// A zero width would make every length a whole number of rows and then
+    /// divide by zero working out how many.
+    #[test]
+    fn rows_in_rejects_a_zero_width() {
+        assert_eq!(
+            LlamaContext::rows_in(64, 0),
+            Err(NextnRowsError::Shape { len: 64, width: 0 })
+        );
     }
 }

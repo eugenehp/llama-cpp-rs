@@ -121,6 +121,20 @@ pub enum MtmdError {
     /// `mtmd_helper_video_read_next` returned an error code (`-2`).
     #[error("video read error: code {0}")]
     VideoReadError(i32),
+
+    /// `mtmd_helper_resampler_init` returned null — it cannot handle that
+    /// rate pair.
+    #[error("failed to create resampler for {rate_in} Hz -> {rate_out} Hz")]
+    ResamplerInitFailed {
+        /// Requested input sample rate.
+        rate_in: i32,
+        /// Requested output sample rate.
+        rate_out: i32,
+    },
+
+    /// `mtmd_helper_resampler_process` reported a negative code.
+    #[error("resampler error: code {0}")]
+    ResampleError(i64),
 }
 
 /// A convenience `Result` alias for this module.
@@ -2136,6 +2150,50 @@ mod tests {
         assert!(!input.parse_special);
     }
 
+    /// The resampler takes no model and no context, so unlike the rest of
+    /// mtmd it can be exercised directly.
+    #[test]
+    fn resampler_rejects_a_non_positive_rate() {
+        assert!(matches!(
+            MtmdResampler::new(0, 16_000),
+            Err(MtmdError::ResamplerInitFailed {
+                rate_in: 0,
+                rate_out: 16_000
+            })
+        ));
+        assert!(MtmdResampler::new(16_000, -1).is_err());
+    }
+
+    /// Equal rates are upstream's passthrough path, where the block comes
+    /// straight back out — identical samples, identical count.
+    #[test]
+    fn resampler_passes_equal_rates_through() {
+        let mut resampler = MtmdResampler::new(16_000, 16_000).expect("init passthrough");
+        let input = [0.0_f32, 0.25, -0.5, 1.0];
+        assert_eq!(resampler.process(&input).expect("process"), &input);
+    }
+
+    /// Halving the rate must halve the sample count, within the few samples
+    /// the low-pass filter holds back to join the next block.
+    #[test]
+    fn resampler_halves_the_sample_count() {
+        let mut resampler = MtmdResampler::new(32_000, 16_000).expect("init 32k -> 16k");
+        let input: Vec<f32> = (0..512_i16).map(|i| (f32::from(i) / 512.0).sin()).collect();
+        let n_out = resampler.process(&input).expect("process").len();
+        assert!(
+            (240..=256).contains(&n_out),
+            "32k -> 16k on 512 samples produced {n_out}, expected about 256"
+        );
+    }
+
+    /// An empty block is legal and drains nothing — a realtime caller polling
+    /// an idle input hits this on every tick.
+    #[test]
+    fn resampler_accepts_an_empty_block() {
+        let mut resampler = MtmdResampler::new(44_100, 16_000).expect("init 44.1k -> 16k");
+        assert!(resampler.process(&[]).expect("process").is_empty());
+    }
+
     #[test]
     fn input_text_preserves_interior_nul() {
         // The whole point of upstream's `text_len`: a prompt with an embedded
@@ -3004,3 +3062,128 @@ extern "C" fn lazy_trampoline(
     }));
     result.unwrap_or(-2)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Audio resampling
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Streaming sample-rate converter for mono `f32` PCM.
+///
+/// Audio models want their own rate — [`MtmdContext::audio_sample_rate`] says
+/// which — and a microphone or file rarely matches it. This converts between
+/// the two a block at a time, keeping the filter state across calls, so a
+/// realtime stream can be fed in as it arrives rather than buffered whole.
+///
+/// One instance per stream: the state is what makes consecutive blocks join
+/// without a seam, so sharing one across two streams would interleave them.
+///
+/// Wraps `mtmd_helper_resampler_*`, new in `b12388`.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use llama_cpp_4::mtmd::{MtmdContext, MtmdResampler};
+/// # fn f(mtmd: &MtmdContext, mic_chunks: impl Iterator<Item = Vec<f32>>)
+/// #     -> Result<(), Box<dyn std::error::Error>> {
+/// let mut resampler = MtmdResampler::new(48_000, mtmd.audio_sample_rate())?;
+/// let mut pcm = Vec::new();
+/// for chunk in mic_chunks {
+///     pcm.extend_from_slice(resampler.process(&chunk)?);
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct MtmdResampler {
+    ptr: NonNull<sys::mtmd_helper_resampler>,
+}
+
+impl std::fmt::Debug for MtmdResampler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MtmdResampler").finish_non_exhaustive()
+    }
+}
+
+impl Drop for MtmdResampler {
+    fn drop(&mut self) {
+        // SAFETY: this runs once from `Drop` on a non-null handle, and nothing
+        // reads it afterwards.
+        unsafe { sys::mtmd_helper_resampler_free(self.ptr.as_ptr()) }
+    }
+}
+
+impl MtmdResampler {
+    /// Open a resampler converting `rate_in` Hz to `rate_out` Hz.
+    ///
+    /// Equal rates are allowed and pass samples through.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ResamplerInitFailed`] when llama.cpp cannot build
+    /// a converter for that pair — a non-positive rate, say.
+    pub fn new(rate_in: i32, rate_out: i32) -> Result<Self> {
+        // SAFETY: no pointer is involved; both arguments are plain scalars and
+        // the result is checked for null before being wrapped.
+        let ptr = unsafe { sys::mtmd_helper_resampler_init(rate_in, rate_out) };
+        NonNull::new(ptr)
+            .map(|ptr| Self { ptr })
+            .ok_or(MtmdError::ResamplerInitFailed { rate_in, rate_out })
+    }
+
+    /// Convert one block, returning the samples produced so far.
+    ///
+    /// The result is often shorter or longer than `input` and may be empty:
+    /// the converter holds back whatever it needs to join the next block
+    /// cleanly. Feeding an empty slice is allowed and simply drains nothing.
+    ///
+    /// The returned slice borrows the resampler's own buffer, which the next
+    /// call overwrites. `&mut self` here and `&[f32]` out is what makes the
+    /// borrow checker enforce that rather than leaving it to a doc comment —
+    /// copy out (as the example on this type does) to keep the samples.
+    ///
+    /// `input` is borrowed for the same region as the result, which is not
+    /// over-tight: when the two rates are equal upstream passes the input
+    /// buffer straight back out, so the result can alias `input` rather than
+    /// the resampler's buffer. Tying both to one lifetime is what keeps that
+    /// case from handing back a dangling slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MtmdError::ResampleError`] if llama.cpp reports a negative
+    /// code.
+    pub fn process<'a>(&'a mut self, input: &'a [f32]) -> Result<&'a [f32]> {
+        let mut out: *const f32 = std::ptr::null();
+        // SAFETY: an exclusive `&mut self` gives a live, non-null resampler.
+        // `input`'s pointer and length are passed together, so the read stays
+        // in bounds, and `out` is a stack local upstream writes through.
+        let n = unsafe {
+            sys::mtmd_helper_resampler_process(
+                self.ptr.as_ptr(),
+                input.as_ptr(),
+                input.len(),
+                &raw mut out,
+            )
+        };
+        if n < 0 {
+            return Err(MtmdError::ResampleError(n));
+        }
+        let n = usize::try_from(n).map_err(|_| MtmdError::ResampleError(n))?;
+        if n == 0 || out.is_null() {
+            return Ok(&[]);
+        }
+        // SAFETY: `out` is non-null and points at `n` initialised samples —
+        // either the resampler's own output buffer, which upstream just
+        // filled, or `input` itself when the rates match and upstream passes
+        // the block through. The returned lifetime is tied to both the
+        // exclusive borrow of `self` and the borrow of `input`, so it cannot
+        // outlive whichever one the data lives in.
+        Ok(unsafe { slice::from_raw_parts(out, n) })
+    }
+}
+
+// SAFETY: the resampler owns its state outright and nothing in it is tied to
+// the thread that created it.
+unsafe impl Send for MtmdResampler {}
+
+// SAFETY: the only method that touches the converter state takes `&mut self`,
+// so a shared reference cannot reach it.
+unsafe impl Sync for MtmdResampler {}

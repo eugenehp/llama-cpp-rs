@@ -20,7 +20,7 @@ mismatched draft/target pair is a typed Rust error, not a dead process.
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `785322d17f (b12032+1, incl. v0.8.0)` (Nov 2026) — includes
+**llama.cpp version:** `1c2adc75f6 (b12388, incl. v1.0.0)` (Nov 2026) — includes
 [TurboQuant (PR #21038)](#turboQuant--attention-rotation),
 [MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
 [DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and
@@ -32,7 +32,7 @@ upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.11.0"
+llama-cpp-4 = "0.12.0"
 ```
 
 Import the common types with the prelude:
@@ -130,9 +130,18 @@ Notes:
 Backend feature coverage (practical targets):
 - `metal`  → macOS (Apple Silicon and Intel Macs)
 - `vulkan` → Linux/Windows (cross-vendor desktop GPUs)
-- `webgpu` → Linux/Windows (experimental; requires Dawn/WebGPU-native stack)
-- `cuda`   → Linux/Windows with NVIDIA CUDA toolkit (experimental in CI)
-- `hip`    → Linux ROCm/HIP environments (experimental in CI)
+- `webgpu` → Linux/Windows (experimental; requires Dawn/WebGPU-native stack).
+  Dawn is located via `Dawn_DIR` or `CMAKE_PREFIX_PATH`; without it the build
+  warns and leaves the WebGPU backend out rather than failing.
+- `cuda`   → Linux/Windows with NVIDIA CUDA toolkit (experimental in CI). The
+  toolkit is located via `CUDACXX`, `CUDA_PATH`, `nvcc` on `PATH` or
+  `/usr/local/cuda`; without one the build warns and leaves the CUDA backend
+  out rather than failing.
+- `hip`    → Linux ROCm/HIP environments (experimental in CI). Needs a ROCm
+  installation; the build script looks at `ROCM_PATH`, `HIP_PATH`, `hipconfig`
+  and `/opt/rocm`, and when none of them turns one up it warns and builds
+  without the HIP backend rather than failing. AMD ships no macOS ROCm, so on
+  Apple targets `hip` always falls back — to Metal, as `vulkan` does.
 
 ### Prebuilt Feature Benchmark Results
 
@@ -182,7 +191,7 @@ Environment overrides:
 | Variable | Description |
 |---|---|
 | `LLAMA_PREBUILT_DIR` | Use a local directory (skips download) |
-| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.11.0`) |
+| `LLAMA_PREBUILT_TAG` | Release tag to download (default: crate version, e.g. `v0.12.0`) |
 | `LLAMA_PREBUILT_REPO` | GitHub `owner/repo` (default: `eugenehp/llama-cpp-rs`) |
 | `LLAMA_PREBUILT_URL` | Full URL override for the tarball |
 | `LLAMA_PREBUILT_OFF` | Set to `1` to disable auto-download |
@@ -195,7 +204,11 @@ Manual prefetch:
 cargo build --features prebuilt
 ```
 - `opencl` → Linux/Windows with OpenCL SDK/runtime (experimental in CI)
-- `blas`   → CPU acceleration (Linux/macOS/Windows)
+- `blas`   → CPU acceleration (Linux/macOS/Windows). macOS uses Accelerate and
+  always works; elsewhere a pkg-config `blas`/`openblas` module or the library
+  itself is needed, and without one the build warns and leaves the BLAS
+  backend out rather than failing. Set `GGML_BLAS_VENDOR`, `MKLROOT` or
+  `OPENBLAS_HOME` to point at a provider the probe would not find.
 
 ```bash
 # Chat completion (max_completion_tokens is also accepted)
@@ -543,6 +556,71 @@ throughput on Apple Silicon and notes on upstream #23269 sampling changes.
 For comparison against upstream `llama-server --spec-type draft-mtp`, use
 [`scripts/bench-mtp.sh`](scripts/bench-mtp.sh).
 
+### 6. Device-resident hand-off (DFlash / DSpark)
+
+New in `b12388`. On a `DFlash`/`DSpark` pair, the draft's inputs and state can
+be read straight out of the target's device buffers, so hidden states never
+make the round trip to host memory and back.
+
+Two buffers are involved, and they are **not** interchangeable:
+
+| Buffer | Enabled on | Read by | Row width |
+| --- | --- | --- | --- |
+| layer inputs | target, `set_embeddings_layer_inp_device` | `LlamaBatchExt::add_embd_row` | `n_layer_inp * n_embd` |
+| pre-norm (`h_nextn`) | producer, `set_embeddings_pre_norm_device` | `LlamaBatchExt::set_state_row` | `n_embd_out` |
+
+The input rows come from the context paired at construction with
+`with_ctx_other`; the state rows come from whichever context was named with
+`set_ctx_state_src`. [`LlamaContext::supports_embd_row`](llama-cpp-4/src/context.rs)
+reports whether the pairing is actually usable — it is `false` unless the
+model is a `DFlash` arch *and* the paired context has a layer-input device
+buffer, so check it rather than assuming:
+
+```rust
+use llama_cpp_4::prelude::*;
+
+// The target publishes its layer inputs to a device buffer.
+target.set_embeddings_layer_inp(layer_id, true);
+target.set_embeddings_layer_inp_device(true);
+
+// The draft reads rows of it instead of taking embeddings by value.
+assert!(draft.supports_embd_row());
+let mut batch = LlamaBatchExt::new(&draft)?;
+let entry = batch.add_embd_row(0, row)?;
+batch.set_pos(entry, pos)?;
+```
+
+Either every entry of a batch is a row entry or none is — upstream refuses a
+mixed batch, and a row entry carries no token id and no embedding of its own.
+
+State rows work the same way, with one caveat worth reading before use:
+
+```rust
+// SAFETY: `producer` must outlive `mtp`, or the pairing must be dropped with
+// `mtp.clear_ctx_state_src()` before `producer` goes away. llama.cpp keeps
+// the pointer and reads through it on every later decode.
+let accepts_state_rows = unsafe { mtp.set_ctx_state_src(&producer) };
+```
+
+`set_ctx_state_src` is the one `unsafe` function in this group precisely
+because the borrow ending does not end the aliasing. Everything else here is
+safe: the row-copy helpers
+[`get_embeddings_pre_norm_rows`](llama-cpp-4/src/context.rs) and
+`set_embeddings_pre_norm_rows` derive the row count from the slice you pass,
+so a buffer that is not a whole number of `n_embd_out`-wide rows is a
+`NextnRowsError::Shape` rather than an out-of-bounds write.
+
+Which driver a draft checkpoint needs is a model query:
+
+```rust
+match model.dflash_variant() {
+    LlamaDflashVariant::None => { /* not a DFlash draft */ }
+    variant => println!("{variant:?}, top_k = {}", model.dflash_selector_top_k()),
+}
+```
+
+`examples/model_info.rs` prints both for any GGUF.
+
 ---
 
 ## Incremental prefill
@@ -724,6 +802,9 @@ ctx.decode(&mut batch)?;
 | `cuda` | NVIDIA (CUDA) | `--features cuda` |
 | `metal` | Apple Silicon | `--features metal` |
 | `vulkan` | AMD / Intel / cross-platform | `--features vulkan` |
+| `hip` | AMD (ROCm) — falls back when no ROCm is installed | `--features hip` |
+| `opencl` | Cross-vendor OpenCL — needs the Khronos `CL/cl.h` | `--features opencl` |
+| `webgpu` | Dawn/WebGPU-native | `--features webgpu` |
 | `native` | CPU with AVX2/NEON auto-detect | `--features native` |
 | `openmp` | Multi-core CPU (default on) | `--features openmp` |
 | `rpc` | Remote compute backend | `--features rpc` |
@@ -753,20 +834,41 @@ at *runtime* is platform-specific:
 
 | Platform | How the binary finds the libraries | Action needed |
 |---|---|---|
-| macOS | Install names are rewritten to `@loader_path/…` by the build script | none |
+| macOS | Dylibs keep CMake's `@rpath/…` install names; the binary needs an `@loader_path` rpath | see below |
 | Windows | The loader searches the directory of the `.exe` | none |
 | Linux / BSD | ELF requires an rpath on the **final executable** | see below |
 
 Cargo does not add an rpath to the binaries it builds, and a dependency's build
-script cannot inject link arguments into a dependent crate's binary — so on
-Linux the consuming project has to supply it. This repository does so in
+script cannot inject link arguments into a dependent crate's binary — so the
+consuming project has to supply it. This repository does so in
 [`.cargo/config.toml`](.cargo/config.toml); in your own project add:
 
 ```toml
 # .cargo/config.toml
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]
+
 [target.'cfg(target_os = "linux")']
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]
 ```
+
+If you run **doctests** on macOS, they need their own entry. rustdoc links each
+doctest in a temp directory, so no `@loader_path` rpath can reach the
+libraries, and `DYLD_*` variables are stripped from protected processes — but
+dyld resolves a relative rpath against the working directory, which cargo sets
+to the package root:
+
+```toml
+[build]
+rustdocflags = [
+    "-C", "link-arg=-Wl,-rpath,../target/debug",
+    "-C", "link-arg=-Wl,-rpath,../target/release",
+]
+```
+
+Earlier versions of this crate rewrote the install names to `@loader_path/…`
+instead, which needed nothing from the consumer but made doctests impossible —
+an explicit path is never resolved through a search.
 
 Note that setting the `RUSTFLAGS` environment variable *replaces* these flags
 rather than appending to them, so a CI job that sets `RUSTFLAGS` must repeat the
@@ -775,10 +877,10 @@ rpath itself.
 Without this, `cargo run` and `cargo test` still work — they set
 `LD_LIBRARY_PATH` / `DYLD_FALLBACK_LIBRARY_PATH` to the target directory — but
 running the binary directly fails with `libggml-base.so.0: cannot open shared
-object file`. To sidestep runtime lookup entirely, link statically instead:
+object file`, or `Library not loaded: @rpath/libggml-base.1.dylib` on macOS. To sidestep runtime lookup entirely, link statically instead:
 
 ```toml
-llama-cpp-4 = { version = "0.11.0", default-features = false }
+llama-cpp-4 = { version = "0.12.0", default-features = false }
 ```
 
 ---
@@ -898,6 +1000,30 @@ cargo run --features mtmd -p mtmd -- \
     --prompt "Describe this image."
 ```
 
+### Audio input and sample-rate conversion
+
+An audio model wants its own rate — `MtmdContext::audio_sample_rate()` says
+which — and a microphone or file rarely matches it.
+[`MtmdResampler`](llama-cpp-4/src/mtmd.rs) (new in `b12388`) converts a block
+at a time, keeping filter state across calls, so a realtime stream can be fed
+in as it arrives rather than buffered whole:
+
+```rust
+use llama_cpp_4::prelude::*;
+
+let mut resampler = MtmdResampler::new(48_000, mtmd.audio_sample_rate())?;
+let mut pcm = Vec::new();
+for chunk in mic_chunks {
+    // Borrows `chunk` for as long as the result lives: when the two rates are
+    // equal this is a passthrough and the result *is* the input buffer.
+    pcm.extend_from_slice(resampler.process(&chunk)?);
+}
+```
+
+One instance per stream — the state is what makes consecutive blocks join
+without a seam. The returned slice is overwritten by the next call, so copy
+out anything you need to keep.
+
 ---
 
 ## Credits
@@ -912,7 +1038,7 @@ See also [bitnet-cpp-rs](https://github.com/eugenehp/bitnet-cpp-rs) for highly-q
   author    = {Hauptmann, Eugene},
   title     = {{llama-cpp-4}: llama-cpp {Rust} wrapper},
   year      = {2025},
-  version   = {0.11.0},
+  version   = {0.12.0},
   url       = {https://github.com/eugenehp/llama-cpp-rs},
 }
 ```

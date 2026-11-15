@@ -1,5 +1,212 @@
 # Changelog
 
+## [0.12.0] - 2026-11-14
+
+### Breaking
+
+- **The RPC wire protocol went `8.0.1` → `10.0.0`.** An `rpc`-feature client
+  built here cannot talk to an `rpc-server` from 0.11.0 or earlier; upgrade
+  both ends together. Context state is *not* affected —
+  `LLAMA_SESSION_VERSION` (11) and `LLAMA_STATE_SEQ_VERSION` (4) are unchanged,
+  so saved state still loads.
+- **`LlamaContext::set_warmup` is gone.** llama.cpp removed `llama_set_warmup`
+  with no replacement; its deprecation note was that user code should perform
+  warmup runs manually rather than flag them. Keeping a method that silently
+  did nothing would have been worse than removing it.
+- **`LlamaContext::copy_state_data` takes `&mut [u8]` and is no longer
+  `unsafe`.** `llama_copy_state_data` took a bare destination pointer with no
+  length; its replacement `llama_state_get_data` takes the size, so the bound
+  is checked and the function is safe. `set_state_data` is likewise safe now —
+  the old entry point read as much as the serialized header claimed and never
+  consulted `src.len()`, so a truncated buffer was read past its end.
+
+- **macOS consumers who link dynamically now need an rpath stanza.** The
+  dylibs keep CMake's `@rpath/…` install names instead of being rewritten to
+  `@loader_path/…`, so a *directly executed* binary needs
+  `-C link-arg=-Wl,-rpath,@loader_path` — the macOS analogue of the `$ORIGIN`
+  flag Linux consumers have always needed, and the same stanza this repository
+  carries in `.cargo/config.toml`. `cargo run` and `cargo test` are unaffected.
+  This is the trade for doctests working at all; see the `Fixed` entry below
+  for why the old scheme could not support them. Static linking
+  (`default-features = false`) avoids the question entirely.
+- **`DeviceMemoryHyperParams` is `#[non_exhaustive]`.** It gained a field this
+  release (`n_gpu_layers_skipped`), which would have broken any struct literal
+  downstream. The crate builds this type and callers only read it, so closing
+  it to literals costs nothing and stops the next upstream hyper-parameter
+  from being a breaking change too.
+- **`LlamaContextParams::with_ctx_other` is now `unsafe`.** It records a
+  pointer that llama.cpp reads on every later decode of the context it builds,
+  so the paired context has to outlive that context — its doc previously only
+  asked for it to survive until `new_context` returned, which understated the
+  requirement, and safe code could drop the target and keep decoding the
+  draft. Same contract, and now the same spelling, as the new
+  `LlamaContext::set_ctx_state_src`.
+
+### Deprecated
+
+- **`LlamaVocab::cls` and `LlamaModel::token_cls`** now return the BOS token.
+  Upstream removed `llama_vocab_cls`, its own deprecation note being "use
+  `llama_vocab_bos` instead" — the two were the same token for every
+  vocabulary defining either.
+
+### Added
+
+The safe API now covers the surface upstream added in this span.
+
+- **`MtmdResampler`**, an RAII wrapper over the new streaming sample-rate
+  converter for mono F32 PCM — what a realtime audio caller needs to reach
+  `mtmd_get_audio_sample_rate()` from a microphone's own rate. `process`
+  borrows its input for the same region as its output, because equal rates are
+  a passthrough where upstream hands the input buffer straight back out.
+- **`LlamaContext::supports_embd_row`** and
+  **`LlamaBatchExt::add_embd_row`** / **`set_state_row`**: batch entries whose
+  input or state is a *row of a paired context's device buffer* rather than a
+  host-side embedding, so a DFlash/DSpark draft never copies hidden states to
+  host memory and back. A state row is only an index, so unlike
+  `set_state_embedding` it is accepted by any batch and refused at `process`.
+- **`LlamaContext::set_embeddings_layer_inp_device`**, which keeps the enabled
+  layer inputs in a device buffer. This is the half that makes the row-sourced
+  path reachable at all: `supports_embd_row` is false until the paired context
+  has one.
+- **`LlamaContext::set_embeddings_pre_norm_device`** plus
+  **`get_embeddings_pre_norm_rows`** / **`set_embeddings_pre_norm_rows`**, for
+  keeping the unmasked pre-norm rows in a device buffer. The row count is
+  derived from the slice rather than taken as an argument — a caller-supplied
+  count that disagreed with the buffer is exactly the shape of
+  [#360](https://github.com/eugenehp/llama-cpp-rs/issues/360) — and a buffer
+  that is not a whole number of rows is a new `NextnRowsError::Shape`.
+- **`LlamaContext::set_ctx_state_src`** (`unsafe`) and
+  **`clear_ctx_state_src`**, which name the context a batch's state rows are
+  read from. The setter is `unsafe` because llama.cpp keeps the pointer in its
+  parameters and reads through it on every later decode, so the source has to
+  outlive this context or be cleared first; the borrow ending does not end the
+  aliasing.
+- **`LlamaModel::dflash_variant`** and **`dflash_selector_top_k`**, with a
+  `#[non_exhaustive]` `LlamaDflashVariant` (`None`, `Dflash`, `Dflash2`,
+  `Dspark`, `Lilicorr`). Speculative decoding drives a different graph per
+  variant, so this is how a caller learns which one a draft model will use —
+  or that it is not a DFlash draft at all. An unrecognised value reads as
+  `None`: a variant this build does not know is not one it can drive.
+- **`DeviceMemoryHyperParams::n_gpu_layers_skipped`**, the NextN layers
+  excluded from `n_gpu_layers` (`0` when the MTP head is loaded, otherwise the
+  model's `n_layer_nextn`). Upstream began reporting it alongside the other
+  hyper-parameters in this span.
+
+### Changed
+
+- **llama.cpp**: vendored submodule updated to `1c2adc75f6` (tag `b12388`) from
+  `7d7f028753` (`b12211`), spanning upstream's **`v1.0.0`** release.
+  - **Patch `0003` shrank because upstream absorbed most of it.** llama.cpp now
+    implements `get_state`/`set_state` on the MTP speculative impl itself, so
+    the patch no longer inserts them — it only converts `set_state` to return
+    `bool` across the base class, eagle3, MTP and the public entry point, which
+    is what lets a mismatched restore fail loudly instead of silently. The
+    versioned envelope the patch used to add is not missed: `mtp_shim` wraps
+    the blob in its own magic/version/spec-type envelope and treats the inner
+    bytes as opaque.
+  - Patches `0004` and `0005` rebased onto moved context. All three now apply
+    with a strict `git apply`, in sequence, with no fuzz.
+  - Eight `llama_*` entry points moved from the internal `src/llama-ext.h` into
+    the public `include/llama.h` (the nextn/layer-input embedding accessors).
+    Promoted, not removed — no binding changes.
+- **Two more C++-by-reference functions are shimmed or blocklisted.**
+  `common_fit_params` and `common_get_device_memory_data` now take
+  `const std::vector<std::string> &` so a split model can be measured as one
+  unit. bindgen renders that as an opaque byte array Rust cannot construct, so
+  `common_fit_params_one` joins `common_device_memory_collect` in `ext_shim`,
+  and the three direct bindings are blocklisted.
+
+### Fixed
+
+- **An optional backend whose toolchain is missing no longer takes the
+  whole build down.** `hip`, `webgpu`, `cuda`, `opencl` and `blas` each failed hard
+  when their toolchain was absent — `enable_language(HIP)` and
+  `enable_language(CUDA)` abort the configure step ("Failed to find HIP root
+  directory"), `find_package(Dawn REQUIRED)` likewise, and `opencl` got
+  further still before dying in the compiler on `'CL/cl.h' file not found`.
+  Any feature set that merely *contained* one of them was therefore
+  unbuildable without it, and `--all-features` failed on every machine we
+  have: on macOS at HIP, and on a ROCm box at Dawn. Each now probes first and
+  builds without that backend, warning as it goes, falling back to Metal on
+  Apple targets exactly as `vulkan` already did.
+  - HIP — `ROCM_PATH`, `HIP_PATH`, `hipconfig`, `hipcc`, `/opt/rocm`. The
+    driver binaries matter, not just the paths: a distro-packaged ROCm has
+    none of the usual ones — verified on a Debian box with no `ROCM_PATH` and
+    no `/opt/rocm`, where `hipconfig --rocmpath` reports `/usr`.
+  - CUDA — `CUDACXX`, `CMAKE_CUDA_COMPILER`, `CUDA_PATH`, `CUDA_HOME`,
+    `CUDA_TOOLKIT_ROOT_DIR`, `nvcc`, `/usr/local/cuda`.
+  - Dawn — `Dawn_DIR`, then `CMAKE_PREFIX_PATH`, then the usual prefixes.
+  - OpenCL — the Khronos `CL/cl.h` itself, since `find_package(OpenCL)`
+    succeeds on macOS (the framework is there) and only the compile fails.
+    Apple spells it `<OpenCL/cl.h>` inside a framework, so a mac needs the
+    `opencl-headers` package for this backend; it is looked for on every
+    target rather than being refused outright on Apple.
+  - BLAS — a pkg-config `blas`/`openblas`/`blis`/`mkl` module, or the library
+    in the usual (including multiarch) lib dirs. `ggml-blas` ends
+    `find_package(BLAS)` with `message(FATAL_ERROR ...)`, confirmed fatal on
+    two hosts both by requesting an uninstalled vendor and by hiding the lib
+    directories. Off Apple it also reaches `find_package(PkgConfig REQUIRED)`
+    whenever `FindBLAS` leaves `BLAS_INCLUDE_DIRS` empty — true on both hosts
+    — so pkg-config is required in practice whenever BLAS is. Apple always
+    qualifies via Accelerate; Windows passes through untouched (MKL/vcpkg,
+    which there is no host here to verify); and an explicit
+    `GGML_BLAS_VENDOR`, `MKLROOT` or `OPENBLAS_HOME` passes through too.
+    The library route exists because `FindBLAS` uses `find_library`, not
+    pkg-config: with pkg-config'"'"'s search path emptied on a host that still
+    had `libblas.so`, the probe correctly stayed positive.
+  - The probes were checked against CMake itself on an AMD/ROCm host, a CUDA
+    host and macOS: each predicate agrees with what
+    `enable_language(HIP)`/`find_package(Dawn)` actually do, in both
+    directions.
+  - `cuda`'s existing Apple guard used `cfg!(target_os = "macos")`, which
+    inside a build script describes the *host*, so cross-compiling from a Mac
+    would have disabled CUDA for a Linux target. It now tests the target.
+- **macOS doctests pass again (87 were failing).** Upstream's `v1.0.0` bumped
+  `LLAMA_VERSION_MAJOR` 0 → 1 and introduced a versioned dylib chain, which
+  turned a latent problem into a visible one: the build script rewrote every
+  install name to `@loader_path/…`, and an explicit path like that is resolved
+  against the loading binary and never falls back to a search. Doctests are
+  linked into a temp directory with no dylibs beside them, so all of them
+  failed. The install names now stay as CMake writes them (`@rpath/…`, a
+  *search* name), binaries get an `@loader_path` rpath from
+  `.cargo/config.toml` exactly as ELF ones get `$ORIGIN`, and doctests get two
+  working-directory-relative rpaths from `build.rustdocflags` — cargo runs
+  them with the working directory at the package root, one level below
+  `target/`. Three other mechanisms were tried and do not work, which is worth
+  recording: `rustflags` never reach rustdoc, `[env]` cannot deliver
+  `DYLD_FALLBACK_LIBRARY_PATH` because macOS strips `DYLD_*` from protected
+  processes, and `-C rpath` only emits rpaths for rustc's own search paths,
+  not for a build script's `-L` directory.
+- **`--features mpi` no longer pretends to do something.** It set
+  `-DLLAMA_MPI=ON`, a variable read nowhere in the vendored llama.cpp since
+  upstream dropped MPI support, so the feature silently did nothing. The
+  define is gone; the feature name is retained as a documented no-op, as `q1`
+  already is.
+- **`cargo deny` has no ignored advisories again.** RUSTSEC-2026-0258 was
+  ignored while `examples/server` sat on actix-web 4.x with h2 0.3; actix-http
+  3.21 moved to h2 0.4 and the lockfile now resolves a single h2 0.4.20, past
+  the 0.4.16 fix, so the entry was stale and `cargo deny` was reporting it as
+  `advisory-not-detected`.
+- **`cargo doc` can pass `-D warnings` for `llama-cpp-sys-4`.** The generated
+  `bindings.rs` carries doxygen prose from llama.cpp's headers, bare URLs
+  included, which tripped `rustdoc::bare_urls` on upstream text this crate has
+  no business reformatting. Now allowed on the `bindings` module.
+- **The shared CMake cache key records the backends actually built** rather
+  than the features requested, so a build that fell back cannot reuse
+  artefacts from one that found the toolchain, or vice versa. This also closes
+  the same pre-existing gap for `vulkan`, whose macOS fallback was already
+  there but invisible to the key.
+
+### Known issues
+
+- **Doctests need `.cargo/config.toml`'s `rustdocflags`, so a custom
+  `CARGO_TARGET_DIR` breaks them on macOS.** The rpaths that let a doctest
+  binary find the dylibs are written relative to the working directory cargo
+  gives it, which assumes the target directory is where cargo puts it by
+  default. With a relocated target directory, pass the equivalent absolute
+  path in `RUSTDOCFLAGS` instead. Only doctests are affected; ordinary tests
+  and binaries resolve through `@loader_path`.
+
 ## [0.11.0] - 2026-11-02
 
 ### Breaking

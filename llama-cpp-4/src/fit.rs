@@ -91,10 +91,22 @@ impl DeviceMemoryEntry {
 }
 
 /// Hyper-parameters discovered while estimating device memory.
+///
+/// This crate builds it; callers read it. `#[non_exhaustive]` because upstream
+/// reports more of these over time — `n_gpu_layers_skipped` arrived in
+/// `b12388` — and each addition would otherwise break every struct literal
+/// downstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DeviceMemoryHyperParams {
     /// Model `n_gpu_layers` hyper-parameter used for the estimate.
     pub n_gpu_layers: u32,
+    /// `NextN` layers excluded from `n_gpu_layers`.
+    ///
+    /// `0` when the MTP head is being loaded; otherwise the model's
+    /// `n_layer_nextn`, since those layers are not offloaded. New in
+    /// `b12388`, where upstream began reporting it alongside the rest.
+    pub n_gpu_layers_skipped: u32,
     /// Model training context length.
     pub n_ctx_train: u32,
     /// Number of `MoE` experts (`0` when dense).
@@ -158,6 +170,7 @@ pub fn get_device_memory_data(
             capacity
         ];
         let mut hp_ngl = 0u32;
+        let mut hp_ngl_skip = 0u32;
         let mut hp_nct = 0u32;
         let mut hp_nex = 0u32;
 
@@ -172,6 +185,7 @@ pub fn get_device_memory_data(
                 raw.as_mut_ptr(),
                 capacity,
                 &raw mut hp_ngl,
+                &raw mut hp_ngl_skip,
                 &raw mut hp_nct,
                 &raw mut hp_nex,
             )
@@ -197,6 +211,7 @@ pub fn get_device_memory_data(
                 entries,
                 hyperparams: DeviceMemoryHyperParams {
                     n_gpu_layers: hp_ngl,
+                    n_gpu_layers_skipped: hp_ngl_skip,
                     n_ctx_train: hp_nct,
                     n_expert: hp_nex,
                 },
@@ -376,7 +391,7 @@ pub fn fit_params(
     // SAFETY: the `CString` arguments are alive for the duration of the call, and any
     // out-param is a stack local the shim writes through.
     let status = unsafe {
-        llama_cpp_sys_4::common_fit_params(
+        llama_cpp_sys_4::common_fit_params_one(
             path.as_ptr(),
             &raw mut model_params.params,
             &raw mut context_params.context_params,
@@ -384,15 +399,17 @@ pub fn fit_params(
             tensor_buft_overrides.as_mut_ptr(),
             margins.as_mut_ptr(),
             options.n_ctx_min,
-            // `extra`: a second model to fit alongside the main one (a draft
-            // model, say). This entry point fits one model, so there is none.
-            null(),
             options.log_level,
         )
     };
 
-    match status {
-        llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_SUCCESS => {
+    // `common_fit_params_one` widens `common_params_fit_status` to `int32_t`,
+    // because the enum lives in a header `ext_shim.h` does not include, while
+    // bindgen renders the enumerators as `u32`. Narrowing the status back is
+    // what lets the bindings' own constants be matched against, rather than
+    // values copied out of the header.
+    match u32::try_from(status) {
+        Ok(llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_SUCCESS) => {
             model_params.params.tensor_split = tensor_split.as_mut_ptr();
             model_params.params.tensor_buft_overrides = tensor_buft_overrides.as_mut_ptr();
             Ok(FitParamsResult {
@@ -403,7 +420,7 @@ pub fn fit_params(
                 margins,
             })
         }
-        llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_FAILURE => Err(FitParamsError::CouldNotFit),
+        Ok(llama_cpp_sys_4::COMMON_PARAMS_FIT_STATUS_FAILURE) => Err(FitParamsError::CouldNotFit),
         _ => Err(FitParamsError::Failed),
     }
 }

@@ -51,6 +51,18 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Test
         run: cargo test --workspace --exclude openai-server --exclude llama-jni
+      # Nothing used to build the docs, so a broken intra-doc link or a stray
+      # bare URL only surfaced on docs.rs after publishing. Both crates are
+      # clean under `-D warnings`; keeping them that way is cheap here because
+      # everything is already compiled.
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc -p llama-cpp-4 -p llama-cpp-sys-4 --no-deps
+      # `examples/rpc` is its own workspace, so `--workspace` above skips it
+      # entirely and it can break unnoticed for a whole release cycle.
+      - name: Build the rpc example workspace
+        run: cargo build --manifest-path examples/rpc/Cargo.toml
       - name: sccache stats
         run: sccache --show-stats || true
   linux:
@@ -359,6 +371,14 @@ jobs:
       # missing from the `include` list while every job stays green — which is
       # how it reached the published 0.8.0. From #346, thanks @tmtiwari.
       # `mtmd` turns on LLAMA_BUILD_TOOLS; `metal` turns on GGML_METAL.
+      # Doctests are the one target that cannot find the dylibs through
+      # `@loader_path`: rustdoc links each one in a temp directory. All 87 of
+      # them broke when upstream's v1.0.0 introduced a versioned dylib chain,
+      # and nothing noticed because tests only ran on Linux. The rpaths that
+      # fix it live in `.cargo/config.toml`'s `rustdocflags`, which is exactly
+      # the kind of thing that gets dropped in a refactor.
+      - name: Doctests (dynamic linking, the default)
+        run: cargo test -p llama-cpp-4 --doc
       - name: cargo package, metal + mtmd (with verification build)
         run: cargo package -p llama-cpp-sys-4 --allow-dirty --features metal,mtmd
       - name: sccache stats
@@ -428,6 +448,52 @@ jobs:
         env:
           LLAMA_TEST_MODEL: ${{ github.workspace }}/target/test-models/stories260K.gguf
         run: cargo test -p llama-cpp-4 --test test_integration -- --test-threads=1
+      - name: sccache stats
+        run: sccache --show-stats || true
+
+  all-features:
+    # The gate this project was missing. Every optional GPU/CPU backend had a
+    # CMake probe that *aborts* the configure step when its toolchain is
+    # absent — `enable_language(HIP)`, `enable_language(CUDA)`,
+    # `find_package(Dawn REQUIRED)`, `find_package(Vulkan COMPONENTS glslc
+    # REQUIRED)`, ggml-blas's `message(FATAL_ERROR)` — and `opencl` got as far
+    # as the compiler before dying on a missing `CL/cl.h`. So any feature set
+    # that merely *contained* one of them was unbuildable without it, and
+    # `--all-features` failed on every machine we had: macOS at HIP, a ROCm
+    # box at Dawn.
+    #
+    # These runners have none of those toolchains, which is the point: this
+    # job passes only while every backend still degrades to a warning instead
+    # of taking the build down with it. A `cargo check` is enough — the
+    # failures were all in the build script, before any Rust compiled.
+    name: Check --all-features degrades (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          submodules: recursive
+      - name: Install Compile Deps
+        if: runner.os == 'Linux'
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run:
+          sudo apt-get update && sudo apt-get install -y build-essential curl libssl-dev libclang-dev pkg-config cmake git
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: dtolnay/rust-toolchain@stable
+      # Cargo echoes the build script's warnings, so the log shows which
+      # backends stood down and why — a backend that switched itself off
+      # silently would be worse than one that failed.
+      - name: Check with every feature enabled
+        run: cargo check -p llama-cpp-sys-4 --all-features
       - name: sccache stats
         run: sccache --show-stats || true
 

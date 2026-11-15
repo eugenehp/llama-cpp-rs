@@ -109,10 +109,7 @@ fn resolve_patch_cmd() -> PathBuf {
             if !trimmed.is_empty() {
                 let candidate = PathBuf::from(trimmed.trim_matches('"'));
                 if candidate.exists() {
-                    println!(
-                        "cargo:warning=Using patch binary from {var}: {}",
-                        candidate.display()
-                    );
+                    debug_log!("Using patch binary from {var}: {}", candidate.display());
                     return candidate;
                 }
                 println!(
@@ -165,7 +162,7 @@ fn resolve_patch_cmd() -> PathBuf {
         push_unique(PathBuf::from("C:\\Program Files\\Git\\usr\\bin\\patch.exe"));
 
         if let Some(found) = candidates.iter().find(|p| p.exists()).cloned() {
-            println!("cargo:warning=Using patch binary at {}", found.display());
+            debug_log!("Using patch binary at {}", found.display());
             return found;
         }
 
@@ -329,10 +326,7 @@ fn patches_match_new_side(patches_dir: &Path, dst: &Path) -> Result<bool, String
 
 fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
     for patch_path in entries {
-        println!(
-            "cargo:warning=Applying patch (rust): {}",
-            patch_path.display()
-        );
+        debug_log!("Applying patch (rust): {}", patch_path.display());
 
         let patch_text = fs::read_to_string(patch_path)
             .map_err(|e| format!("failed to read patch {}: {e}", patch_path.display()))?;
@@ -357,10 +351,7 @@ fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String>
             let current_lines: Vec<&str> = current.lines().collect();
 
             if patch_matches_side(&current_lines, &patch, true) {
-                println!(
-                    "cargo:warning=Patch already applied (rust): {}",
-                    file_path.display()
-                );
+                debug_log!("Patch already applied (rust): {}", file_path.display());
                 continue;
             }
 
@@ -406,7 +397,7 @@ fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String>
 fn apply_patches_via_cli(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
     let patch_cmd = resolve_patch_cmd();
     for patch in entries {
-        println!("cargo:warning=Applying patch (cli): {}", patch.display());
+        debug_log!("Applying patch (cli): {}", patch.display());
         let status = Command::new(&patch_cmd)
             .arg("-p1")
             .arg("--forward")
@@ -699,30 +690,32 @@ fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> V
     lib_names
 }
 
-/// Make the built shared libraries loadable from the directory they sit in.
+/// Normalise the built shared libraries back to `@rpath/…` install names.
 ///
-/// CMake stamps every dylib with an `@rpath/…` install name, and rustc records
-/// that name in whatever links against it. Cargo never adds an `LC_RPATH` to the
-/// binaries it builds, so a *directly executed* binary dies with:
+/// CMake stamps every dylib `@rpath/libfoo.dylib`, and rustc records that name
+/// in whatever links against it. An `@rpath` name is a *search* name: dyld
+/// expands it against the loading binary's `LC_RPATH` entries and, failing
+/// that, falls back to `DYLD_FALLBACK_LIBRARY_PATH` — which `cargo run`,
+/// `cargo test` and `cargo test --doc` all set to the target directory. That
+/// fallback is what makes the libraries resolvable for anything cargo itself
+/// launches, including the doctest binaries rustdoc builds in a temp
+/// directory.
 ///
-/// ```text
-/// dyld: Library not loaded: @rpath/libggml-base.0.dylib
-///   Reason: no LC_RPATH's found
-/// ```
+/// This crate used to rewrite those names to `@loader_path/…` so that a
+/// *directly executed* binary would work without an rpath. That fixed direct
+/// execution and broke doctests: `@loader_path/libfoo.dylib` is an explicit
+/// path, so dyld resolves it relative to the loading binary and never
+/// consults the fallback search at all. A doctest binary lives in a temp
+/// directory with no dylibs beside it, so every one of them failed once
+/// upstream's `v1.0.0` introduced the versioned dylib chain. Direct execution
+/// is handled the way Linux already handles it — an rpath on the final
+/// executable, from `.cargo/config.toml` — so the names stay as CMake made
+/// them.
 ///
-/// This is easy to miss because `cargo run` / `cargo test` set
-/// `DYLD_FALLBACK_LIBRARY_PATH` to the target directory, so the failure only
-/// shows up once someone runs the binary themselves.
-///
-/// Rewriting the install names (and the inter-library references) to
-/// `@loader_path/…` removes the need for an rpath at all: dyld resolves them
-/// relative to whichever binary or dylib did the loading, and the copy step
-/// below places every dylib next to the binaries.
-///
-/// Only meaningful on Apple targets. Windows resolves DLLs next to the `.exe`
-/// already; ELF needs `-Wl,-rpath,$ORIGIN` on the final executable, which a
-/// dependency's build script cannot inject — see `.cargo/config.toml`.
-fn make_shared_libs_loader_relative(lib_dirs: &[PathBuf], target: &str) {
+/// Prebuilt archives are stamped the same way, so this only has to undo a
+/// rewrite an older build of this crate may have left in a reused cache or
+/// archive. Only meaningful on Apple targets.
+fn make_shared_libs_rpath_relative(lib_dirs: &[PathBuf], target: &str) {
     if !target.contains("apple") {
         return;
     }
@@ -746,21 +739,34 @@ fn make_shared_libs_loader_relative(lib_dirs: &[PathBuf], target: &str) {
             };
 
             // 1. The library's own identity, which is what dependents record.
-            run_install_name_tool(&["-id", &format!("@loader_path/{filename}")], &path);
+            if otool_install_name(&path).is_some_and(|id| id.starts_with("@loader_path/")) {
+                run_install_name_tool(&["-id", &format!("@rpath/{filename}")], &path);
+            }
 
             // 2. Its references to sibling libraries.
-            for dep in otool_rpath_dependencies(&path) {
-                let Some(base) = dep.strip_prefix("@rpath/") else {
+            for dep in otool_loader_path_dependencies(&path) {
+                let Some(base) = dep.strip_prefix("@loader_path/") else {
                     continue;
                 };
-                run_install_name_tool(&["-change", &dep, &format!("@loader_path/{base}")], &path);
+                run_install_name_tool(&["-change", &dep, &format!("@rpath/{base}")], &path);
             }
         }
     }
 }
 
-/// `@rpath/…` entries this Mach-O file depends on.
-fn otool_rpath_dependencies(path: &Path) -> Vec<String> {
+/// The `LC_ID_DYLIB` install name of a Mach-O file.
+fn otool_install_name(path: &Path) -> Option<String> {
+    let output = std::process::Command::new("otool")
+        .args(["-D", &path.display().to_string()])
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find(|line| !line.ends_with(':') && !line.trim().is_empty())
+        .map(|line| line.trim().to_string())
+}
+
+fn otool_loader_path_dependencies(path: &Path) -> Vec<String> {
     let Ok(output) = std::process::Command::new("otool")
         .arg("-L")
         .arg(path)
@@ -775,7 +781,7 @@ fn otool_rpath_dependencies(path: &Path) -> Vec<String> {
         .lines()
         .skip(1) // first line is the file being inspected
         .filter_map(|line| line.split_whitespace().next())
-        .filter(|dep| dep.starts_with("@rpath/"))
+        .filter(|dep| dep.starts_with("@loader_path/"))
         .map(ToOwned::to_owned)
         .collect()
 }
@@ -1138,6 +1144,307 @@ fn apple_vulkan_available() -> bool {
         || lib_dir.join("libMoltenVK.dylib").exists();
 
     has_glslc && header_ok && lib_ok
+}
+
+/// Whether CMake's HIP language probe can be expected to succeed, with the
+/// evidence that says so.
+///
+/// `enable_language(HIP)` is not a soft check: with no ROCm it aborts the
+/// whole configure step with "Failed to find HIP root directory", taking down
+/// any build that merely had the `hip` feature switched on alongside others —
+/// `--all-features` on a Mac, for instance. Asking first lets the caller fall
+/// back instead, the way `vulkan` already does.
+///
+/// The question is deliberately "will CMake find a HIP toolchain", not "where
+/// is ROCm installed": the prefix is never passed on to CMake, which does its
+/// own search. So any of the signals `CMakeDetermineHIPCompiler.cmake` uses
+/// counts — `ROCM_PATH`/`HIP_PATH`, the `hipconfig` or `hipcc` driver on
+/// `PATH`, or ROCm's default prefix. A distro-packaged ROCm has none of the
+/// paths (verified on a Debian box: no `ROCM_PATH`, no `/opt/rocm`,
+/// `hipconfig --rocmpath` reporting `/usr`), which is why the drivers are
+/// checked rather than just the directories.
+///
+/// AMD ships no macOS ROCm, so an Apple `target` never has one. That check is
+/// on `target` rather than `cfg!(target_os = ...)`, which inside a build
+/// script describes the host doing the building, not the target being built.
+fn hip_toolchain(target: &str) -> Option<String> {
+    if target.contains("apple") {
+        return None;
+    }
+
+    for var in ["ROCM_PATH", "HIP_PATH"] {
+        if let Ok(value) = env::var(var) {
+            if Path::new(&value).is_dir() {
+                return Some(format!("{var}={value}"));
+            }
+        }
+    }
+
+    // Spawned rather than probed with `--version` first: a missing binary
+    // fails to spawn, which is the same answer.
+    if let Ok(output) = Command::new("hipconfig").arg("--rocmpath").output() {
+        if output.status.success() {
+            let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            return Some(format!("hipconfig --rocmpath={root}"));
+        }
+    }
+
+    if command_exists("hipcc") {
+        return Some("hipcc on PATH".to_string());
+    }
+
+    Path::new("/opt/rocm")
+        .is_dir()
+        .then(|| "/opt/rocm".to_string())
+}
+
+/// Whether `find_package(Dawn REQUIRED)` can be expected to succeed, with the
+/// evidence that says so.
+///
+/// `ggml-webgpu` takes WebGPU from the browser under Emscripten, but a native
+/// build needs Dawn — and that `find_package` is `REQUIRED`, so a missing
+/// Dawn aborts the configure step instead of disabling the backend, exactly
+/// as [`hip_toolchain`] describes for HIP.
+///
+/// Mirrors CMake's config-package search: `Dawn_DIR`, then the prefixes on
+/// `CMAKE_PREFIX_PATH`, then the usual system prefixes — looking under
+/// `lib/cmake`, `lib64/cmake` and `share/cmake` for either spelling CMake
+/// accepts (`DawnConfig.cmake` or `dawn-config.cmake`).
+fn dawn_package(target: &str) -> Option<String> {
+    if is_emscripten_target(target) {
+        return Some("emscripten, where WebGPU comes from the browser".to_string());
+    }
+
+    fn config_in(dir: &Path) -> bool {
+        dir.join("DawnConfig.cmake").is_file() || dir.join("dawn-config.cmake").is_file()
+    }
+
+    if let Ok(dir) = env::var("Dawn_DIR") {
+        let dir = PathBuf::from(dir);
+        if config_in(&dir) {
+            return Some(format!("Dawn_DIR={}", dir.display()));
+        }
+    }
+
+    let mut prefixes: Vec<PathBuf> = env::var("CMAKE_PREFIX_PATH")
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    prefixes.extend(["/opt/homebrew", "/usr/local", "/usr"].map(PathBuf::from));
+
+    prefixes
+        .into_iter()
+        .find(|prefix| {
+            ["lib/cmake", "lib64/cmake", "share/cmake"]
+                .iter()
+                .flat_map(|middle| ["Dawn", "dawn"].map(|name| prefix.join(middle).join(name)))
+                .any(|dir| config_in(&dir))
+        })
+        .map(|prefix| format!("Dawn under {}", prefix.display()))
+}
+
+/// Whether `find_package(Vulkan COMPONENTS glslc REQUIRED)` can be expected to
+/// succeed, with the evidence that says so.
+///
+/// `glslc` is a *required component*, not a nicety: ggml-vulkan compiles its
+/// shaders with it. A box can have the headers and `libvulkan` and still fail
+/// — verified on a Debian host where CMake reported
+/// `Could NOT find Vulkan (missing: glslc) (found version "1.4.341")` while a
+/// second host with `glslc` installed configured fine.
+///
+/// - Apple targets go through the SDK layout, since there is no system
+///   Vulkan: see [`apple_vulkan_available`].
+/// - Windows passes through, so the existing SDK lookup keeps its own, more
+///   helpful diagnostics (it also finds the default `C:\VulkanSDK\` install,
+///   which this function does not know about).
+/// - Everywhere else a system install needs all three pieces.
+fn vulkan_toolchain(target: &str) -> Option<String> {
+    if target.contains("apple") {
+        return apple_vulkan_available().then(|| "the macOS Vulkan SDK".to_string());
+    }
+    if target.contains("windows") {
+        return Some(
+            "not probed on Windows, where the SDK lookup reports its own errors".to_string(),
+        );
+    }
+
+    if !command_exists("glslc") && env::var_os("VULKAN_SDK").is_none() {
+        return None;
+    }
+
+    let header = ["/usr/include", "/usr/local/include"]
+        .iter()
+        .map(|prefix| Path::new(prefix).join("vulkan").join("vulkan.h"))
+        .find(|header| header.is_file())?;
+
+    let multiarch = target.replace("-unknown-", "-");
+    let mut dirs: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/lib").join(&multiarch),
+        PathBuf::from("/lib").join(&multiarch),
+    ];
+    dirs.extend(["/usr/lib", "/usr/lib64", "/lib", "/lib64", "/usr/local/lib"].map(PathBuf::from));
+
+    dirs.into_iter()
+        .flat_map(|dir| ["libvulkan.so", "libvulkan.so.1"].map(|name| dir.join(name)))
+        .find(|lib| lib.is_file() || lib.is_symlink())
+        .map(|lib| format!("{} and {}", header.display(), lib.display()))
+}
+
+/// Whether the Khronos OpenCL headers are installed, with the evidence that
+/// says so.
+///
+/// `ggml-opencl` includes `<CL/cl.h>`, and this one fails later than the
+/// others: `find_package(OpenCL)` succeeds on macOS — the framework is right
+/// there — and the build then dies compiling `cl-program-cache.cpp` with
+/// "'CL/cl.h' file not found", because Apple ships the header as
+/// `<OpenCL/cl.h>` inside a framework instead. So the header itself is what
+/// gets looked for, on every target: a mac with the `opencl-headers` package
+/// installed is welcome to try.
+fn opencl_headers() -> Option<String> {
+    let mut prefixes: Vec<PathBuf> = env::var("CMAKE_PREFIX_PATH")
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    if let Ok(dir) = env::var("OpenCL_INCLUDE_DIR") {
+        let dir = PathBuf::from(dir);
+        if dir.join("CL").join("cl.h").is_file() {
+            return Some(format!("OpenCL_INCLUDE_DIR={}", dir.display()));
+        }
+    }
+    prefixes.extend(["/opt/homebrew", "/usr/local", "/usr"].map(PathBuf::from));
+
+    prefixes
+        .into_iter()
+        .map(|prefix| prefix.join("include").join("CL").join("cl.h"))
+        .find(|header| header.is_file())
+        .map(|header| format!("{}", header.display()))
+}
+
+/// Whether CMake can be expected to find a CUDA toolkit, with the evidence
+/// that says so.
+///
+/// `enable_language(CUDA)` is fatal in the same way `enable_language(HIP)` is,
+/// so `--features cuda` on a machine with no toolkit took the whole build down
+/// — including a ROCm box, which has every other backend. NVIDIA ships no
+/// macOS CUDA, so an Apple `target` never has one; as in [`hip_toolchain`] the
+/// check is on `target`, not on the host the build script happens to run on.
+fn cuda_toolkit(target: &str) -> Option<String> {
+    if target.contains("apple") {
+        return None;
+    }
+
+    for var in ["CUDACXX", "CMAKE_CUDA_COMPILER"] {
+        if let Ok(value) = env::var(var) {
+            if Path::new(&value).is_file() {
+                return Some(format!("{var}={value}"));
+            }
+        }
+    }
+
+    for var in ["CUDA_PATH", "CUDA_HOME", "CUDA_TOOLKIT_ROOT_DIR"] {
+        if let Ok(value) = env::var(var) {
+            if Path::new(&value).is_dir() {
+                return Some(format!("{var}={value}"));
+            }
+        }
+    }
+
+    if command_exists("nvcc") {
+        return Some("nvcc on PATH".to_string());
+    }
+
+    let default = Path::new("/usr/local/cuda/bin/nvcc");
+    default
+        .is_file()
+        .then(|| "/usr/local/cuda/bin/nvcc".to_string())
+}
+
+/// Whether `ggml-blas` can be expected to configure, with the evidence that
+/// says so.
+///
+/// `ggml-blas/CMakeLists.txt` ends its `find_package(BLAS)` with
+/// `message(FATAL_ERROR "BLAS not found")`, so a missing BLAS takes the whole
+/// build down just as HIP does — verified on two Linux hosts, both by asking
+/// for an uninstalled vendor and by hiding the library directories.
+///
+/// Off Apple there is a second hard requirement that is easy to miss: when
+/// `FindBLAS` leaves `BLAS_INCLUDE_DIRS` empty, ggml falls through to
+/// `find_package(PkgConfig REQUIRED)`. That is not a corner case — the
+/// variable was empty on both hosts, so pkg-config is needed in practice
+/// whenever BLAS is.
+///
+/// Deliberately generous, because a false negative here silently drops a
+/// backend the caller asked for:
+///
+/// - Apple targets always qualify. Accelerate is part of the OS and ggml's
+///   `Apple` vendor path skips the pkg-config lookup entirely.
+/// - Windows passes straight through. BLAS there comes from MKL or vcpkg,
+///   which this probe has no way to check and no host to check it on, so the
+///   behaviour is left exactly as it was.
+/// - Any explicit signal of intent — a vendor, a root, or hand-set
+///   `BLAS_*` variables — also passes through. Someone who has pointed CMake
+///   at a BLAS is better informed about it than this function is.
+fn blas_provider(target: &str) -> Option<String> {
+    if target.contains("apple") {
+        return Some("Accelerate".to_string());
+    }
+    if target.contains("windows") {
+        return Some("not probed on Windows, where BLAS comes from MKL or vcpkg".to_string());
+    }
+
+    for var in [
+        "GGML_BLAS_VENDOR",
+        "BLA_VENDOR",
+        "BLAS_LIBRARIES",
+        "BLAS_INCLUDE_DIRS",
+        "MKLROOT",
+        "OPENBLAS_HOME",
+    ] {
+        if let Ok(value) = env::var(var) {
+            if !value.trim().is_empty() {
+                return Some(format!("{var} is set, leaving the choice to CMake"));
+            }
+        }
+    }
+
+    // pkg-config itself is the hard part off Apple, per the `REQUIRED` above,
+    // so no provider counts without it.
+    if !command_exists("pkg-config") {
+        return None;
+    }
+
+    // What ggml asks pkg-config for, in the same order. A module also gives
+    // ggml the include path it would otherwise have to go hunting for.
+    for module in ["blas", "openblas64", "openblas", "blis", "mkl-sdl"] {
+        let found = Command::new("pkg-config")
+            .args(["--exists", module])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if found {
+            return Some(format!("pkg-config {module}"));
+        }
+    }
+
+    // No `.pc` file is not the end of it: `FindBLAS` uses `find_library`, and
+    // ggml only *warns* when the include path stays empty. So a bare library
+    // still counts — `/usr/lib/<triple>` first, which is where a multiarch
+    // distro puts it.
+    let multiarch = target.replace("-unknown-", "-");
+    let mut dirs: Vec<PathBuf> = vec![
+        PathBuf::from("/usr/lib").join(&multiarch),
+        PathBuf::from("/lib").join(&multiarch),
+    ];
+    dirs.extend(["/usr/lib", "/usr/lib64", "/lib", "/lib64", "/usr/local/lib"].map(PathBuf::from));
+
+    for dir in dirs {
+        for name in ["libblas.so", "libopenblas.so", "libblis.so", "libcblas.so"] {
+            let lib = dir.join(name);
+            if lib.is_file() || lib.is_symlink() {
+                return Some(format!("{}", lib.display()));
+            }
+        }
+    }
+
+    None
 }
 
 /// True for the Emscripten targets, the only way to reach a browser from this
@@ -1950,7 +2257,7 @@ fn llama_cmake_options(target: &str) -> BTreeMap<String, String> {
 fn forward_llama_cmake_options(config: &mut cmake::Config, target: &str) {
     for (key, value) in llama_cmake_options(target) {
         debug_log!("Passing {key}={value} to CMake");
-        println!("cargo:warning=Passing {key}={value} to CMake");
+        debug_log!("Passing {key}={value} to CMake");
         config.define(&key, &value);
     }
 }
@@ -2032,6 +2339,135 @@ fn main() {
     //
     // Skip on Windows because the MAX_PATH workaround already handles this
     // with a short LOCALAPPDATA path derived from OUT_DIR.
+
+    // ── Optional GPU backends whose CMake probe is fatal ──────────────────────
+    //
+    // `enable_language(HIP)`, `find_package(Dawn REQUIRED)` and Vulkan's SDK
+    // lookup all abort the whole configure step when their toolchain is
+    // absent, so a feature set that merely *contains* one of them could not be
+    // built on a machine without it — `--all-features` anywhere but a fully
+    // equipped Linux box. Ask first and build without the backend instead.
+    //
+    // Resolved here, above the cache key, because the key has to record the
+    // backends actually built rather than the ones requested: a build that
+    // fell back must not share artefacts with one that found the toolchain.
+    let mut fell_back_to_metal = false;
+
+    let enable_hip = if cfg!(feature = "hip") {
+        match hip_toolchain(&target) {
+            Some(evidence) => {
+                debug_log!("HIP toolchain found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=HIP requested but no HIP toolchain was found (looked at ROCM_PATH, HIP_PATH, hipconfig, hipcc and /opt/rocm; AMD ships no ROCm for macOS). Building without the HIP backend."
+                );
+                fell_back_to_metal |= target.contains("apple");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    let enable_webgpu = if cfg!(feature = "webgpu") {
+        match dawn_package(&target) {
+            Some(evidence) => {
+                debug_log!("Dawn found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=WebGPU requested but no Dawn package was found (looked at Dawn_DIR, CMAKE_PREFIX_PATH and the usual prefixes). Building without the WebGPU backend."
+                );
+                fell_back_to_metal |= target.contains("apple");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    let enable_opencl = if cfg!(feature = "opencl") {
+        match opencl_headers() {
+            Some(evidence) => {
+                debug_log!("OpenCL headers found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=OpenCL requested but the Khronos CL/cl.h header was not found (looked at OpenCL_INCLUDE_DIR, CMAKE_PREFIX_PATH and the usual prefixes; macOS ships it as <OpenCL/cl.h> in a framework, so install opencl-headers to build this backend). Building without the OpenCL backend."
+                );
+                fell_back_to_metal |= target.contains("apple");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    let enable_cuda = if cfg!(feature = "cuda") {
+        match cuda_toolkit(&target) {
+            Some(evidence) => {
+                debug_log!("CUDA toolkit found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=CUDA requested but no toolkit was found (looked at CUDACXX, CUDA_PATH, CUDA_HOME, nvcc and /usr/local/cuda; NVIDIA ships no CUDA for macOS). Building without the CUDA backend."
+                );
+                fell_back_to_metal |= target.contains("apple");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    let enable_blas = if cfg!(feature = "blas") {
+        match blas_provider(&target) {
+            Some(evidence) => {
+                debug_log!("BLAS provider found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=BLAS requested but no provider was found (looked for a pkg-config blas/openblas/blis/mkl module, and for GGML_BLAS_VENDOR, MKLROOT or OPENBLAS_HOME; note ggml also needs pkg-config itself off Apple). Building without the BLAS backend."
+                );
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    // Vulkan already fell back on Apple; the probe now covers every target,
+    // because `glslc` is missing often enough on Linux to matter. The SDK
+    // plumbing it needs stays with the rest of the Vulkan configuration
+    // further down.
+    let enable_vulkan = if cfg!(feature = "vulkan") {
+        match vulkan_toolchain(&target) {
+            Some(evidence) => {
+                debug_log!("Vulkan toolchain found ({evidence})");
+                true
+            }
+            None => {
+                println!(
+                    "cargo:warning=Vulkan requested but no usable toolchain was found (need the headers, libvulkan, and the glslc shader compiler CMake requires as a component; on macOS that means a VULKAN_SDK install). Building without the Vulkan backend."
+                );
+                fell_back_to_metal |= target.contains("apple");
+                false
+            }
+        }
+    } else {
+        false
+    };
+
+    // Metal is the one GPU backend an Apple target always has, so it is where
+    // the fallbacks land.
+    let enable_metal = cfg!(feature = "metal") || fell_back_to_metal;
+
     let cmake_out_dir: PathBuf = if !target.contains("windows") {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -2044,13 +2480,13 @@ fn main() {
         // C++ feature flags that affect the compiled output.
         let cpp_features = format!(
             "cuda={},metal={},vulkan={},webgpu={},blas={},opencl={},hip={},openmp={},rpc={},q1={},mtmd={},native={},shared={}",
-            cfg!(feature = "cuda"),
-            cfg!(feature = "metal"),
-            cfg!(feature = "vulkan"),
-            cfg!(feature = "webgpu"),
-            cfg!(feature = "blas"),
-            cfg!(feature = "opencl"),
-            cfg!(feature = "hip"),
+            enable_cuda,
+            enable_metal,
+            enable_vulkan,
+            enable_webgpu,
+            enable_blas,
+            enable_opencl,
+            enable_hip,
             cfg!(feature = "openmp"),
             cfg!(feature = "rpc"),
             cfg!(feature = "q1"),
@@ -2258,10 +2694,21 @@ fn main() {
         .blocklist_function("llama_arch_all")
         .blocklist_function("llama_arch_from_string")
         .blocklist_function("llama_arch_kv_name")
+        // `b12388` changed `common_fit_params` and `common_fit_print` to take
+        // `const std::vector<std::string> &` so a split model can be fitted as
+        // one unit. bindgen renders that as an opaque byte array Rust has no
+        // way to construct, so the generated bindings are unusable rather than
+        // merely awkward. `common_fit_params_one` in `ext_shim` wraps the
+        // single-path case; `common_get_device_memory_data` is already wrapped
+        // by `common_device_memory_collect` for the same reason.
+        .blocklist_function("common_fit_params")
+        .blocklist_function("common_fit_print")
+        .blocklist_function("common_get_device_memory_data")
         .allowlist_function("llama_memory_breakdown_collect")
         .allowlist_type("llama_memory_breakdown_entry")
         .allowlist_function("llama_quant_.*_guarded")
         .allowlist_function("common_device_memory_collect")
+        .allowlist_function("common_fit_params_one")
         .allowlist_type("common_device_memory_flat_entry")
         // Speculative strategy selector for the shim (MTP vs EAGLE3). The
         // `mtp_session_config.spec_type` field is a plain int, so the enum is
@@ -2293,8 +2740,6 @@ fn main() {
         .opaque_type("common_shim_ngram_map")
         .allowlist_function("common_token_to_piece")
         .allowlist_function("common_tokenize")
-        .allowlist_function("common_fit_params")
-        .allowlist_function("common_fit_print")
         .allowlist_function("common_memory_breakdown_print")
         .allowlist_type("common_params_fit_status")
         // .allowlist_item("common_.*")
@@ -2372,7 +2817,12 @@ fn main() {
             // they are unusable from Rust anyway.
             .blocklist_type("mtmd_helper::.*")
             .blocklist_item("mtmd_helper::.*")
-            .no_partialeq("mtmd_context_params");
+            .no_partialeq("mtmd_context_params")
+            // New in `b12388`: a vtable of decoder callbacks. Deriving
+            // `PartialEq` on a struct of function pointers trips
+            // `unpredictable_function_pointer_comparisons`, because their
+            // addresses are not stable across codegen units.
+            .no_partialeq("mtmd_helper_video_decoder");
     }
 
     let bindings = builder
@@ -2443,8 +2893,8 @@ fn main() {
             );
         }
         if cfg!(feature = "prebuilt") {
-            println!(
-                "cargo:warning=The active llama.cpp patches have no prebuilt identity envelope; falling back to the verified source build"
+            debug_log!(
+                "The active llama.cpp patches have no prebuilt identity envelope; falling back to the verified source build"
             );
         }
         None
@@ -2459,10 +2909,7 @@ fn main() {
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
                 .unwrap_or(build_shared_libs);
 
-            println!(
-                "cargo:warning=Using prebuilt llama libs from {}",
-                prebuilt_dir.display()
-            );
+            debug_log!("Using prebuilt llama libs from {}", prebuilt_dir.display());
 
             for p in [
                 prebuilt_dir.clone(),
@@ -2525,10 +2972,11 @@ fn main() {
 
             // Copy dynamic runtime assets next to test/example/app outputs.
             if use_shared_libs {
-                // Prebuilt archives carry the same `@rpath/…` install names the
-                // CMake build produces, so they need the same rewrite — see
-                // `make_shared_libs_loader_relative`.
-                make_shared_libs_loader_relative(
+                // Prebuilt archives carry the same `@rpath/…` install names
+                // the CMake build produces; this only undoes a rewrite an
+                // older build of this crate may have left behind — see
+                // `make_shared_libs_rpath_relative`.
+                make_shared_libs_rpath_relative(
                     &[
                         prebuilt_dir.clone(),
                         prebuilt_dir.join("lib"),
@@ -2965,20 +3413,10 @@ fn main() {
         configure_emscripten(&mut config, &target);
     }
 
-    let mut enable_metal = cfg!(feature = "metal");
-
     if cfg!(feature = "vulkan") {
-        // On macOS, allow `--features vulkan` to gracefully fall back to
-        // Metal when Vulkan SDK tooling is not available.
-        if target.contains("apple") && !apple_vulkan_available() {
-            println!(
-                "cargo:warning=Vulkan SDK not found or incomplete on macOS (need VULKAN_SDK, Vulkan headers/library, and glslc). Falling back to Metal backend."
-            );
-            config.define("GGML_VULKAN", "OFF");
-            enable_metal = true;
-        } else {
-            config.define("GGML_VULKAN", "ON");
-        }
+        // Availability — and the fallback to Metal — was settled above, where
+        // the cache key could see it.
+        config.define("GGML_VULKAN", if enable_vulkan { "ON" } else { "OFF" });
 
         if target.contains("windows") {
             let vulkan_path = find_vulkan_sdk_windows()
@@ -3033,31 +3471,31 @@ fn main() {
         config.define("GGML_METAL", "OFF");
     }
 
-    if cfg!(feature = "webgpu") {
+    if enable_webgpu {
         config.define("GGML_WEBGPU", "ON");
     } else {
         config.define("GGML_WEBGPU", "OFF");
     }
 
-    if cfg!(feature = "blas") {
+    if enable_blas {
         config.define("GGML_BLAS", "ON");
     } else {
         config.define("GGML_BLAS", "OFF");
     }
 
-    if cfg!(feature = "opencl") {
+    if enable_opencl {
         config.define("GGML_OPENCL", "ON");
     } else {
         config.define("GGML_OPENCL", "OFF");
     }
 
-    if cfg!(feature = "hip") {
+    if enable_hip {
         config.define("GGML_HIP", "ON");
     } else {
         config.define("GGML_HIP", "OFF");
     }
 
-    if cfg!(feature = "cuda") && !cfg!(target_os = "macos") {
+    if enable_cuda {
         config.define("GGML_CUDA", "ON");
     }
 
@@ -3065,10 +3503,6 @@ fn main() {
         config.define("GGML_OPENMP", "ON");
     } else {
         config.define("GGML_OPENMP", "OFF");
-    }
-
-    if cfg!(feature = "mpi") {
-        config.define("LLAMA_MPI", "ON");
     }
 
     if cfg!(feature = "rpc") {
@@ -3183,8 +3617,7 @@ fn main() {
                 let webgpu_mismatch = {
                     let cached_webgpu_on = cache_contents.contains("GGML_WEBGPU:BOOL=ON");
                     let cached_webgpu_off = cache_contents.contains("GGML_WEBGPU:BOOL=OFF");
-                    (cfg!(feature = "webgpu") && cached_webgpu_off)
-                        || (!cfg!(feature = "webgpu") && cached_webgpu_on)
+                    (enable_webgpu && cached_webgpu_off) || (!enable_webgpu && cached_webgpu_on)
                 };
 
                 // 2g. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
@@ -3385,9 +3818,9 @@ fn main() {
     // ── Copy shared-library assets to the Cargo target directory ─────────────
     if build_shared_libs {
         // Must run before the dependent binary is linked: rustc records the
-        // dylib's install name at link time, so the rewrite has to land on the
-        // libraries in the link-search directories first.
-        make_shared_libs_loader_relative(
+        // dylib's install name at link time, so any correction has to land on
+        // the libraries in the link-search directories first.
+        make_shared_libs_rpath_relative(
             &[
                 cmake_out_dir.join("lib"),
                 cmake_out_dir.join("lib64"),

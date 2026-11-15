@@ -231,8 +231,17 @@ impl LlamaContextParams {
     /// Maps to `llama_context_params.ctx_other`. The paired context is returned
     /// by [`crate::context::LlamaContext::ctx_other`] after creation.
     ///
-    /// `other` must remain alive until [`crate::model::LlamaModel::new_context`]
-    /// returns.
+    /// # Safety
+    ///
+    /// llama.cpp stores the pointer to `other` in the new context's parameters
+    /// and reads through it for as long as that context lives — every decode
+    /// that consults the paired context's buffers, not just the construction
+    /// call. So `other` must outlive the context this builds. Dropping it
+    /// first and decoding again reads freed memory.
+    ///
+    /// This is the same contract as
+    /// [`LlamaContext::set_ctx_state_src`](crate::context::LlamaContext::set_ctx_state_src),
+    /// which pairs contexts the same way after construction.
     ///
     /// # Examples
     ///
@@ -243,15 +252,17 @@ impl LlamaContextParams {
     /// # fn f(backend: &LlamaBackend, model: &LlamaModel)
     /// #     -> Result<(), Box<dyn std::error::Error>> {
     /// let target = model.new_context(&backend, LlamaContextParams::default())?;
+    /// // SAFETY: `target` is declared before `draft`, so it is dropped after
+    /// // it and outlives every decode `draft` performs.
     /// let draft = model.new_context(
     ///     &backend,
-    ///     LlamaContextParams::default().with_ctx_other(&target),
+    ///     unsafe { LlamaContextParams::default().with_ctx_other(&target) },
     /// )?;
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub fn with_ctx_other(mut self, other: &crate::context::LlamaContext<'_>) -> Self {
+    pub unsafe fn with_ctx_other(mut self, other: &crate::context::LlamaContext<'_>) -> Self {
         self.context_params.ctx_other = other.context.as_ptr();
         self
     }

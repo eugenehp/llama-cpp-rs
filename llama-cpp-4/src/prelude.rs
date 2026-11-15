@@ -177,8 +177,8 @@ pub use crate::llama_batch_ext::{
 pub use crate::model::params::kv_overrides::ParamOverrideValue;
 pub use crate::model::params::LlamaModelParams;
 pub use crate::model::{
-    AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaLoraAdapter,
-    LlamaModel, Special,
+    AddBos, LlamaBackendDevice, LlamaBackendDeviceType, LlamaChatMessage, LlamaDflashVariant,
+    LlamaLoraAdapter, LlamaModel, Special,
 };
 pub use crate::sampling::{LlamaSampler, LlamaSamplerParams, SamplerInitError};
 pub use crate::speculative::{SpeculativeStateError, MAX_SPECULATIVE_STATE_BYTES};
@@ -202,7 +202,8 @@ pub use crate::ShimError;
 pub use crate::{
     ApplyChatTemplateError, DecodeError, EmbeddingsError, EncodeError, LLamaCppError,
     LlamaContextLoadError, LlamaLoraAdapterInitError, LlamaLoraAdapterRemoveError,
-    LlamaLoraAdapterSetError, LlamaModelLoadError, NewLlamaChatMessageError, ProcessError, Result,
+    LlamaLoraAdapterSetError, LlamaModelLoadError, NewLlamaChatMessageError, NextnRowsError,
+    ProcessError, Result,
 };
 
 // ── Memory / fit helpers ────────────────────────────────────────────────────
@@ -238,7 +239,7 @@ pub use crate::runtime::{speculative_types_from_gguf, SpeculativeType};
 #[cfg(feature = "mtmd")]
 pub use crate::mtmd::{
     MtmdBitmap, MtmdContext, MtmdContextParams, MtmdInputChunks, MtmdInputText,
-    MtmdProgressCallback,
+    MtmdProgressCallback, MtmdResampler,
 };
 
 // ── Remote backend (feature `rpc`) ──────────────────────────────────────────

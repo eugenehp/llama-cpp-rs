@@ -248,11 +248,18 @@ impl LlamaVocab {
     }
 
     /// Get the CLS (classification) token.
+    ///
+    /// Upstream removed `llama_vocab_cls` in `b12388` — its own deprecation
+    /// note said "use `llama_vocab_bos` instead", because the two were the
+    /// same token for every vocabulary that defined either. This resolves to
+    /// [`bos`](Self::bos) accordingly.
     #[must_use]
+    #[deprecated(
+        since = "0.12.0",
+        note = "upstream removed `llama_vocab_cls`; this is now an alias for `bos`"
+    )]
     pub fn cls(&self) -> LlamaToken {
-        // SAFETY: the vocab is borrowed from a live model and outlives the call; the
-        // token and index arguments are scalars llama.cpp range-checks.
-        LlamaToken(unsafe { llama_cpp_sys_4::llama_vocab_cls(self.vocab.as_ref()) })
+        self.bos()
     }
 
     /// Get the SEP (separator) token.
@@ -663,6 +670,42 @@ pub enum Special {
     Plaintext,
 }
 
+/// Which `DFlash` draft family a checkpoint belongs to.
+///
+/// Mirrors `llama_dflash_variant`. [`None`](Self::None) is upstream's `-1` and
+/// means the model is not a `DFlash` draft, which is the case for every
+/// ordinary checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LlamaDflashVariant {
+    /// Not a `DFlash` draft model.
+    None,
+    /// `DFlash`.
+    Dflash,
+    /// `DFlash2`.
+    Dflash2,
+    /// `DSpark`.
+    Dspark,
+    /// `LiliCorr`.
+    Lilicorr,
+}
+
+impl LlamaDflashVariant {
+    /// Map the raw `llama_dflash_variant` value.
+    ///
+    /// An unrecognised value reads as [`None`](Self::None): a variant this
+    /// build does not know is not one it can drive.
+    fn from_raw(raw: llama_cpp_sys_4::llama_dflash_variant) -> Self {
+        match raw {
+            llama_cpp_sys_4::LLAMA_DFLASH_VARIANT_DFLASH => Self::Dflash,
+            llama_cpp_sys_4::LLAMA_DFLASH_VARIANT_DFLASH2 => Self::Dflash2,
+            llama_cpp_sys_4::LLAMA_DFLASH_VARIANT_DSPARK => Self::Dspark,
+            llama_cpp_sys_4::LLAMA_DFLASH_VARIANT_LILICORR => Self::Lilicorr,
+            _ => Self::None,
+        }
+    }
+}
+
 // SAFETY: a `llama_model` is not tied to the thread that loaded it; llama.cpp
 // stores no thread-local state in it.
 unsafe impl Send for LlamaModel {}
@@ -782,9 +825,18 @@ impl LlamaModel {
     }
 
     /// Get the classification token.
+    ///
+    /// # Deprecated
+    ///
+    /// Mirrors [`LlamaVocab::cls`]: upstream dropped `llama_vocab_cls`, so this
+    /// resolves to [`token_bos`](Self::token_bos).
     #[must_use]
+    #[deprecated(
+        since = "0.12.0",
+        note = "upstream removed `llama_vocab_cls`; this is now an alias for `token_bos`"
+    )]
     pub fn token_cls(&self) -> LlamaToken {
-        self.get_vocab().cls()
+        self.get_vocab().bos()
     }
 
     /// Get the end-of-turn token.
@@ -1702,6 +1754,31 @@ impl LlamaModel {
         // SAFETY: `self.model` is non-null and kept alive by this borrow, and the remaining arguments are
         // scalars llama.cpp validates itself.
         unsafe { llama_model_n_layer_nextn(self.model.as_ptr()) }
+    }
+
+    /// Which `DFlash` draft family this checkpoint belongs to, if any.
+    ///
+    /// Speculative decoding picks a different driver per variant, so this is
+    /// how a caller knows which one a draft model will use — or that it is not
+    /// a `DFlash` draft at all. Wraps `llama_model_dflash_variant`, new in
+    /// `b12388`.
+    #[must_use]
+    pub fn dflash_variant(&self) -> LlamaDflashVariant {
+        // SAFETY: `self.model` is non-null and kept alive by this borrow; the
+        // call only reads a field of the loaded model.
+        let raw = unsafe { llama_cpp_sys_4::llama_model_dflash_variant(self.model.as_ptr()) };
+        LlamaDflashVariant::from_raw(raw)
+    }
+
+    /// Candidate tokens a `DFlash2` selector keeps per block position.
+    ///
+    /// `0` when the model has no selector head. The packed lattice also holds
+    /// `top_k x top_k` pairwise transition scores, so this squares into the
+    /// lattice size. Wraps `llama_model_dflash_selector_top_k`.
+    #[must_use]
+    pub fn dflash_selector_top_k(&self) -> i32 {
+        // SAFETY: a plain read through a live, non-null model.
+        unsafe { llama_cpp_sys_4::llama_model_dflash_selector_top_k(self.model.as_ptr()) }
     }
 
     /// Get the number of mixture-of-experts (`MoE`) layers in the model.

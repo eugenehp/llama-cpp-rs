@@ -6,7 +6,7 @@
 Raw `bindgen`-generated bindings to [llama.cpp](https://github.com/ggml-org/llama.cpp),
 plus the C/C++ build logic that compiles the library.
 
-**llama.cpp version:** `785322d17f (b12032+1, incl. v0.8.0)` · **Crate version:** 0.11.0
+**llama.cpp version:** `1c2adc75f6 (b12388, incl. v1.0.0)` · **Crate version:** 0.12.0
 
 Unless you need access to a symbol not yet exposed by [`llama-cpp-4`](../llama-cpp-4/),
 use that crate instead — it provides a safe API over these raw bindings.
@@ -75,7 +75,7 @@ cargo build -p llama-cpp-sys-4 --features prebuilt
 
 # Prefetch manually, then build
 ./scripts/fetch-prebuilt.sh
-export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.11.0/llama-prebuilt-...
+export LLAMA_PREBUILT_DIR=target/llama-prebuilt-cache/0.12.0/llama-prebuilt-...
 cargo build -p llama-cpp-sys-4
 ```
 
@@ -213,6 +213,12 @@ running summary.
 | `common_speculative_process(const llama_batch &)` | `common_speculative_process(const common_batch &)` | b11557 |
 | `common_speculative_draft_params::n_past` | `::pos0` | b11557 |
 | `common_log_set_jsonl(log, bool)` | `common_log_set_jsonl(bool)` — now a global | b11557 |
+| `llama_copy_state_data` / `llama_set_state_data` | `llama_state_get_data` / `llama_state_set_data` — take a size, so the safe wrappers are no longer `unsafe` | b12388 |
+| `llama_load_model_from_file` / `llama_new_context_with_model` | `llama_model_load_from_file` / `llama_init_from_model` | b12388 |
+| `llama_set_warmup` | none — do warmup runs without a flag | b12388 |
+| `llama_vocab_cls` | `llama_vocab_bos` — the same token wherever either was defined | b12388 |
+| `common_fit_params(const char *)` | `common_fit_params(const std::vector<std::string> &, …, const common_fit_extra_model *)` — shimmed as `common_fit_params_one`, since bindgen renders a by-reference `std::vector` as an opaque byte array | b12388 |
+| `common_get_device_memory_data` (8 args) | 9 args: paths became a `std::vector<std::string>`, plus an `hp_ngl_skip` out-param | b12388 |
 
 ---
 
@@ -224,6 +230,50 @@ Key decisions in `build.rs`:
   containing function-pointer fields (avoids the
   `unpredictable_function_pointer_comparisons` lint).
 - **`opaque_type("std::.*")`** — C++ STL types are opaque pointers.
+- **Functions taking an STL type by value or reference are blocklisted and
+  shimmed**, never bound directly. bindgen does not fail on them; it silently
+  degrades the parameter (a `const std::vector<std::string> &` becomes
+  `*const __BindgenOpaqueArray8<[u8; 24]>`, a returned `std::string` becomes
+  `u8`), which is an ABI mismatch that compiles. `ext_shim`'s
+  `common_fit_params_one` and `common_device_memory_collect` exist for exactly
+  this reason: they take C types and build the STL values on the C++ side.
 - **OpenMP auto-detection** — reads `GGML_OPENMP_ENABLED` from the CMake
   cache rather than relying solely on the `openmp` feature flag, because
   some ARM toolchains enable OpenMP unconditionally.
+- **Optional GPU backends probe for their toolchain and fall back.** These
+  checks are fatal, not soft: `enable_language(HIP)` and
+  `enable_language(CUDA)` abort the configure step outright when the toolkit
+  is missing, `find_package(Dawn REQUIRED)` does the same for WebGPU, and
+  OpenCL gets all the way to the compiler before dying on `'CL/cl.h' file not
+  found`. That used to take down any build that merely had one of them
+  switched on alongside other features — `--all-features` failed on macOS at
+  HIP and on a ROCm box at Dawn. The build script looks first:
+  - HIP — `ROCM_PATH`, `HIP_PATH`, `hipconfig`, `hipcc`, `/opt/rocm`. The
+    driver binaries matter, not just the paths: a distro-packaged ROCm has
+    neither `ROCM_PATH` nor `/opt/rocm`, and reports `/usr` from
+    `hipconfig --rocmpath`.
+  - CUDA — `CUDACXX`, `CMAKE_CUDA_COMPILER`, `CUDA_PATH`, `CUDA_HOME`,
+    `CUDA_TOOLKIT_ROOT_DIR`, `nvcc`, `/usr/local/cuda`.
+  - Dawn — `Dawn_DIR`, `CMAKE_PREFIX_PATH`, then the usual prefixes, in both
+    config-file spellings CMake accepts.
+  - OpenCL — the Khronos `CL/cl.h`, because `find_package(OpenCL)` succeeds on
+    macOS (the framework is there) and only the *compile* fails. Apple spells
+    it `<OpenCL/cl.h>`, so install `opencl-headers` to build this backend on a
+    Mac.
+  - Vulkan — `VULKAN_SDK` plus headers, library and `glslc`.
+  - BLAS — a pkg-config `blas`/`openblas`/`blis`/`mkl` module, or the library
+    itself in the usual (including multiarch) lib dirs. `ggml-blas` ends its
+    `find_package(BLAS)` with `message(FATAL_ERROR ...)`, and off Apple it
+    additionally reaches `find_package(PkgConfig REQUIRED)` whenever
+    `FindBLAS` leaves `BLAS_INCLUDE_DIRS` empty — which it did on both test
+    hosts, so pkg-config is needed in practice whenever BLAS is. Apple always
+    qualifies (Accelerate); Windows is passed through untouched, since BLAS
+    there comes from MKL or vcpkg; and an explicit `GGML_BLAS_VENDOR`,
+    `MKLROOT` or `OPENBLAS_HOME` also passes through, because a caller who has
+    pointed CMake at a BLAS knows more about it than the probe does.
+
+  A missing toolchain warns and builds without that backend, selecting Metal
+  instead on Apple targets. The shared CMake cache key records the backends
+  actually built, so a fallback build never shares artefacts with a real one.
+  The target triple drives the Apple checks, not `cfg!(target_os = ...)`,
+  which inside a build script describes the host doing the building.

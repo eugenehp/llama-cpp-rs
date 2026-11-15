@@ -805,6 +805,87 @@ impl LlamaBatchExt {
         Ok(())
     }
 
+    /// Add an entry whose input is a row of the paired context's layer-input
+    /// device buffer, rather than a token or a host-side embedding.
+    ///
+    /// The rows come from the context paired with
+    /// [`with_ctx_other`](crate::context::params::LlamaContextParams::with_ctx_other),
+    /// which must have a layer-input device buffer — that is what
+    /// [`set_embeddings_layer_inp_device`](crate::context::LlamaContext::set_embeddings_layer_inp_device)
+    /// allocates, and what
+    /// [`supports_embd_row`](crate::context::LlamaContext::supports_embd_row)
+    /// reports on. This is not the buffer
+    /// [`set_state_row`](Self::set_state_row) reads: input rows and state rows
+    /// come from different contexts and different buffers.
+    ///
+    /// Either every entry of a batch is of this kind or none is — upstream
+    /// refuses a mixed batch — and a row entry carries no token id and no
+    /// embedding of its own. Positions are set afterwards with
+    /// [`Self::set_pos`], `n_pos_per_embd` of them, as for any embedding
+    /// entry.
+    ///
+    /// Wraps `llama_batch_ext_add_embd_row`, new in `b12388`.
+    ///
+    /// # Errors
+    ///
+    /// [`BatchExtError::Full`] or [`BatchExtError::InvalidSeqId`].
+    pub fn add_embd_row(
+        &mut self,
+        seq_id: llama_seq_id,
+        row: i32,
+    ) -> Result<BatchEntry, BatchExtError> {
+        // SAFETY: `self.raw` is live and non-null; the call takes only scalars
+        // besides it, and llama.cpp range-checks both.
+        let idx = unsafe {
+            llama_cpp_sys_4::llama_batch_ext_add_embd_row(self.raw.as_ptr(), seq_id, row)
+        };
+        self.finish_add(
+            idx,
+            seq_id,
+            Entry::embedding(),
+            BatchExtError::Full(self.n_batch),
+        )
+    }
+
+    /// Point an entry's *state* at a row of the source context's pre-norm
+    /// device buffer.
+    ///
+    /// The row-based counterpart to
+    /// [`set_state_embedding`](Self::set_state_embedding): the state is read
+    /// from the device buffer of whichever context was given to
+    /// `set_ctx_state_src`, so nothing crosses to host memory. Upstream
+    /// requires that either every entry of a batch has a state row or none
+    /// does.
+    ///
+    /// Unlike [`set_state_embedding`](Self::set_state_embedding), this records
+    /// an index and nothing else, so it succeeds on a context that has no
+    /// state source at all: whether the rows can be read is checked when the
+    /// batch is processed, and shows up as a failing
+    /// [`process`](crate::context::LlamaContext::process).
+    ///
+    /// Wraps `llama_batch_ext_set_embd_state_row`, new in `b12388`.
+    ///
+    /// # Errors
+    ///
+    /// [`BatchExtError::StateAlreadySet`] if the entry already carries state,
+    /// or [`BatchExtError::EmbeddingRejected`] for a negative row — the only
+    /// value llama.cpp rejects here.
+    pub fn set_state_row(&mut self, entry: BatchEntry, row: i32) -> Result<(), BatchExtError> {
+        if self.check_entry(entry)?.has_state {
+            return Err(BatchExtError::StateAlreadySet(entry.0));
+        }
+        // SAFETY: `self.raw` is live, `entry` was validated against this batch
+        // just above, and `row` is a scalar llama.cpp range-checks.
+        let ok = unsafe {
+            llama_cpp_sys_4::llama_batch_ext_set_embd_state_row(self.raw.as_ptr(), entry.0, row)
+        };
+        if !ok {
+            return Err(BatchExtError::EmbeddingRejected);
+        }
+        self.mark(entry, |slot| slot.has_state = true);
+        Ok(())
+    }
+
     /// Enable or disable output for an entry, making its logits and embeddings
     /// readable after processing.
     ///

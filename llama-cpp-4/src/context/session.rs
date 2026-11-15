@@ -72,7 +72,7 @@ impl LlamaContext<'_> {
         // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for the
         // call, and the token pointer and count come from the same slice.
         if unsafe {
-            llama_cpp_sys_4::llama_save_session_file(
+            llama_cpp_sys_4::llama_state_save_file(
                 self.context.as_ptr(),
                 cstr.as_ptr(),
                 tokens.as_ptr().cast::<llama_cpp_sys_4::llama_token>(),
@@ -116,7 +116,7 @@ impl LlamaContext<'_> {
         // SAFETY: `self.context` is non-null and kept alive by this borrow; the path is a `CString` alive for the
         // call, and the output buffer's capacity is passed with its pointer.
         let load_session_success = unsafe {
-            llama_cpp_sys_4::llama_load_session_file(
+            llama_cpp_sys_4::llama_state_load_file(
                 self.context.as_ptr(),
                 cstr.as_ptr(),
                 tokens_out,
@@ -143,38 +143,47 @@ impl LlamaContext<'_> {
     #[must_use]
     pub fn get_state_size(&self) -> usize {
         // SAFETY: a plain read through a live context.
-        unsafe { llama_cpp_sys_4::llama_get_state_size(self.context.as_ptr()) }
+        unsafe { llama_cpp_sys_4::llama_state_get_size(self.context.as_ptr()) }
     }
 
-    /// Copies the state to the specified destination address.
+    /// Copy the state into `dest`, returning the number of bytes written.
     ///
-    /// Returns the number of bytes copied
+    /// Size `dest` with [`get_state_size`](Self::get_state_size).
     ///
-    /// # Safety
-    ///
-    /// Destination needs to have allocated enough memory.
-    pub unsafe fn copy_state_data(&self, dest: *mut u8) -> usize {
-        // SAFETY: this function is itself `unsafe`; its contract puts the
-        // "`dest` is big enough" requirement on the caller, and `get_state_size`
-        // is how they size it.
-        unsafe { llama_cpp_sys_4::llama_copy_state_data(self.context.as_ptr(), dest) }
+    /// This was an `unsafe fn` taking a bare `*mut u8` until `b12388` removed
+    /// `llama_copy_state_data`. Its replacement takes the destination length,
+    /// so the bound is checked by llama.cpp and this is now safe.
+    pub fn copy_state_data(&self, dest: &mut [u8]) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and
+        // the destination pointer and its length are passed together, so
+        // llama.cpp cannot write past the slice.
+        unsafe {
+            llama_cpp_sys_4::llama_state_get_data(
+                self.context.as_ptr(),
+                dest.as_mut_ptr(),
+                dest.len(),
+            )
+        }
     }
 
-    /// Set the state reading from the specified address
-    /// Returns the number of bytes read
+    /// Restore the state from `src`, returning the number of bytes read.
     ///
-    /// # Safety
+    /// This was an `unsafe fn` until `b12388` removed `llama_set_state_data`:
+    /// that entry point read as much as the serialized header claimed and
+    /// never consulted `src.len()`, so a truncated or foreign buffer was read
+    /// past its end. The replacement takes the length, so this is now safe.
     ///
-    /// `src` must hold a complete state previously produced by
-    /// [`copy_state_data`](Self::copy_state_data). llama.cpp reads as much as
-    /// the serialized header says is there and does not consult `src.len()`,
-    /// so a truncated or foreign buffer is read past its end. The state must
-    /// also come from a context built from the same model with the same
-    /// parameters; `LLAMA_SESSION_VERSION` guards the format across releases
-    /// but not the shape within one.
-    pub unsafe fn set_state_data(&mut self, src: &[u8]) -> usize {
-        // SAFETY: this function is itself `unsafe`; its contract requires `src`
-        // to hold a complete state written by `copy_state_data`.
-        unsafe { llama_cpp_sys_4::llama_set_state_data(self.context.as_ptr(), src.as_ptr()) }
+    /// `src` must still come from [`copy_state_data`](Self::copy_state_data)
+    /// on a context built from the same model with the same parameters —
+    /// `LLAMA_SESSION_VERSION` guards the format across releases, not the
+    /// shape within one — but a mismatch is a short read now, not undefined
+    /// behaviour.
+    pub fn set_state_data(&mut self, src: &[u8]) -> usize {
+        // SAFETY: `self.context` is non-null and kept alive by this borrow, and
+        // `src`'s pointer and length are passed together, so the read stays in
+        // bounds.
+        unsafe {
+            llama_cpp_sys_4::llama_state_set_data(self.context.as_ptr(), src.as_ptr(), src.len())
+        }
     }
 }

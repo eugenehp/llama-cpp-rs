@@ -22,23 +22,11 @@ all-features = false
 [advisories]
 version = 2
 yanked = "warn"
-ignore = [
-    # RUSTSEC-2026-0258 — h2 accepts and queues empty DATA frames without
-    # limit, so an undrained stream can grow memory unboundedly or panic on
-    # overflow. Low severity, fixed in h2 0.4.16.
-    #
-    # Not fixable from this repository: the only path to it is
-    # openai-server -> actix-web 4.15 -> actix-http 3.18 -> h2 "^0.3.27", and
-    # 0.3.27 is the newest 0.3.x. It needs actix-web to move to h2 0.4.
-    #
-    # Scope: `examples/server` only. Neither published crate
-    # (`llama-cpp-4`, `llama-cpp-sys-4`) depends on h2 — verify with
-    # `cargo tree -p llama-cpp-4 -i h2`, which finds nothing.
-    #
-    # Re-check when actix-web next releases; drop this entry the moment it is
-    # on h2 0.4.
-    { id = "RUSTSEC-2026-0258", reason = "example-only; blocked on actix-web moving to h2 0.4" },
-]
+# Empty by design. RUSTSEC-2026-0258 (h2 empty-DATA-frame flooding) lived here
+# while `examples/server` was pinned to actix-web 4.x on h2 0.3; actix-http
+# 3.21 moved to h2 0.4 and the lockfile now resolves a single h2 0.4.20, past
+# the 0.4.16 fix, so the advisory is live again rather than ignored.
+ignore = []
 
 [licenses]
 version = 2

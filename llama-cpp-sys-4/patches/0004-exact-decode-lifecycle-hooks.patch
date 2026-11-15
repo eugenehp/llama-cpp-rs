@@ -1,8 +1,8 @@
 diff --git a/include/llama.h b/include/llama.h
-index a3ceecf5e..60a5003e4 100644
+index 01d8fb88a..1f0bc4449 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -344,6 +344,21 @@ extern "C" {
+@@ -371,6 +371,21 @@ extern "C" {
          struct llama_sampler * sampler;
      };
  
@@ -24,7 +24,7 @@ index a3ceecf5e..60a5003e4 100644
      // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
      //       https://github.com/ggml-org/llama.cpp/pull/7544
      struct llama_context_params {
-@@ -405,6 +420,12 @@ extern "C" {
+@@ -435,6 +450,12 @@ extern "C" {
          // a source/target/parent context
          // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
          struct llama_context * ctx_other;
@@ -38,10 +38,10 @@ index a3ceecf5e..60a5003e4 100644
  
      struct llama_model_tensor_override {
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 5ef7becf6..1dac3b056 100644
+index 9066e061e..4943d4638 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -136,6 +136,8 @@ llama_context::llama_context(
+@@ -229,6 +229,8 @@ llama_context::llama_context(
  
      cparams.cb_eval           = params.cb_eval;
      cparams.cb_eval_user_data = params.cb_eval_user_data;
@@ -50,7 +50,7 @@ index 5ef7becf6..1dac3b056 100644
  
      cparams.ctx_other = nullptr;
  
-@@ -3514,6 +3516,8 @@ llama_context_params llama_context_default_params() {
+@@ -4452,6 +4454,8 @@ llama_context_params llama_context_default_params() {
          /*.sampler                     =*/ nullptr,
          /*.n_sampler                   =*/ 0,
          /*.ctx_other                   =*/ nullptr,
@@ -59,7 +59,7 @@ index 5ef7becf6..1dac3b056 100644
      };
  
      return result;
-@@ -4094,10 +4098,24 @@ int32_t llama_encode(
+@@ -5087,10 +5091,24 @@ int32_t llama_encode(
      return ret;
  }
  
@@ -85,15 +85,17 @@ index 5ef7becf6..1dac3b056 100644
          LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
      }
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index 5018170ed..d0e8ddc30 100644
+index 52c85bdd2..0de5c9afc 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -62,4 +62,8 @@ struct llama_cparams {
-     void * cb_eval_user_data;
+@@ -71,6 +71,10 @@ struct llama_cparams {
  
      llama_context * ctx_other;
-+
+ 
 +    // Exact decode lifecycle hooks (appended; see llama.h).
 +    llama_decode_begin_callback cb_decode_begin;
 +    llama_decode_end_callback   cb_decode_end;
++
+     // context whose h_nextn device buffer holds the state rows of a batch, see llama_set_ctx_state_src()
+     llama_context * ctx_state_src;
  };

@@ -60,6 +60,9 @@ fn main() {
     println!("is_recurrent      : {}", model.is_recurrent());
     println!("is_hybrid         : {}", model.is_hybrid());
     println!("is_diffusion      : {}", model.is_diffusion());
+    // New in b12388: which speculative driver a draft model needs, if any.
+    println!("dflash_variant    : {:?}", model.dflash_variant());
+    println!("dflash_top_k      : {}", model.dflash_selector_top_k());
     println!();
 
     // === Vocab (via LlamaVocab) ===
@@ -70,7 +73,8 @@ fn main() {
     println!("bos               : {}", vocab.bos());
     println!("eos               : {}", vocab.eos());
     println!("eot               : {}", vocab.eot());
-    println!("cls               : {}", vocab.cls());
+    // `cls` is deprecated upstream-side: it aliases `bos` now, so printing it
+    // would just repeat the line above.
     println!("sep               : {}", vocab.sep());
     println!("nl                : {}", vocab.nl());
     println!("pad               : {}", vocab.pad());
@@ -97,7 +101,6 @@ fn main() {
 
     // === Token methods on model ===
     println!("=== Special Tokens (model) ===");
-    println!("token_cls         : {}", model.token_cls());
     println!("token_eot         : {}", model.token_eot());
     println!("token_pad         : {}", model.token_pad());
     println!("token_sep         : {}", model.token_sep());
@@ -145,13 +148,15 @@ fn main() {
     ctx.set_n_threads(2, 2);
     println!("set_n_threads(2,2): ok (threads={})", ctx.n_threads());
 
-    // Test set_causal_attn, set_embeddings, set_warmup
+    // Test set_causal_attn and set_embeddings.
+    //
+    // `set_warmup` is gone: llama.cpp removed `llama_set_warmup` in b12388,
+    // its deprecation note being that user code should do warmup runs
+    // manually rather than flag them.
     ctx.set_causal_attn(true);
     println!("set_causal_attn   : ok");
     ctx.set_embeddings(false);
     println!("set_embeddings    : ok");
-    ctx.set_warmup(false);
-    println!("set_warmup        : ok");
 
     // Test synchronize
     ctx.synchronize();

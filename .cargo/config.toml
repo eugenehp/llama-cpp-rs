@@ -4,8 +4,13 @@
 # shared libraries next to the binaries cargo builds. Finding them at *runtime*
 # differs by platform:
 #
-#   - macOS: handled entirely by llama-cpp-sys-4's build script, which rewrites
-#     the dylib install names to `@loader_path/…`. Nothing is needed here.
+#   - macOS: the dylibs keep CMake's `@rpath/…` install names, so the final
+#     executable needs an `LC_RPATH` of `@loader_path` — the exact analogue of
+#     ELF's `$ORIGIN`. The build script used to rewrite the names to
+#     `@loader_path/…` instead, which needed nothing here but broke every
+#     doctest: an explicit path is resolved against the loading binary and
+#     never falls back to the search `cargo` sets up, and a doctest binary
+#     lives in a temp directory with no dylibs beside it.
 #   - Windows: the loader already searches the directory of the `.exe`.
 #   - Linux/BSD: ELF needs the *final executable* to carry an rpath, and a
 #     dependency's build script cannot inject link args into a dependent
@@ -16,6 +21,39 @@
 #
 # Note: the `RUSTFLAGS` environment variable *replaces* these flags rather than
 # appending, so any CI job that sets `RUSTFLAGS` must repeat the rpath itself.
+
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,@loader_path"]
+
+# Doctests need their own answer. `rustflags` do not reach rustdoc, and the
+# rpath above would not help it anyway: rustdoc links each doctest in a temp
+# directory, so neither `@loader_path` nor `@executable_path` points anywhere
+# near the dylibs. Nor can the dyld fallback search be pointed at them from
+# here — macOS strips `DYLD_*` from the environment of protected processes, so
+# a `[env]` stanza never reaches the doctest binary.
+#
+# `-C rpath` is not it either: that embeds rpaths for rustc's own library
+# search paths, not for the `-L` directory this crate's build script adds.
+#
+# What works is that dyld resolves an `LC_RPATH` which is neither absolute nor
+# `@`-prefixed against the *current working directory*, and cargo runs every
+# doctest with the working directory set to the package root. One level up
+# from there is the target directory, so these two entries find the libraries
+# wherever the build script copied them. Both profiles are listed because a
+# single rpath cannot name both and dyld simply tries each in turn.
+#
+# Caveats, all dev-only: a custom `CARGO_TARGET_DIR` is not covered (pass
+# `RUSTDOCFLAGS` yourself), and these are relative rpaths, which are fine for
+# a test binary cargo launches but should never be stamped into something you
+# ship. Nothing here affects a shipped artifact — the dylibs keep their
+# relocatable `@rpath/…` names, and binaries get `@loader_path` above.
+[build]
+rustdocflags = [
+    "-C",
+    "link-arg=-Wl,-rpath,../target/debug",
+    "-C",
+    "link-arg=-Wl,-rpath,../target/release",
+]
 
 [target.'cfg(target_os = "linux")']
 rustflags = ["-C", "link-arg=-Wl,-rpath,$ORIGIN"]

@@ -280,6 +280,25 @@ pub enum ProcessError {
     Unknown(c_int),
 }
 
+/// Failure reading or writing the pre-norm (`NextN`) device buffer.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, thiserror::Error)]
+pub enum NextnRowsError {
+    /// The caller's buffer is not a whole number of `n_embd_out`-wide rows.
+    #[error("buffer of {len} floats is not a whole number of {width}-wide rows")]
+    Shape {
+        /// Length of the caller's buffer, in floats.
+        len: usize,
+        /// Row width llama.cpp uses, i.e. `n_embd_out`.
+        width: usize,
+    },
+    /// llama.cpp declined the transfer — because the device buffer was never
+    /// enabled with `set_embeddings_pre_norm_device`, because this context
+    /// produces no pre-norm output, or because the requested rows run past the
+    /// end of the buffer, which holds `n_batch + n_seq_max` of them.
+    #[error("the pre-norm device buffer is not available on this context")]
+    Unavailable,
+}
+
 /// When embedding related functions fail
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum EmbeddingsError {

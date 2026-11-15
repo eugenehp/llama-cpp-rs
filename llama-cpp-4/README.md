@@ -13,7 +13,7 @@ reliable, multimodal input (`mtmd`), speculative decoding including MTP and
 EAGLE3, quantization, LoRA, RPC, and tensor capture, alongside the usual
 tokenize / decode / sample loop.
 
-**llama.cpp version:** `785322d17f (b12032+1, incl. v0.8.0)` · **Crate version:** 0.11.0
+**llama.cpp version:** `1c2adc75f6 (b12388, incl. v1.0.0)` · **Crate version:** 0.12.0
 
 ---
 
@@ -21,12 +21,12 @@ tokenize / decode / sample loop.
 
 ```toml
 [dependencies]
-llama-cpp-4 = "0.11.0"
+llama-cpp-4 = "0.12.0"
 
 # GPU support (pick one or more)
-# llama-cpp-4 = { version = "0.11.0", features = ["cuda"] }
-# llama-cpp-4 = { version = "0.11.0", features = ["metal"] }
-# llama-cpp-4 = { version = "0.11.0", features = ["vulkan"] }
+# llama-cpp-4 = { version = "0.12.0", features = ["cuda"] }
+# llama-cpp-4 = { version = "0.12.0", features = ["metal"] }
+# llama-cpp-4 = { version = "0.12.0", features = ["vulkan"] }
 ```
 
 ---
@@ -48,12 +48,12 @@ also at the crate root (`llama_cpp_4::LlamaModel`, etc.) if you prefer explicit 
 | Inference | `LlamaBackend`, `LlamaModel`, `LlamaContext`, `LlamaBatch`, `LlamaSampler`, `LlamaSamplerParams`, `LlamaToken`, `LlamaTokenDataArray` |
 | Tokenising | `AddBos`, `Special` |
 | Chat | `LlamaChatMessage` |
-| Model introspection | `LlamaBackendDevice`, `LlamaBackendDeviceType` |
+| Model introspection | `LlamaBackendDevice`, `LlamaBackendDeviceType`, `LlamaDflashVariant` |
 | Context tuning | `LlamaFlashAttnType`, `LlamaContextType`, `LlamaAttentionType`, `RopeScalingType`, `ParamsCloneError` |
 | KV overrides | `ParamOverrideValue` |
 | Memory / fit | `get_device_memory_data`, `fit_params`, `FitParams`, `MemoryBreakdownEntry` |
 | Tensor capture | `TensorCapture`, `CapturedTensor` |
-| Speculative | `MtpSession`, `Eagle3Session` (+ configs) |
+| Speculative | `MtpSession`, `Eagle3Session` (+ configs), `NextnRowsError` |
 | Quantization | `QuantizeParams`, `TensorTypeOverride`, `GgmlType`, `LlamaFtype`, `model_quantize` |
 
 See [`prelude`](src/prelude.rs) on docs.rs for runnable examples (generation, chat, embeddings, memory estimation).
@@ -283,6 +283,45 @@ For a plain token batch there is nothing to gain: `LlamaBatch` with
 crate's decode lifecycle hooks cover. `ctx.process` returns
 `ProcessError::TensorTransactionsUnsupported` on a context that owns tensor
 transactions, because `llama_process` does not run those hooks.
+
+### Device-resident rows (DFlash / DSpark)
+
+An entry's input or state can also be a *row of another context's device
+buffer*, so a draft never copies hidden states to host memory and back. Two
+different buffers, on two different contexts:
+
+```rust
+// Target side: publish the layer inputs to a device buffer.
+target.set_embeddings_layer_inp(layer_id, true);
+target.set_embeddings_layer_inp_device(true);
+
+// Draft side (paired with `with_ctx_other`): read rows of it.
+if draft.supports_embd_row() {
+    let entry = batch.add_embd_row(seq_id, row)?;
+    batch.set_pos(entry, pos)?;
+}
+
+// State rows come from a different pairing, named explicitly:
+// SAFETY: `producer` must outlive `mtp`, or the pairing must be cleared with
+// `mtp.clear_ctx_state_src()` first — llama.cpp keeps the pointer and reads
+// through it on every later decode.
+if unsafe { mtp.set_ctx_state_src(&producer) } {
+    batch.set_state_row(entry, row)?;
+}
+```
+
+`supports_embd_row` is `false` unless the model is a `DFlash` arch *and* the
+paired context has a layer-input device buffer, so check it rather than
+assuming. Either every entry of a batch is a row entry or none is. Unlike
+`set_state_embedding`, `set_state_row` only records an index — an unusable
+state source surfaces as a failing `ctx.process`, not a failing setter.
+
+`set_ctx_state_src` is the only `unsafe` function in this group, because the
+borrow ending does not end the aliasing. The row-copy helpers
+`get_embeddings_pre_norm_rows` / `set_embeddings_pre_norm_rows` are safe: they
+derive the row count from the slice, so a buffer that is not a whole number of
+`n_embd_out`-wide rows is a `NextnRowsError::Shape` rather than an
+out-of-bounds write.
 
 ### Sampling
 

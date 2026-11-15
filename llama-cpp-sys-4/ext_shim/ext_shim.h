@@ -56,8 +56,28 @@ size_t common_device_memory_collect(
         struct common_device_memory_flat_entry * out,
         size_t                                   max_out,
         uint32_t *                               hp_ngl,
+        uint32_t *                               hp_ngl_skip,
         uint32_t *                               hp_n_ctx_train,
         uint32_t *                               hp_n_expert);
+
+// `common_fit_params` with a single model path.
+//
+// Upstream takes `const std::vector<std::string> &` so a split model can be
+// fitted as one unit. bindgen cannot express that — it renders the parameter
+// as an opaque byte array Rust has no way to build — so the vector is
+// constructed here.
+// Returns the `common_params_fit_status` value as an int32_t: 0 success,
+// 1 failure, 2 hard error. The enum lives in `fit.h`, which this header does
+// not include, so the value is widened rather than the dependency added.
+int32_t common_fit_params_one(
+        const char *                             path_model,
+        struct llama_model_params *              mparams,
+        struct llama_context_params *            cparams,
+        float *                                  tensor_split,
+        struct llama_model_tensor_buft_override * tensor_buft_overrides,
+        size_t *                                 margins,
+        uint32_t                                 n_ctx_min,
+        enum ggml_log_level                      log_level);
 
 // Guarded wrappers over the `llama_quant_*` preview API.
 //
