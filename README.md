@@ -20,11 +20,7 @@ mismatched draft/target pair is a typed Rust error, not a dead process.
 | [`llama-cpp-4`](llama-cpp-4/) | Safe high-level API | [![](https://img.shields.io/crates/v/llama-cpp-4.svg)](https://crates.io/crates/llama-cpp-4) |
 | [`llama-cpp-sys-4`](llama-cpp-sys-4/) | Raw bindgen bindings | [![](https://img.shields.io/crates/v/llama-cpp-sys-4.svg)](https://crates.io/crates/llama-cpp-sys-4) |
 
-**llama.cpp version:** `1c2adc75f6 (b12388, incl. v1.0.0)` (Nov 2026) — includes
-[TurboQuant (PR #21038)](#turboQuant--attention-rotation),
-[MTP / multi-token-prediction speculative decoding (PR #22673)](https://github.com/ggml-org/llama.cpp/pull/22673),
-[DeepSeek V4 MTP + DSpark (PR #25784)](https://github.com/ggml-org/llama.cpp/pull/25784) — surfaced through `LlamaModelParams::with_load_mtp`, and
-upstream **next-n** embedding hooks used by MTP (`llama_set_embeddings_nextn`).
+**llama.cpp version:** `1c2adc75f6 (b12388, incl. v1.0.0)` (Nov 2026)
 
 ---
 
